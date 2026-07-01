@@ -1,0 +1,7 @@
+apply_plan_now:
+  name: Apply plan now
+  description: Applies the current decision through enabled and gated control paths.
+clear_ev_latch:
+  name: Clear EV latch
+  description: Clears the in-memory EV grid-mode latch.
+

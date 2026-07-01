@@ -1,0 +1,13 @@
+{
+  "domain": "deye_energy_manager",
+  "name": "Deye Energy Manager",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/miles/deye_energy_manager",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/miles/deye_energy_manager/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
+

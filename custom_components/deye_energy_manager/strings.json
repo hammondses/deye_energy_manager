@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Deye Energy Manager",
+        "description": "Create the integration in advisory mode. Entity mappings and control toggles are configured from Options.",
+        "data": {
+          "name": "Name"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Deye Energy Manager is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Policy and feature toggles",
+        "description": "Actuator controls default off. Enable each control path only after advisory decisions are trusted."
+      },
+      "entities": {
+        "title": "Input entity mapping"
+      }
+    }
+  }
+}
+

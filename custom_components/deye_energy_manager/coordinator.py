@@ -1,0 +1,350 @@
+"""Coordinator and safe actuator helpers for Deye Energy Manager."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime
+import logging
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
+
+from .const import (
+    CHARGE_OPTION_ALLOW_GRID,
+    CHARGE_OPTION_NO_GRID,
+    CONF_ENTITY_MAP,
+    CONF_HEAT_LOADS,
+    DEFAULT_ENTITY_MAP,
+    DEFAULT_HEAT_LOADS,
+    DEFAULT_HEAT_MODE,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_STRATEGY,
+    FEATURE_DEFAULTS,
+    NUMBER_DEFAULTS,
+    PROG_CAPACITY_ENTITIES,
+    PROG_CHARGE_SELECT_ENTITIES,
+    PROG_POWER_ENTITIES,
+)
+from .decision import decide, forecast_tier, slot_capacity_targets
+from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings
+
+_LOGGER = logging.getLogger(__name__)
+
+UNAVAILABLE = {"unknown", "unavailable", None}
+
+
+class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision]):
+    """Collect HA state, calculate decisions, and perform gated writes."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the coordinator."""
+
+        super().__init__(
+            hass,
+            _LOGGER,
+            name="Deye Energy Manager",
+            update_interval=DEFAULT_SCAN_INTERVAL,
+        )
+        self.entry = entry
+        self.started_at = dt_util.utcnow()
+        self.previous_essential_power_w: float | None = None
+        self.ev_latch_on = False
+        self.ev_hold_until: datetime | None = None
+        self.last_control_action = "none"
+        self._last_written: dict[str, object] = {}
+        self._remove_listeners: list[Callable[[], None]] = []
+
+        watch_entities = [entity for entity in self.entity_map.values() if entity]
+        self._remove_listeners.append(
+            async_track_state_change_event(hass, watch_entities, self._handle_state_change)
+        )
+        self._remove_listeners.append(
+            async_track_time_interval(hass, self._handle_time_interval, DEFAULT_SCAN_INTERVAL)
+        )
+        entry.async_on_unload(self._remove_all_listeners)
+
+    @property
+    def entity_map(self) -> dict[str, str]:
+        """Return configured entity mappings."""
+
+        configured = self.entry.options.get(CONF_ENTITY_MAP, self.entry.data.get(CONF_ENTITY_MAP, {}))
+        return {**DEFAULT_ENTITY_MAP, **configured}
+
+    @property
+    def heat_loads(self) -> list[dict[str, object]]:
+        """Return configured heat loads."""
+
+        return list(self.entry.options.get(CONF_HEAT_LOADS, self.entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS)))
+
+    @property
+    def settings(self) -> EnergyManagerSettings:
+        """Build settings from config entry options."""
+
+        options = {**FEATURE_DEFAULTS, **NUMBER_DEFAULTS, **self.entry.options}
+        return EnergyManagerSettings(
+            enabled=bool(options["enabled"]),
+            advisory_enabled=bool(options["advisory_enabled"]),
+            deye_control_enabled=bool(options["deye_control_enabled"]),
+            grid_charge_control_enabled=bool(options["grid_charge_control_enabled"]),
+            ev_control_enabled=bool(options["ev_control_enabled"]),
+            heat_control_enabled=bool(options["heat_control_enabled"]),
+            direct_climate_control_enabled=bool(options["direct_climate_control_enabled"]),
+            strategy=str(options.get("strategy", DEFAULT_STRATEGY)),
+            heat_mode=str(options.get("heat_mode", DEFAULT_HEAT_MODE)),
+            heat_add_min_charge_w=float(options["heat_add_min_charge_w"]),
+            heat_add_min_soc=float(options["heat_add_min_soc"]),
+            heat_shed_discharge_w=float(options["heat_shed_discharge_w"]),
+            ev_start_load_jump_w=float(options["ev_start_load_jump_w"]),
+            ev_stop_load_drop_w=float(options["ev_stop_load_drop_w"]),
+            forecast_safety_buffer_kwh=float(options["forecast_safety_buffer_kwh"]),
+            min_soc_floor=float(options["min_soc_floor"]),
+            max_grid_charge_target_soc=float(options["max_grid_charge_target_soc"]),
+        )
+
+    @callback
+    def _handle_state_change(self, _event) -> None:
+        self.async_set_updated_data(self._calculate())
+        self.hass.async_create_task(self.async_apply_decision())
+
+    @callback
+    def _handle_time_interval(self, _now) -> None:
+        self.hass.async_create_task(self.async_request_refresh())
+
+    @callback
+    def _remove_all_listeners(self) -> None:
+        for remove in self._remove_listeners:
+            remove()
+        self._remove_listeners.clear()
+
+    async def _async_update_data(self) -> EnergyManagerDecision:
+        """Fetch data from HA states."""
+
+        decision = self._calculate()
+        await self.async_apply_decision(decision)
+        return decision
+
+    def _state_float(self, key: str) -> float | None:
+        entity_id = self.entity_map.get(key)
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
+    def _state_datetime(self, key: str) -> datetime | None:
+        entity_id = self.entity_map.get(key)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return None
+        return dt_util.parse_datetime(state.state)
+
+    def _any_owned_heat_on(self) -> bool:
+        for load in self.heat_loads:
+            ownership = str(load.get("ownership_entity", ""))
+            state = self.hass.states.get(ownership)
+            if state and state.state == "on":
+                return True
+        return False
+
+    def _calculate(self) -> EnergyManagerDecision:
+        now = dt_util.now()
+        essential_power = self._state_float("essential_power") or 0.0
+        inputs = EnergyManagerInputs(
+            now=now,
+            battery_soc=self._state_float("battery_soc") or 0.0,
+            battery_power_w=self._state_float("battery_power") or 0.0,
+            essential_power_w=essential_power,
+            previous_essential_power_w=self.previous_essential_power_w,
+            forecast_today_kwh=self._state_float("forecast_today"),
+            forecast_remaining_today_kwh=self._state_float("forecast_remaining_today"),
+            forecast_tomorrow_kwh=self._state_float("forecast_tomorrow"),
+            pv_power_now_w=self._state_float("pv_power_now"),
+            any_solar_owned_heat_load_on=self._any_owned_heat_on(),
+            heat_available=bool(self.heat_loads),
+            ev_latch_on=self.ev_latch_on,
+            ev_hold_until=self.ev_hold_until,
+            porsche_soc=self._state_float("porsche_soc"),
+            porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
+        )
+        decision = decide(inputs, self.settings)
+        self.previous_essential_power_w = essential_power
+        self.ev_latch_on = decision.ev_grid_mode_required
+        self.ev_hold_until = decision.ev_hold_until if decision.ev_grid_mode_required else None
+        return decision
+
+    async def async_set_option(self, key: str, value: object) -> None:
+        """Update one config option."""
+
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            options={**self.entry.options, key: value},
+        )
+        await self.async_request_refresh()
+
+    async def async_clear_ev_latch(self) -> None:
+        """Clear the in-memory EV latch."""
+
+        self.ev_latch_on = False
+        self.ev_hold_until = None
+        self.last_control_action = "EV latch cleared manually"
+        await self.async_request_refresh()
+
+    async def async_apply_decision(self, decision: EnergyManagerDecision | None = None) -> None:
+        """Apply safe, gated actuator writes."""
+
+        decision = decision or self.data
+        if decision is None or decision.control_blocked:
+            return
+        settings = self.settings
+        if settings.deye_control_enabled:
+            await self._apply_deye_capacity_targets(decision)
+        if settings.ev_control_enabled:
+            await self._apply_ev_mode(decision.ev_grid_mode_required)
+        if settings.grid_charge_control_enabled:
+            await self._apply_grid_charge(decision)
+        if settings.heat_control_enabled:
+            await self._apply_heat(decision)
+
+    async def _call_number_set(self, entity_id: str, value: float) -> None:
+        if self._last_written.get(entity_id) == value:
+            return
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE:
+            return
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": entity_id, "value": value},
+            blocking=False,
+        )
+        self._last_written[entity_id] = value
+
+    async def _call_select_option(self, entity_id: str, option: str) -> None:
+        if self._last_written.get(entity_id) == option:
+            return
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE or state.state == option:
+            return
+        await self.hass.services.async_call(
+            "select",
+            "select_option",
+            {"entity_id": entity_id, "option": option},
+            blocking=False,
+        )
+        self._last_written[entity_id] = option
+
+    async def _call_switch(self, entity_id: str, on: bool) -> None:
+        if self._last_written.get(entity_id) == on:
+            return
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE or state.state == ("on" if on else "off"):
+            return
+        await self.hass.services.async_call(
+            "switch",
+            "turn_on" if on else "turn_off",
+            {"entity_id": entity_id},
+            blocking=False,
+        )
+        self._last_written[entity_id] = on
+
+    async def _apply_deye_capacity_targets(self, decision: EnergyManagerDecision) -> None:
+        tier = forecast_tier(decision.forecast_tomorrow_kwh, self.settings)
+        targets = slot_capacity_targets(tier)
+        slot_to_entity = {
+            "Prog1": PROG_CAPACITY_ENTITIES[0],
+            "Prog2": PROG_CAPACITY_ENTITIES[1],
+            "Prog3": PROG_CAPACITY_ENTITIES[2],
+            "Prog4": PROG_CAPACITY_ENTITIES[3],
+            "Prog5": PROG_CAPACITY_ENTITIES[4],
+            "Prog6": PROG_CAPACITY_ENTITIES[5],
+        }
+        for slot, value in targets.items():
+            await self._call_number_set(slot_to_entity[slot], value)
+        self.last_control_action = "updated Deye reserve floors"
+
+    async def _apply_ev_mode(self, required: bool) -> None:
+        for entity_id in PROG_POWER_ENTITIES[:4]:
+            await self._call_number_set(entity_id, 0.0 if required else 12000.0)
+        self.last_control_action = "enabled EV grid mode" if required else "restored EV grid mode"
+
+    async def _apply_grid_charge(self, decision: EnergyManagerDecision) -> None:
+        switch_id = self.entity_map.get("grid_charge_switch", "switch.deye_grid_charge_enabled")
+        await self._call_switch(switch_id, decision.grid_charge_required)
+        if decision.grid_charge_required:
+            for entity_id in PROG_CHARGE_SELECT_ENTITIES[:2]:
+                await self._call_select_option(entity_id, CHARGE_OPTION_ALLOW_GRID)
+            for entity_id in PROG_CAPACITY_ENTITIES[:2]:
+                await self._call_number_set(entity_id, decision.grid_charge_target_soc)
+            for entity_id in PROG_POWER_ENTITIES[:2]:
+                await self._call_number_set(entity_id, 12000.0)
+        else:
+            for entity_id in PROG_CHARGE_SELECT_ENTITIES[:2]:
+                await self._call_select_option(entity_id, CHARGE_OPTION_NO_GRID)
+        self.last_control_action = "updated grid charge state"
+
+    async def _apply_heat(self, decision: EnergyManagerDecision) -> None:
+        heat_mode = self.settings.heat_mode
+        if heat_mode == "off" or heat_mode == "advisory":
+            return
+        if heat_mode == "auto_direct" and self.settings.direct_climate_control_enabled:
+            if decision.heat_should_shed:
+                await self._direct_shed_one_heat_load()
+            elif decision.heat_allowed:
+                await self._direct_add_one_heat_load()
+            return
+        if decision.heat_should_shed:
+            await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
+            self.last_control_action = "requested heat shed script"
+        elif decision.heat_allowed:
+            await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
+            self.last_control_action = "requested heat add script"
+
+    async def _direct_add_one_heat_load(self) -> None:
+        for load in sorted(self.heat_loads, key=lambda item: int(item.get("priority", 999))):
+            climate = str(load.get("climate_entity", ""))
+            ownership = str(load.get("ownership_entity", ""))
+            if not climate or self.hass.states.get(climate) is None:
+                continue
+            if ownership and (state := self.hass.states.get(ownership)) and state.state == "on":
+                continue
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": climate, "hvac_mode": str(load.get("hvac_mode", "heat"))},
+                blocking=False,
+            )
+            if target_temp := load.get("target_temp"):
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {"entity_id": climate, "temperature": float(target_temp)},
+                    blocking=False,
+                )
+            if ownership and self.hass.states.get(ownership):
+                await self.hass.services.async_call("input_boolean", "turn_on", {"entity_id": ownership}, blocking=False)
+            self.last_control_action = f"direct added heat load {load.get('name', climate)}"
+            return
+
+    async def _direct_shed_one_heat_load(self) -> None:
+        owned_loads = []
+        for load in self.heat_loads:
+            ownership = str(load.get("ownership_entity", ""))
+            state = self.hass.states.get(ownership) if ownership else None
+            if state and state.state == "on":
+                owned_loads.append(load)
+        for load in sorted(owned_loads, key=lambda item: int(item.get("priority", 999)), reverse=True):
+            climate = str(load.get("climate_entity", ""))
+            ownership = str(load.get("ownership_entity", ""))
+            if climate and self.hass.states.get(climate):
+                await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+            if ownership and self.hass.states.get(ownership):
+                await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
+            self.last_control_action = f"direct shed heat load {load.get('name', climate)}"
+            return

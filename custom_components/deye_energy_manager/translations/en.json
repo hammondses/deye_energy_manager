@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Deye Energy Manager",
+        "description": "Create the integration in advisory mode. Entity mappings and control toggles are configured from Options.",
+        "data": {
+          "name": "Name"
+        }
+      }
+    }
+  }
+}
+
