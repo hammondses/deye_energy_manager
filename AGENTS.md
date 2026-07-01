@@ -25,4 +25,6 @@ PV load testing is separate from normal heat allowance. It is for export-limited
 
 Smart heat rotation uses climate `current_temperature` and `temperature` attributes. A solar-owned load near target can be shed and an unowned/off colder load can be added, but automatic control must stay behind explicit heat/direct/PV-load-test toggles.
 
+Manual overrides are respected. If a manager-owned climate is off or its target was lowered below the configured solar target, clear ownership and block that load until the manual override cooldown expires. Emergency shed-all and overnight SOC protection are safety paths; keep their decision logic pure and make direct actions clear ownership flags.
+
 Do not enable actuator toggles automatically. Use advisory sensors first, then enable control gates deliberately.

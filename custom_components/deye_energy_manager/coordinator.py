@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -55,6 +55,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_hold_until: datetime | None = None
         self.last_control_action = "none"
         self._last_written: dict[str, object] = {}
+        self._heat_blocked_until: dict[str, datetime] = {}
         self._remove_listeners: list[Callable[[], None]] = []
 
         watch_entities = [entity for entity in self.entity_map.values() if entity]
@@ -110,6 +111,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             pv_load_test_min_remaining_forecast_kwh=float(options["pv_load_test_min_remaining_forecast_kwh"]),
             heat_satisfied_margin_c=float(options["heat_satisfied_margin_c"]),
             heat_need_margin_c=float(options["heat_need_margin_c"]),
+            manual_override_cooldown_min=float(options["manual_override_cooldown_min"]),
+            emergency_shed_discharge_w=float(options["emergency_shed_discharge_w"]),
+            battery_capacity_kwh=float(options["battery_capacity_kwh"]),
+            overnight_bedroom_taper_target_temp=float(options["overnight_bedroom_taper_target_temp"]),
         )
 
     @callback
@@ -163,8 +168,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
     def _heat_load_states(self) -> list[HeatLoadState]:
         states: list[HeatLoadState] = []
+        now = dt_util.now()
         for load in self.heat_loads:
             climate = str(load.get("climate_entity", ""))
+            name = str(load.get("name", climate or "unknown"))
             ownership = str(load.get("ownership_entity", ""))
             climate_state = self.hass.states.get(climate) if climate else None
             ownership_state = self.hass.states.get(ownership) if ownership else None
@@ -179,18 +186,39 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 except (TypeError, ValueError):
                     current_temp = None
                     target_temp = None
+            configured_target = load.get("target_temp")
+            if ownership_state is not None and ownership_state.state == "on":
+                manually_off = climate_state is not None and climate_state.state == "off"
+                target_lowered = (
+                    target_temp is not None
+                    and configured_target is not None
+                    and target_temp < float(configured_target) - 0.1
+                )
+                if manually_off or target_lowered:
+                    self._block_heat_load(name, "manual off" if manually_off else "target lowered")
+                    self.hass.async_create_task(self._clear_heat_ownership(load, f"manual override: {name}"))
+            blocked_until = self._heat_blocked_until.get(name)
+            if blocked_until is not None and blocked_until <= now:
+                self._heat_blocked_until.pop(name, None)
+                blocked_until = None
             states.append(
                 HeatLoadState(
-                    name=str(load.get("name", climate or "unknown")),
+                    name=name,
                     priority=int(load.get("priority", 999)),
                     is_on=climate_state is not None and climate_state.state not in {"off", *UNAVAILABLE},
                     solar_owned=ownership_state is not None and ownership_state.state == "on",
                     current_temp=current_temp,
                     target_temp=target_temp,
                     estimated_load_w=float(load.get("estimated_load_w", 0.0) or 0.0),
+                    blocked_until=blocked_until,
+                    load_type=str(load.get("type", "other")),
                 )
             )
         return states
+
+    def _block_heat_load(self, name: str, reason: str) -> None:
+        self._heat_blocked_until[name] = dt_util.now() + timedelta(minutes=self.settings.manual_override_cooldown_min)
+        self.last_control_action = f"blocked heat load {name}: {reason}"
 
     def _calculate(self) -> EnergyManagerDecision:
         now = dt_util.now()
@@ -335,13 +363,31 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         heat_mode = self.settings.heat_mode
         if heat_mode == "off" or heat_mode == "advisory":
             return
+        if decision.emergency_shed_all_required:
+            if heat_mode == "auto_direct" and self.settings.direct_climate_control_enabled:
+                await self._direct_shed_all_heat_loads("emergency battery discharge")
+            else:
+                await self.hass.services.async_call("script", "deye_energy_manager_emergency_shed_all_heat_loads", {}, blocking=False)
+                self.last_control_action = "requested emergency shed all heat script"
+            return
         if heat_mode == "auto_direct" and self.settings.direct_climate_control_enabled:
-            if decision.heat_should_shed:
+            if decision.bedroom_heat_taper_recommended:
+                await self._direct_taper_bedroom_heat()
+            if decision.overnight_protection_required:
+                await self._direct_shed_one_heat_load(nonessential_only=True)
+            elif decision.heat_should_shed:
                 await self._direct_shed_one_heat_load()
             elif decision.heat_rotation_recommended and self.settings.pv_load_test_control_enabled:
                 await self._direct_rotate_heat_load(decision)
             elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
                 await self._direct_add_one_heat_load(decision.heat_load_to_add)
+            return
+        if decision.bedroom_heat_taper_recommended:
+            await self.hass.services.async_call("script", "deye_energy_manager_taper_bedroom_heat", {}, blocking=False)
+            self.last_control_action = "requested bedroom heat taper script"
+        if decision.overnight_protection_required:
+            await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
+            self.last_control_action = "requested overnight protection heat shed script"
             return
         if decision.heat_should_shed:
             await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
@@ -361,6 +407,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
             if not climate or self.hass.states.get(climate) is None:
+                continue
+            name = str(load.get("name", climate))
+            if (blocked_until := self._heat_blocked_until.get(name)) and blocked_until > dt_util.now():
                 continue
             if ownership and (state := self.hass.states.get(ownership)) and state.state == "on":
                 continue
@@ -382,10 +431,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self.last_control_action = f"direct added heat load {load.get('name', climate)}"
             return
 
-    async def _direct_shed_one_heat_load(self, preferred_name: str | None = None) -> None:
+    async def _direct_shed_one_heat_load(self, preferred_name: str | None = None, nonessential_only: bool = False) -> None:
         owned_loads = []
         for load in self.heat_loads:
             if preferred_name and str(load.get("name", "")) != preferred_name:
+                continue
+            if nonessential_only and "bedroom" in f"{load.get('name', '')} {load.get('type', '')}".lower():
                 continue
             ownership = str(load.get("ownership_entity", ""))
             state = self.hass.states.get(ownership) if ownership else None
@@ -405,3 +456,40 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         await self._direct_shed_one_heat_load(decision.heat_load_to_shed)
         await self._direct_add_one_heat_load(decision.heat_load_to_add)
         self.last_control_action = f"direct rotated heat load {decision.heat_load_to_shed} -> {decision.heat_load_to_add}"
+
+    async def _clear_heat_ownership(self, load: dict[str, object], reason: str) -> None:
+        ownership = str(load.get("ownership_entity", ""))
+        if ownership and self.hass.states.get(ownership):
+            await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
+            self.last_control_action = reason
+
+    async def _direct_shed_all_heat_loads(self, reason: str) -> None:
+        for load in self.heat_loads:
+            ownership = str(load.get("ownership_entity", ""))
+            state = self.hass.states.get(ownership) if ownership else None
+            if not state or state.state != "on":
+                continue
+            climate = str(load.get("climate_entity", ""))
+            if climate and self.hass.states.get(climate):
+                await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+            await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
+        self.last_control_action = f"direct emergency shed all heat loads: {reason}"
+
+    async def _direct_taper_bedroom_heat(self) -> None:
+        for load in self.heat_loads:
+            if "bedroom" not in f"{load.get('name', '')} {load.get('type', '')}".lower():
+                continue
+            ownership = str(load.get("ownership_entity", ""))
+            state = self.hass.states.get(ownership) if ownership else None
+            if not state or state.state != "on":
+                continue
+            climate = str(load.get("climate_entity", ""))
+            if climate and self.hass.states.get(climate):
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {"entity_id": climate, "temperature": self.settings.overnight_bedroom_taper_target_temp},
+                    blocking=False,
+                )
+                self.last_control_action = f"direct tapered bedroom heat {load.get('name', climate)}"
+                return

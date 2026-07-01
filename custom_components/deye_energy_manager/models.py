@@ -35,6 +35,10 @@ class EnergyManagerSettings:
     pv_load_test_min_remaining_forecast_kwh: float = 8.0
     heat_satisfied_margin_c: float = 0.5
     heat_need_margin_c: float = 1.0
+    manual_override_cooldown_min: float = 60.0
+    emergency_shed_discharge_w: float = 4000.0
+    battery_capacity_kwh: float = 30.0
+    overnight_bedroom_taper_target_temp: float = 18.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +52,8 @@ class HeatLoadState:
     current_temp: float | None = None
     target_temp: float | None = None
     estimated_load_w: float = 0.0
+    blocked_until: datetime | None = None
+    load_type: str = "other"
 
 
 @dataclass(slots=True)
@@ -111,6 +117,10 @@ class EnergyManagerDecision:
     heat_rotation_recommended: bool
     heat_load_to_shed: str | None
     heat_load_to_add: str | None
+    emergency_shed_all_required: bool
+    overnight_protection_required: bool
+    bedroom_heat_taper_recommended: bool
+    projected_soc_08: float | None
     grid_charge_required: bool
     ev_grid_mode_required: bool
     pre_peak_preserve_required: bool

@@ -10,3 +10,9 @@ test_one_pv_load:
 rotate_heat_load:
   name: Rotate heat load
   description: Requests shedding one satisfied solar-owned load and adding one colder priority load.
+emergency_shed_all_heat_loads:
+  name: Emergency shed all heat loads
+  description: Requests all manager-owned heat loads to be shed and ownership flags cleared.
+taper_bedroom_heat:
+  name: Taper bedroom heat
+  description: Requests overnight bedroom heat target tapering.

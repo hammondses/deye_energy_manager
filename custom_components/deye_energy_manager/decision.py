@@ -94,6 +94,28 @@ def current_reserve_soc(now: datetime, tier: ForecastTier) -> float:
     return tier.peak_floor
 
 
+def hours_until_time(now: datetime, target: str) -> float:
+    """Return local hours until the next occurrence of a target time."""
+
+    target_time = time.fromisoformat(target)
+    target_dt = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
+    if target_dt <= now:
+        target_dt += timedelta(days=1)
+    return (target_dt - now).total_seconds() / 3600.0
+
+
+def projected_soc_at_08(inputs: EnergyManagerInputs, settings: EnergyManagerSettings) -> float | None:
+    """Project SOC at 08:00 from current discharge rate."""
+
+    if not time_between(inputs.now, "21:00", "08:00"):
+        return None
+    battery_discharge_w = max(inputs.battery_power_w, 0.0)
+    if battery_discharge_w <= 0 or settings.battery_capacity_kwh <= 0:
+        return inputs.battery_soc
+    discharge_kwh = battery_discharge_w * hours_until_time(inputs.now, "08:00") / 1000.0
+    return max(inputs.battery_soc - (discharge_kwh / settings.battery_capacity_kwh * 100.0), 0.0)
+
+
 def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
     """Return solar-owned loads close enough to target that they may be tapering."""
 
@@ -114,7 +136,8 @@ def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings
     return [
         load
         for load in loads
-        if not load.solar_owned
+        if load.blocked_until is None
+        and not load.solar_owned
         and not load.is_on
         and load.current_temp is not None
         and load.target_temp is not None
@@ -153,13 +176,33 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_discharge_w < 200.0
     )
 
+    projected_soc = projected_soc_at_08(inputs, settings)
+    overnight_protection_required = (
+        settings.enabled
+        and inputs.any_solar_owned_heat_load_on
+        and projected_soc is not None
+        and projected_soc < tier.morning_floor
+    )
+    bedroom_heat_taper_recommended = (
+        settings.enabled
+        and time_between(inputs.now, "21:00", "08:00")
+        and any(load.solar_owned and load.is_on and "bedroom" in f"{load.name} {load.load_type}".lower() for load in inputs.heat_loads)
+    )
+
     heat_should_shed = (
         inputs.any_solar_owned_heat_load_on
         and (
             battery_discharge_w >= settings.heat_shed_discharge_w
             or (battery_charge_w < settings.heat_add_min_charge_w and inputs.battery_soc < tier.target_17_soc)
             or pre_peak_preserve_required
+            or overnight_protection_required
         )
+    )
+
+    emergency_shed_all_required = (
+        settings.enabled
+        and inputs.any_solar_owned_heat_load_on
+        and battery_discharge_w >= settings.emergency_shed_discharge_w
     )
 
     expected_pv_power_w = max(
@@ -255,6 +298,19 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if heat_should_shed:
         proposed_actions.append("shed_one_heat_load")
         reason_parts.append("heat_should_shed=true")
+    if emergency_shed_all_required:
+        proposed_actions.append("emergency_shed_all_heat_loads")
+        reason_parts.append(
+            f"emergency_shed_all_required=true: discharge {battery_discharge_w:.0f}W >= {settings.emergency_shed_discharge_w:.0f}W"
+        )
+    if overnight_protection_required:
+        proposed_actions.append("overnight_shed_nonessential_heat")
+        reason_parts.append(
+            f"overnight_protection_required=true: projected SOC 08:00 {projected_soc:.1f}% < morning target {tier.morning_floor:.0f}%"
+        )
+    if bedroom_heat_taper_recommended:
+        proposed_actions.append("taper_bedroom_heat")
+        reason_parts.append(f"bedroom_heat_taper_recommended=true: target {settings.overnight_bedroom_taper_target_temp:.1f}C")
     if pv_load_test_recommended:
         proposed_actions.append("test_one_pv_load")
         reason_parts.append(
@@ -309,6 +365,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         heat_rotation_recommended=heat_rotation_recommended,
         heat_load_to_shed=heat_load_to_shed,
         heat_load_to_add=heat_load_to_add,
+        emergency_shed_all_required=emergency_shed_all_required,
+        overnight_protection_required=overnight_protection_required,
+        bedroom_heat_taper_recommended=bedroom_heat_taper_recommended,
+        projected_soc_08=projected_soc,
         grid_charge_required=grid_charge_required,
         ev_grid_mode_required=ev_grid_mode_required,
         pre_peak_preserve_required=pre_peak_preserve_required,

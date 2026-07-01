@@ -32,6 +32,12 @@ NUMBERS = (
     DeyeNumberDescription(key="pv_load_test_min_expected_power_w", name="PV load test min expected power", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_min_expected_power_w"]),
     DeyeNumberDescription(key="pv_load_test_max_battery_charge_w", name="PV load test max battery charge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_max_battery_charge_w"]),
     DeyeNumberDescription(key="pv_load_test_min_remaining_forecast_kwh", name="PV load test min remaining forecast", native_min_value=0, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_min_remaining_forecast_kwh"]),
+    DeyeNumberDescription(key="heat_satisfied_margin_c", name="Heat satisfied margin", native_min_value=0, native_step=0.1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_satisfied_margin_c"]),
+    DeyeNumberDescription(key="heat_need_margin_c", name="Heat need margin", native_min_value=0, native_step=0.1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_need_margin_c"]),
+    DeyeNumberDescription(key="manual_override_cooldown_min", name="Manual override cooldown", native_min_value=0, native_step=5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["manual_override_cooldown_min"]),
+    DeyeNumberDescription(key="emergency_shed_discharge_w", name="Emergency shed discharge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["emergency_shed_discharge_w"]),
+    DeyeNumberDescription(key="battery_capacity_kwh", name="Battery capacity", native_min_value=1, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["battery_capacity_kwh"]),
+    DeyeNumberDescription(key="overnight_bedroom_taper_target_temp", name="Overnight bedroom taper target", native_min_value=5, native_max_value=30, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["overnight_bedroom_taper_target_temp"]),
 )
 
 

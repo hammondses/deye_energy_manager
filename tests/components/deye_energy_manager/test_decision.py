@@ -255,6 +255,99 @@ def test_heat_rotation_requires_colder_add_candidate() -> None:
     assert decision.heat_load_to_add is None
 
 
+def test_blocked_heat_load_is_not_readded_during_manual_override_cooldown() -> None:
+    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    decision = decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=82,
+            battery_power_w=-1200,
+            forecast_remaining_today_kwh=12,
+            forecast_tomorrow_kwh=35,
+            pv_power_in_30_minutes_w=5200,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining/living heat pump",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=22.6,
+                    target_temp=23.0,
+                ),
+                HeatLoadState(
+                    name="Office heat pump",
+                    priority=3,
+                    is_on=False,
+                    solar_owned=False,
+                    current_temp=19.5,
+                    target_temp=22.0,
+                    blocked_until=dt(12),
+                ),
+            ],
+        ),
+        settings,
+    )
+
+    assert not decision.heat_rotation_recommended
+    assert decision.heat_load_to_add is None
+
+
+def test_emergency_shed_all_when_discharge_exceeds_threshold() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=4500,
+            any_solar_owned_heat_load_on=True,
+        )
+    )
+
+    assert decision.emergency_shed_all_required
+    assert "emergency_shed_all_heat_loads" in decision.proposed_actions
+
+
+def test_overnight_protection_projects_soc_to_0800() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(23),
+            battery_soc=50,
+            battery_power_w=3000,
+            forecast_tomorrow_kwh=35,
+            any_solar_owned_heat_load_on=True,
+        ),
+        EnergyManagerSettings(battery_capacity_kwh=30),
+    )
+
+    assert decision.projected_soc_08 == 0
+    assert decision.overnight_protection_required
+    assert "overnight_shed_nonessential_heat" in decision.proposed_actions
+
+
+def test_bedroom_heat_taper_recommended_overnight_for_owned_bedroom() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(23),
+            battery_soc=80,
+            battery_power_w=0,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bedroom heat pump",
+                    priority=4,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=20,
+                    target_temp=21,
+                    load_type="heatpump",
+                )
+            ],
+        )
+    )
+
+    assert decision.bedroom_heat_taper_recommended
+    assert "taper_bedroom_heat" in decision.proposed_actions
+
+
 def test_controls_block_when_manager_disabled() -> None:
     decision = decide(base_inputs(), EnergyManagerSettings(enabled=False))
     assert decision.control_blocked

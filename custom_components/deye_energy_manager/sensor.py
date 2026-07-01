@@ -40,6 +40,7 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="last_control_action", name="Last control action", value_fn=lambda d: d.now.isoformat()),
     DeyeSensorDescription(key="heat_load_to_shed", name="Heat load to shed", value_fn=lambda d: d.heat_load_to_shed),
     DeyeSensorDescription(key="heat_load_to_add", name="Heat load to add", value_fn=lambda d: d.heat_load_to_add),
+    DeyeSensorDescription(key="projected_soc_08", name="Projected SOC 08:00", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.projected_soc_08),
     DeyeSensorDescription(key="ev_hold_until", name="EV hold until", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: d.ev_hold_until),
 )
 

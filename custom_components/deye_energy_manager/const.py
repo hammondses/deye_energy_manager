@@ -143,6 +143,10 @@ NUMBER_DEFAULTS = {
     "pv_load_test_min_remaining_forecast_kwh": 8.0,
     "heat_satisfied_margin_c": 0.5,
     "heat_need_margin_c": 1.0,
+    "manual_override_cooldown_min": 60.0,
+    "emergency_shed_discharge_w": 4000.0,
+    "battery_capacity_kwh": 30.0,
+    "overnight_bedroom_taper_target_temp": 18.0,
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]
