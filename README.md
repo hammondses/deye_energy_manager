@@ -40,6 +40,14 @@ When inverter export is disabled or clipped, observed battery charge can underst
 
 The recommendation becomes true only when expected PV is high, remaining forecast is healthy, battery SOC is above the configured test floor, observed battery charge is still low, and no solar-owned heat load is already on. The integration will not automatically test a load unless `pv_load_test_control_enabled` is explicitly turned on.
 
+When a solar-owned room is close to target and another managed room is materially below target, the integration also exposes:
+
+- `binary_sensor.deye_energy_manager_heat_rotation_recommended`
+- `sensor.deye_energy_manager_heat_load_to_shed`
+- `sensor.deye_energy_manager_heat_load_to_add`
+
+This is for heat pumps that taper after reaching setpoint. In direct-control mode it can shed the satisfied room and add the colder room, but only when heat control, direct climate control, export-limited mode, and PV load-test control are all explicitly enabled.
+
 ## Agentic Editing
 
 The integration is intentionally organized so ChatGPT or another HA MCP-capable agent can discover and edit behavior:

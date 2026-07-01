@@ -33,6 +33,21 @@ class EnergyManagerSettings:
     pv_load_test_min_expected_power_w: float = 4000.0
     pv_load_test_max_battery_charge_w: float = 2500.0
     pv_load_test_min_remaining_forecast_kwh: float = 8.0
+    heat_satisfied_margin_c: float = 0.5
+    heat_need_margin_c: float = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class HeatLoadState:
+    """Pure state for one managed heat load."""
+
+    name: str
+    priority: int
+    is_on: bool = False
+    solar_owned: bool = False
+    current_temp: float | None = None
+    target_temp: float | None = None
+    estimated_load_w: float = 0.0
 
 
 @dataclass(slots=True)
@@ -51,6 +66,7 @@ class EnergyManagerInputs:
     pv_power_in_30_minutes_w: float | None = None
     pv_power_in_1_hour_w: float | None = None
     any_solar_owned_heat_load_on: bool = False
+    heat_loads: list[HeatLoadState] = field(default_factory=list)
     heat_available: bool = False
     cooldown_passed: bool = True
     ev_latch_on: bool = False
@@ -92,6 +108,9 @@ class EnergyManagerDecision:
     heat_allowed: bool
     heat_should_shed: bool
     pv_load_test_recommended: bool
+    heat_rotation_recommended: bool
+    heat_load_to_shed: str | None
+    heat_load_to_add: str | None
     grid_charge_required: bool
     ev_grid_mode_required: bool
     pre_peak_preserve_required: bool

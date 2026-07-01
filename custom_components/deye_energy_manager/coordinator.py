@@ -29,7 +29,7 @@ from .const import (
     PROG_POWER_ENTITIES,
 )
 from .decision import decide, forecast_tier, slot_capacity_targets
-from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings
+from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +108,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             pv_load_test_min_expected_power_w=float(options["pv_load_test_min_expected_power_w"]),
             pv_load_test_max_battery_charge_w=float(options["pv_load_test_max_battery_charge_w"]),
             pv_load_test_min_remaining_forecast_kwh=float(options["pv_load_test_min_remaining_forecast_kwh"]),
+            heat_satisfied_margin_c=float(options["heat_satisfied_margin_c"]),
+            heat_need_margin_c=float(options["heat_need_margin_c"]),
         )
 
     @callback
@@ -159,6 +161,37 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 return True
         return False
 
+    def _heat_load_states(self) -> list[HeatLoadState]:
+        states: list[HeatLoadState] = []
+        for load in self.heat_loads:
+            climate = str(load.get("climate_entity", ""))
+            ownership = str(load.get("ownership_entity", ""))
+            climate_state = self.hass.states.get(climate) if climate else None
+            ownership_state = self.hass.states.get(ownership) if ownership else None
+            current_temp = None
+            target_temp = None
+            if climate_state is not None:
+                raw_current = climate_state.attributes.get("current_temperature")
+                raw_target = climate_state.attributes.get("temperature", load.get("target_temp"))
+                try:
+                    current_temp = float(raw_current) if raw_current is not None else None
+                    target_temp = float(raw_target) if raw_target is not None else None
+                except (TypeError, ValueError):
+                    current_temp = None
+                    target_temp = None
+            states.append(
+                HeatLoadState(
+                    name=str(load.get("name", climate or "unknown")),
+                    priority=int(load.get("priority", 999)),
+                    is_on=climate_state is not None and climate_state.state not in {"off", *UNAVAILABLE},
+                    solar_owned=ownership_state is not None and ownership_state.state == "on",
+                    current_temp=current_temp,
+                    target_temp=target_temp,
+                    estimated_load_w=float(load.get("estimated_load_w", 0.0) or 0.0),
+                )
+            )
+        return states
+
     def _calculate(self) -> EnergyManagerDecision:
         now = dt_util.now()
         essential_power = self._state_float("essential_power") or 0.0
@@ -175,6 +208,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             pv_power_in_30_minutes_w=self._state_float("pv_power_in_30_minutes"),
             pv_power_in_1_hour_w=self._state_float("pv_power_in_1_hour"),
             any_solar_owned_heat_load_on=self._any_owned_heat_on(),
+            heat_loads=self._heat_load_states(),
             heat_available=bool(self.heat_loads),
             ev_latch_on=self.ev_latch_on,
             ev_hold_until=self.ev_hold_until,
@@ -304,18 +338,26 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if heat_mode == "auto_direct" and self.settings.direct_climate_control_enabled:
             if decision.heat_should_shed:
                 await self._direct_shed_one_heat_load()
+            elif decision.heat_rotation_recommended and self.settings.pv_load_test_control_enabled:
+                await self._direct_rotate_heat_load(decision)
             elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
-                await self._direct_add_one_heat_load()
+                await self._direct_add_one_heat_load(decision.heat_load_to_add)
             return
         if decision.heat_should_shed:
             await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested heat shed script"
+        elif decision.heat_rotation_recommended and self.settings.pv_load_test_control_enabled:
+            await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
+            await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
+            self.last_control_action = "requested heat rotation scripts"
         elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
             await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested PV load test script" if decision.pv_load_test_recommended else "requested heat add script"
 
-    async def _direct_add_one_heat_load(self) -> None:
+    async def _direct_add_one_heat_load(self, preferred_name: str | None = None) -> None:
         for load in sorted(self.heat_loads, key=lambda item: int(item.get("priority", 999))):
+            if preferred_name and str(load.get("name", "")) != preferred_name:
+                continue
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
             if not climate or self.hass.states.get(climate) is None:
@@ -340,9 +382,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self.last_control_action = f"direct added heat load {load.get('name', climate)}"
             return
 
-    async def _direct_shed_one_heat_load(self) -> None:
+    async def _direct_shed_one_heat_load(self, preferred_name: str | None = None) -> None:
         owned_loads = []
         for load in self.heat_loads:
+            if preferred_name and str(load.get("name", "")) != preferred_name:
+                continue
             ownership = str(load.get("ownership_entity", ""))
             state = self.hass.states.get(ownership) if ownership else None
             if state and state.state == "on":
@@ -356,3 +400,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
             self.last_control_action = f"direct shed heat load {load.get('name', climate)}"
             return
+
+    async def _direct_rotate_heat_load(self, decision: EnergyManagerDecision) -> None:
+        await self._direct_shed_one_heat_load(decision.heat_load_to_shed)
+        await self._direct_add_one_heat_load(decision.heat_load_to_add)
+        self.last_control_action = f"direct rotated heat load {decision.heat_load_to_shed} -> {decision.heat_load_to_add}"

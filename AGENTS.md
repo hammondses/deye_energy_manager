@@ -23,4 +23,6 @@ Primary edit locations:
 
 PV load testing is separate from normal heat allowance. It is for export-limited/clipped inverter behavior where expected PV is high but observed battery charge is low. Keep recommendation logic pure in `decision.py`, and keep automatic action behind `pv_load_test_control_enabled`.
 
+Smart heat rotation uses climate `current_temperature` and `temperature` attributes. A solar-owned load near target can be shed and an unowned/off colder load can be added, but automatic control must stay behind explicit heat/direct/PV-load-test toggles.
+
 Do not enable actuator toggles automatically. Use advisory sensors first, then enable control gates deliberately.

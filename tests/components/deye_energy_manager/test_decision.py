@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window
-from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings
+from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 
 TZ = ZoneInfo("Pacific/Auckland")
 
@@ -174,6 +174,85 @@ def test_pv_load_test_waits_for_healthy_soc_and_expected_pv() -> None:
         ),
         settings,
     ).pv_load_test_recommended
+
+
+def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> None:
+    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    decision = decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=82,
+            battery_power_w=-1200,
+            forecast_remaining_today_kwh=12,
+            forecast_tomorrow_kwh=35,
+            pv_power_in_30_minutes_w=5200,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining/living heat pump",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=22.6,
+                    target_temp=23.0,
+                    estimated_load_w=3000,
+                ),
+                HeatLoadState(
+                    name="Office heat pump",
+                    priority=3,
+                    is_on=False,
+                    solar_owned=False,
+                    current_temp=19.5,
+                    target_temp=22.0,
+                    estimated_load_w=1800,
+                ),
+            ],
+        ),
+        settings,
+    )
+
+    assert decision.heat_rotation_recommended
+    assert decision.heat_load_to_shed == "Dining/living heat pump"
+    assert decision.heat_load_to_add == "Office heat pump"
+    assert "rotate_heat_load" in decision.proposed_actions
+
+
+def test_heat_rotation_requires_colder_add_candidate() -> None:
+    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    decision = decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=82,
+            battery_power_w=-1200,
+            forecast_remaining_today_kwh=12,
+            forecast_tomorrow_kwh=35,
+            pv_power_in_30_minutes_w=5200,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining/living heat pump",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=22.6,
+                    target_temp=23.0,
+                ),
+                HeatLoadState(
+                    name="Office heat pump",
+                    priority=3,
+                    is_on=False,
+                    solar_owned=False,
+                    current_temp=21.5,
+                    target_temp=22.0,
+                ),
+            ],
+        ),
+        settings,
+    )
+
+    assert not decision.heat_rotation_recommended
+    assert decision.heat_load_to_shed == "Dining/living heat pump"
+    assert decision.heat_load_to_add is None
 
 
 def test_controls_block_when_manager_disabled() -> None:

@@ -7,3 +7,6 @@ clear_ev_latch:
 test_one_pv_load:
   name: Test one PV load
   description: Requests one heat load as a PV/load probe. The integration only calls this automatically when load-test control is enabled.
+rotate_heat_load:
+  name: Rotate heat load
+  description: Requests shedding one satisfied solar-owned load and adding one colder priority load.

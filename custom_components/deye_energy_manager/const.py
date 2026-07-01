@@ -141,6 +141,8 @@ NUMBER_DEFAULTS = {
     "pv_load_test_min_expected_power_w": 4000.0,
     "pv_load_test_max_battery_charge_w": 2500.0,
     "pv_load_test_min_remaining_forecast_kwh": 8.0,
+    "heat_satisfied_margin_c": 0.5,
+    "heat_need_margin_c": 1.0,
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]

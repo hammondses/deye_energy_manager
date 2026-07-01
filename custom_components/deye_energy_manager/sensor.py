@@ -38,6 +38,8 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="expected_action", name="Expected action", value_fn=lambda d: ",".join(d.proposed_actions) or "none"),
     DeyeSensorDescription(key="last_decision_reason", name="Last decision reason", value_fn=lambda d: d.reason),
     DeyeSensorDescription(key="last_control_action", name="Last control action", value_fn=lambda d: d.now.isoformat()),
+    DeyeSensorDescription(key="heat_load_to_shed", name="Heat load to shed", value_fn=lambda d: d.heat_load_to_shed),
+    DeyeSensorDescription(key="heat_load_to_add", name="Heat load to add", value_fn=lambda d: d.heat_load_to_add),
     DeyeSensorDescription(key="ev_hold_until", name="EV hold until", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: d.ev_hold_until),
 )
 
@@ -63,4 +65,3 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
         if self.entity_description.key == "last_control_action":
             return self.coordinator.last_control_action
         return self.entity_description.value_fn(self.coordinator.data)
-

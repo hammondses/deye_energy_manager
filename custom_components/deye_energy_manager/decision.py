@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 
-from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier
+from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState
 
 FORECAST_TIERS = [
     (32.0, ForecastTier("excellent", 35.0, 20.0, 75.0, 15.0, 90.0, 0.0)),
@@ -94,6 +94,34 @@ def current_reserve_soc(now: datetime, tier: ForecastTier) -> float:
     return tier.peak_floor
 
 
+def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+    """Return solar-owned loads close enough to target that they may be tapering."""
+
+    return [
+        load
+        for load in loads
+        if load.solar_owned
+        and load.is_on
+        and load.current_temp is not None
+        and load.target_temp is not None
+        and load.current_temp >= load.target_temp - settings.heat_satisfied_margin_c
+    ]
+
+
+def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+    """Return off loads still materially below target."""
+
+    return [
+        load
+        for load in loads
+        if not load.solar_owned
+        and not load.is_on
+        and load.current_temp is not None
+        and load.target_temp is not None
+        and load.current_temp <= load.target_temp - settings.heat_need_margin_c
+    ]
+
+
 def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None = None) -> EnergyManagerDecision:
     """Calculate the current energy-management decision."""
 
@@ -157,6 +185,23 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_discharge_w < 200.0
     )
 
+    shed_candidates = sorted(satisfied_heat_loads(inputs.heat_loads, settings), key=lambda load: load.priority, reverse=True)
+    add_candidates = sorted(needy_heat_loads(inputs.heat_loads, settings), key=lambda load: load.priority)
+    heat_load_to_shed = shed_candidates[0].name if shed_candidates else None
+    heat_load_to_add = add_candidates[0].name if add_candidates else None
+    heat_rotation_recommended = (
+        settings.enabled
+        and settings.export_limited_mode_enabled
+        and inputs.heat_available
+        and time_between(inputs.now, "08:00", "16:30")
+        and not pre_peak_preserve_required
+        and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
+        and remaining_forecast_kwh >= settings.pv_load_test_min_remaining_forecast_kwh
+        and battery_discharge_w < 200.0
+        and heat_load_to_shed is not None
+        and heat_load_to_add is not None
+    )
+
     essential_jump_w = None
     if inputs.previous_essential_power_w is not None:
         essential_jump_w = inputs.essential_power_w - inputs.previous_essential_power_w
@@ -218,6 +263,12 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             f"charge {battery_charge_w:.0f}W <= {settings.pv_load_test_max_battery_charge_w:.0f}W, "
             f"SOC {inputs.battery_soc:.0f}% >= {settings.pv_load_test_min_soc:.0f}%"
         )
+    if heat_rotation_recommended:
+        proposed_actions.append("rotate_heat_load")
+        reason_parts.append(
+            "heat_rotation_recommended=true: "
+            f"shed {heat_load_to_shed}, add {heat_load_to_add}, expected PV {expected_pv_power_w:.0f}W"
+        )
     if grid_charge_required:
         proposed_actions.append("enable_grid_charge")
         reason_parts.append(
@@ -255,6 +306,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         heat_allowed=heat_allowed,
         heat_should_shed=heat_should_shed,
         pv_load_test_recommended=pv_load_test_recommended,
+        heat_rotation_recommended=heat_rotation_recommended,
+        heat_load_to_shed=heat_load_to_shed,
+        heat_load_to_add=heat_load_to_add,
         grid_charge_required=grid_charge_required,
         ev_grid_mode_required=ev_grid_mode_required,
         pre_peak_preserve_required=pre_peak_preserve_required,
