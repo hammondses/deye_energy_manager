@@ -4,4 +4,6 @@ apply_plan_now:
 clear_ev_latch:
   name: Clear EV latch
   description: Clears the in-memory EV grid-mode latch.
-
+test_one_pv_load:
+  name: Test one PV load
+  description: Requests one heat load as a PV/load probe. The integration only calls this automatically when load-test control is enabled.

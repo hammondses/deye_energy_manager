@@ -92,6 +92,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_control_enabled=bool(options["ev_control_enabled"]),
             heat_control_enabled=bool(options["heat_control_enabled"]),
             direct_climate_control_enabled=bool(options["direct_climate_control_enabled"]),
+            pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
+            export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
             strategy=str(options.get("strategy", DEFAULT_STRATEGY)),
             heat_mode=str(options.get("heat_mode", DEFAULT_HEAT_MODE)),
             heat_add_min_charge_w=float(options["heat_add_min_charge_w"]),
@@ -102,6 +104,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             forecast_safety_buffer_kwh=float(options["forecast_safety_buffer_kwh"]),
             min_soc_floor=float(options["min_soc_floor"]),
             max_grid_charge_target_soc=float(options["max_grid_charge_target_soc"]),
+            pv_load_test_min_soc=float(options["pv_load_test_min_soc"]),
+            pv_load_test_min_expected_power_w=float(options["pv_load_test_min_expected_power_w"]),
+            pv_load_test_max_battery_charge_w=float(options["pv_load_test_max_battery_charge_w"]),
+            pv_load_test_min_remaining_forecast_kwh=float(options["pv_load_test_min_remaining_forecast_kwh"]),
         )
 
     @callback
@@ -166,6 +172,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             forecast_remaining_today_kwh=self._state_float("forecast_remaining_today"),
             forecast_tomorrow_kwh=self._state_float("forecast_tomorrow"),
             pv_power_now_w=self._state_float("pv_power_now"),
+            pv_power_in_30_minutes_w=self._state_float("pv_power_in_30_minutes"),
+            pv_power_in_1_hour_w=self._state_float("pv_power_in_1_hour"),
             any_solar_owned_heat_load_on=self._any_owned_heat_on(),
             heat_available=bool(self.heat_loads),
             ev_latch_on=self.ev_latch_on,
@@ -296,15 +304,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if heat_mode == "auto_direct" and self.settings.direct_climate_control_enabled:
             if decision.heat_should_shed:
                 await self._direct_shed_one_heat_load()
-            elif decision.heat_allowed:
+            elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
                 await self._direct_add_one_heat_load()
             return
         if decision.heat_should_shed:
             await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested heat shed script"
-        elif decision.heat_allowed:
+        elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
             await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
-            self.last_control_action = "requested heat add script"
+            self.last_control_action = "requested PV load test script" if decision.pv_load_test_recommended else "requested heat add script"
 
     async def _direct_add_one_heat_load(self) -> None:
         for load in sorted(self.heat_loads, key=lambda item: int(item.get("priority", 999))):

@@ -17,6 +17,8 @@ class EnergyManagerSettings:
     ev_control_enabled: bool = False
     heat_control_enabled: bool = False
     direct_climate_control_enabled: bool = False
+    pv_load_test_control_enabled: bool = False
+    export_limited_mode_enabled: bool = False
     strategy: str = "normal"
     heat_mode: str = "advisory"
     heat_add_min_charge_w: float = 6000.0
@@ -27,6 +29,10 @@ class EnergyManagerSettings:
     forecast_safety_buffer_kwh: float = 2.0
     min_soc_floor: float = 12.0
     max_grid_charge_target_soc: float = 80.0
+    pv_load_test_min_soc: float = 70.0
+    pv_load_test_min_expected_power_w: float = 4000.0
+    pv_load_test_max_battery_charge_w: float = 2500.0
+    pv_load_test_min_remaining_forecast_kwh: float = 8.0
 
 
 @dataclass(slots=True)
@@ -42,6 +48,8 @@ class EnergyManagerInputs:
     forecast_remaining_today_kwh: float | None = None
     forecast_tomorrow_kwh: float | None = None
     pv_power_now_w: float | None = None
+    pv_power_in_30_minutes_w: float | None = None
+    pv_power_in_1_hour_w: float | None = None
     any_solar_owned_heat_load_on: bool = False
     heat_available: bool = False
     cooldown_passed: bool = True
@@ -83,6 +91,7 @@ class EnergyManagerDecision:
     battery_priority_satisfied: bool
     heat_allowed: bool
     heat_should_shed: bool
+    pv_load_test_recommended: bool
     grid_charge_required: bool
     ev_grid_mode_required: bool
     pre_peak_preserve_required: bool
@@ -95,4 +104,3 @@ class EnergyManagerDecision:
     pv_power_now_w: float | None = None
     ev_hold_until: datetime | None = None
     forecast_data_valid: bool = True
-

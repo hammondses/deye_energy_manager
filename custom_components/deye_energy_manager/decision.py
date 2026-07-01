@@ -134,6 +134,29 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         )
     )
 
+    expected_pv_power_w = max(
+        inputs.pv_power_now_w or 0.0,
+        inputs.pv_power_in_30_minutes_w or 0.0,
+        inputs.pv_power_in_1_hour_w or 0.0,
+    )
+    remaining_forecast_kwh = inputs.forecast_remaining_today_kwh
+    if remaining_forecast_kwh is None:
+        remaining_forecast_kwh = max((inputs.forecast_tomorrow_kwh or 0.0) / 3.0, 0.0)
+    pv_load_test_recommended = (
+        settings.enabled
+        and settings.export_limited_mode_enabled
+        and inputs.heat_available
+        and time_between(inputs.now, "08:00", "16:30")
+        and not inputs.any_solar_owned_heat_load_on
+        and not pre_peak_preserve_required
+        and inputs.battery_soc >= settings.pv_load_test_min_soc
+        and inputs.battery_soc < tier.target_17_soc
+        and battery_charge_w <= settings.pv_load_test_max_battery_charge_w
+        and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
+        and remaining_forecast_kwh >= settings.pv_load_test_min_remaining_forecast_kwh
+        and battery_discharge_w < 200.0
+    )
+
     essential_jump_w = None
     if inputs.previous_essential_power_w is not None:
         essential_jump_w = inputs.essential_power_w - inputs.previous_essential_power_w
@@ -187,6 +210,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if heat_should_shed:
         proposed_actions.append("shed_one_heat_load")
         reason_parts.append("heat_should_shed=true")
+    if pv_load_test_recommended:
+        proposed_actions.append("test_one_pv_load")
+        reason_parts.append(
+            "pv_load_test_recommended=true: "
+            f"expected PV {expected_pv_power_w:.0f}W >= {settings.pv_load_test_min_expected_power_w:.0f}W, "
+            f"charge {battery_charge_w:.0f}W <= {settings.pv_load_test_max_battery_charge_w:.0f}W, "
+            f"SOC {inputs.battery_soc:.0f}% >= {settings.pv_load_test_min_soc:.0f}%"
+        )
     if grid_charge_required:
         proposed_actions.append("enable_grid_charge")
         reason_parts.append(
@@ -223,6 +254,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         battery_priority_satisfied=battery_priority_satisfied,
         heat_allowed=heat_allowed,
         heat_should_shed=heat_should_shed,
+        pv_load_test_recommended=pv_load_test_recommended,
         grid_charge_required=grid_charge_required,
         ev_grid_mode_required=ev_grid_mode_required,
         pre_peak_preserve_required=pre_peak_preserve_required,
@@ -249,4 +281,3 @@ def slot_capacity_targets(tier: ForecastTier) -> dict[str, float]:
         "Prog4": tier.pre_peak_floor,
         "Prog5": tier.peak_floor,
     }
-

@@ -16,6 +16,7 @@ BUTTONS = {
     "restore_deye_normal": "Restore Deye normal",
     "force_shed_one_heat_load": "Force shed one heat load",
     "force_add_one_heat_load": "Force add one heat load",
+    "force_test_one_pv_load": "Force test one PV load",
     "clear_ev_latch": "Clear EV latch",
 }
 
@@ -39,6 +40,7 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
         elif self._key == "force_add_one_heat_load":
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
+        elif self._key == "force_test_one_pv_load":
+            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
         else:
             await self.coordinator.async_request_refresh()
-

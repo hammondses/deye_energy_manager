@@ -24,6 +24,7 @@ BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="battery_priority_satisfied", name="Battery priority satisfied", value_fn=lambda d: d.battery_priority_satisfied),
     DeyeBinarySensorDescription(key="heat_allowed", name="Heat allowed", value_fn=lambda d: d.heat_allowed),
     DeyeBinarySensorDescription(key="heat_should_shed", name="Heat should shed", value_fn=lambda d: d.heat_should_shed),
+    DeyeBinarySensorDescription(key="pv_load_test_recommended", name="PV load test recommended", value_fn=lambda d: d.pv_load_test_recommended),
     DeyeBinarySensorDescription(key="grid_charge_required", name="Grid charge required", value_fn=lambda d: d.grid_charge_required),
     DeyeBinarySensorDescription(key="ev_grid_mode_required", name="EV grid mode required", value_fn=lambda d: d.ev_grid_mode_required),
     DeyeBinarySensorDescription(key="pre_peak_preserve_required", name="Pre peak preserve required", value_fn=lambda d: d.pre_peak_preserve_required),
@@ -50,4 +51,3 @@ class DeyeBinarySensor(DeyeEnergyManagerEntity, BinarySensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
-

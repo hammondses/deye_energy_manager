@@ -18,6 +18,8 @@ SWITCHES = {
     "ev_control_enabled": "EV control enabled",
     "heat_control_enabled": "Heat control enabled",
     "direct_climate_control_enabled": "Direct climate control enabled",
+    "pv_load_test_control_enabled": "PV load test control enabled",
+    "export_limited_mode_enabled": "Export limited mode enabled",
 }
 
 
@@ -42,4 +44,3 @@ class DeyeFeatureSwitch(DeyeEnergyManagerEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_option(self._key, False)
-

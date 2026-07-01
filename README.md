@@ -26,8 +26,19 @@ Actual writes are guarded by explicit toggles:
 - `switch.deye_energy_manager_ev_control_enabled`
 - `switch.deye_energy_manager_heat_control_enabled`
 - `switch.deye_energy_manager_direct_climate_control_enabled`
+- `switch.deye_energy_manager_pv_load_test_control_enabled`
 
 Leave these off until advisory sensors match the current automations.
+
+## PV Load Testing
+
+When inverter export is disabled or clipped, observed battery charge can understate available PV. The integration exposes:
+
+- `switch.deye_energy_manager_export_limited_mode_enabled`
+- `binary_sensor.deye_energy_manager_pv_load_test_recommended`
+- `switch.deye_energy_manager_pv_load_test_control_enabled`
+
+The recommendation becomes true only when expected PV is high, remaining forecast is healthy, battery SOC is above the configured test floor, observed battery charge is still low, and no solar-owned heat load is already on. The integration will not automatically test a load unless `pv_load_test_control_enabled` is explicitly turned on.
 
 ## Agentic Editing
 
@@ -47,4 +58,3 @@ Use `AGENTS.md` as the editing map for future agent sessions.
 ```bash
 python3 -m pytest
 ```
-

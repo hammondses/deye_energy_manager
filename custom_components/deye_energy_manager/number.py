@@ -28,6 +28,10 @@ NUMBERS = (
     DeyeNumberDescription(key="forecast_safety_buffer_kwh", name="Forecast safety buffer", native_min_value=0, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["forecast_safety_buffer_kwh"]),
     DeyeNumberDescription(key="min_soc_floor", name="Minimum SOC floor", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["min_soc_floor"]),
     DeyeNumberDescription(key="max_grid_charge_target_soc", name="Maximum grid charge target SOC", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["max_grid_charge_target_soc"]),
+    DeyeNumberDescription(key="pv_load_test_min_soc", name="PV load test min SOC", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_min_soc"]),
+    DeyeNumberDescription(key="pv_load_test_min_expected_power_w", name="PV load test min expected power", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_min_expected_power_w"]),
+    DeyeNumberDescription(key="pv_load_test_max_battery_charge_w", name="PV load test max battery charge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_max_battery_charge_w"]),
+    DeyeNumberDescription(key="pv_load_test_min_remaining_forecast_kwh", name="PV load test min remaining forecast", native_min_value=0, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["pv_load_test_min_remaining_forecast_kwh"]),
 )
 
 
@@ -49,4 +53,3 @@ class DeyeThresholdNumber(DeyeEnergyManagerEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_option(self.entity_description.key, float(value))
-

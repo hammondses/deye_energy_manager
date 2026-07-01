@@ -105,8 +105,78 @@ def test_ev_start_and_stop_rules() -> None:
     ).ev_grid_mode_required
 
 
+def test_pv_load_test_recommended_when_expected_pv_is_clipped() -> None:
+    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    decision = decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=78,
+            battery_power_w=-1200,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=12,
+            pv_power_now_w=1500,
+            pv_power_in_30_minutes_w=5200,
+            any_solar_owned_heat_load_on=False,
+        ),
+        settings,
+    )
+
+    assert decision.pv_load_test_recommended
+    assert "test_one_pv_load" in decision.proposed_actions
+
+
+def test_pv_load_test_requires_export_limited_mode_and_no_owned_load() -> None:
+    clipped_inputs = base_inputs(
+        now=dt(11),
+        battery_soc=78,
+        battery_power_w=-1200,
+        forecast_tomorrow_kwh=35,
+        forecast_remaining_today_kwh=12,
+        pv_power_in_30_minutes_w=5200,
+    )
+
+    assert not decide(clipped_inputs).pv_load_test_recommended
+    assert not decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=78,
+            battery_power_w=-1200,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=12,
+            pv_power_in_30_minutes_w=5200,
+            any_solar_owned_heat_load_on=True,
+        ),
+        EnergyManagerSettings(export_limited_mode_enabled=True),
+    ).pv_load_test_recommended
+
+
+def test_pv_load_test_waits_for_healthy_soc_and_expected_pv() -> None:
+    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    assert not decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=55,
+            battery_power_w=-1200,
+            forecast_remaining_today_kwh=12,
+            forecast_tomorrow_kwh=35,
+            pv_power_in_30_minutes_w=5200,
+        ),
+        settings,
+    ).pv_load_test_recommended
+    assert not decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=78,
+            battery_power_w=-1200,
+            forecast_remaining_today_kwh=12,
+            forecast_tomorrow_kwh=35,
+            pv_power_in_30_minutes_w=2500,
+        ),
+        settings,
+    ).pv_load_test_recommended
+
+
 def test_controls_block_when_manager_disabled() -> None:
     decision = decide(base_inputs(), EnergyManagerSettings(enabled=False))
     assert decision.control_blocked
     assert not decision.heat_allowed
-

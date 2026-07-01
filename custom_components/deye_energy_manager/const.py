@@ -124,6 +124,8 @@ FEATURE_DEFAULTS = {
     "ev_control_enabled": False,
     "heat_control_enabled": False,
     "direct_climate_control_enabled": False,
+    "pv_load_test_control_enabled": False,
+    "export_limited_mode_enabled": False,
 }
 
 NUMBER_DEFAULTS = {
@@ -135,6 +137,10 @@ NUMBER_DEFAULTS = {
     "forecast_safety_buffer_kwh": 2.0,
     "min_soc_floor": 12.0,
     "max_grid_charge_target_soc": 80.0,
+    "pv_load_test_min_soc": 70.0,
+    "pv_load_test_min_expected_power_w": 4000.0,
+    "pv_load_test_max_battery_charge_w": 2500.0,
+    "pv_load_test_min_remaining_forecast_kwh": 8.0,
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]
