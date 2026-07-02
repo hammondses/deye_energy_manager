@@ -35,6 +35,13 @@
         "title": "Battery",
         "description": "Battery reserve, Deye, and grid-charge settings."
       },
+      "loads": {
+        "title": "Managed Loads",
+        "description": "Edit the existing managed thermal loads."
+      },
+      "load_detail": {
+        "title": "Managed Load"
+      },
       "entities": {
         "title": "Input entity mapping"
       },
@@ -43,5 +50,51 @@
         "description": "Compatibility view containing the full legacy options form."
       }
     }
-  }
+  },
+    "issues": {
+        "missing_required_deye_entity": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "missing_solcast_forecast_entity": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "climate_entity_unavailable": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "ownership_helper_missing": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "power_sensor_invalid": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "direct_no_climates": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "thermal_enabled_mode_off": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "scripts_missing": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+    "ev_power_invalid": {
+      "title": "{title}",
+      "description": "{fix}"
+    },
+        "ev_bypass_missing_deye_power_entities": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "porsche_entity_unavailable": {
+            "title": "{title}",
+            "description": "{fix}"
+        }
+    }
 }

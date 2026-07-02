@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .decision import slugify
 from .entity import DeyeEnergyManagerEntity
 from .models import EnergyManagerDecision
 
@@ -38,6 +39,8 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="expected_action", name="Expected action", value_fn=lambda d: d.expected_action),
     DeyeSensorDescription(key="thermal_expected_action", name="Thermal expected action", value_fn=lambda d: d.thermal_action),
     DeyeSensorDescription(key="thermal_action_reason", name="Thermal action reason", value_fn=lambda d: d.thermal_action_reason),
+    DeyeSensorDescription(key="effective_thermal_mode", name="Effective thermal mode", value_fn=lambda d: d.effective_thermal_mode),
+    DeyeSensorDescription(key="auto_mode_reason", name="Auto mode reason", value_fn=lambda d: d.auto_mode_reason),
     DeyeSensorDescription(key="last_decision_reason", name="Last decision reason", value_fn=lambda d: d.reason),
     DeyeSensorDescription(key="last_control_action", name="Last control action", value_fn=lambda d: d.now.isoformat()),
     DeyeSensorDescription(key="thermal_load_to_shed", name="Thermal load to shed", value_fn=lambda d: d.thermal_load_to_shed),
@@ -52,12 +55,17 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="ev_decision_reason", name="EV decision reason", value_fn=lambda d: d.ev_decision_reason),
     DeyeSensorDescription(key="ev_expected_action", name="EV expected action", value_fn=lambda d: d.ev_expected_action),
     DeyeSensorDescription(key="ev_detected_power_w", name="EV detected power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_detected_power_w),
+    DeyeSensorDescription(key="recent_proposed_actions", name="Recent proposed actions", value_fn=lambda d: d.expected_action),
 )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(DeyeSensor(coordinator, description) for description in SENSORS)
+    entities = [DeyeSensor(coordinator, description) for description in SENSORS]
+    for load in coordinator.heat_loads:
+        name = str(load.get("name", load.get("climate_entity", "thermal_load")))
+        entities.append(DeyeThermalLoadStatusSensor(coordinator, name))
+    async_add_entities(entities)
 
 
 class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
@@ -75,4 +83,33 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
             return None
         if self.entity_description.key == "last_control_action":
             return self.coordinator.last_control_action
+        if self.entity_description.key == "recent_proposed_actions":
+            return self.coordinator.recent_proposed_actions[-1]["proposed_action"] if self.coordinator.recent_proposed_actions else "none"
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        if self.entity_description.key == "recent_proposed_actions":
+            return {"entries": list(self.coordinator.recent_proposed_actions)}
+        return None
+
+
+class DeyeThermalLoadStatusSensor(DeyeEnergyManagerEntity, SensorEntity):
+    """Per-managed-load thermal diagnostic sensor."""
+
+    def __init__(self, coordinator, load_name: str) -> None:
+        self._load_name = load_name
+        self._slug = slugify(load_name)
+        super().__init__(coordinator, f"{self._slug}_thermal_status", f"{load_name} thermal status")
+
+    @property
+    def native_value(self) -> str | None:
+        diagnostic = self.coordinator.load_diagnostics.get(self._slug)
+        return diagnostic.state if diagnostic else "unavailable"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object | None]:
+        diagnostic = self.coordinator.load_diagnostics.get(self._slug)
+        if not diagnostic:
+            return {"load_name": self._load_name, "blocked_reason": "diagnostic unavailable"}
+        return diagnostic.attributes

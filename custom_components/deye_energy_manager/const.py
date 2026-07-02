@@ -42,6 +42,8 @@ DEFAULT_ENTITY_MAP = {
     "porsche_charging_ends": "sensor.cayenne_e_hybrid_my24_charging_ends",
     "porsche_charging_power": "sensor.cayenne_e_hybrid_my24_charging_power",
     "ev_power": "",
+    "outdoor_temperature": "",
+    "indoor_average_temperature": "",
 }
 
 DEFAULT_HEAT_LOADS = [
@@ -171,6 +173,7 @@ FEATURE_DEFAULTS = {
     "return_to_normal_on_shed_enabled": True,
     "forecast_full_override_enabled": True,
     "thermal_rotation_enabled": True,
+    "auto_mode_month_fallback_enabled": True,
 }
 
 NUMBER_DEFAULTS = {
@@ -196,6 +199,11 @@ NUMBER_DEFAULTS = {
     "ev_hold_extra_minutes": 10.0,
     "ev_fallback_hold_minutes": 180.0,
     "ev_restore_program_power_w": 12000.0,
+    "min_thermal_run_minutes": 20.0,
+    "min_thermal_rest_minutes": 10.0,
+    "thermal_rotation_cooldown_minutes": 15.0,
+    "auto_heating_below_temp": 16.0,
+    "auto_cooling_above_temp": 24.0,
     "forecast_safety_buffer_kwh": 2.0,
     "min_soc_floor": 12.0,
     "max_grid_charge_target_soc": 80.0,

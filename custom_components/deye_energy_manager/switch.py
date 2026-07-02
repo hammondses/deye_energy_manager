@@ -27,6 +27,7 @@ SWITCHES = {
     "return_to_normal_on_shed_enabled": "Return to normal on shed enabled",
     "forecast_full_override_enabled": "Forecast full override enabled",
     "thermal_rotation_enabled": "Thermal rotation enabled",
+    "auto_mode_month_fallback_enabled": "Auto mode month fallback enabled",
 }
 
 

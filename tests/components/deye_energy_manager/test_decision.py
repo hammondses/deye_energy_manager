@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_load_diagnostic, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
+from custom_components.deye_energy_manager.repairs import repair_issue_definitions
 
 TZ = ZoneInfo("Pacific/Auckland")
 
@@ -617,3 +618,142 @@ def test_underfloor_shed_turns_off() -> None:
     )
 
     assert action == ("off", None)
+
+
+def test_cooldown_prevents_short_cycle_add() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=85,
+            battery_power_w=-3000,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    is_on=False,
+                    solar_owned=False,
+                    current_temp=20,
+                    last_shed_at=dt(11, 55),
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, min_thermal_rest_minutes=10),
+    )
+
+    assert decision.thermal_load_to_add is None
+
+
+def test_emergency_shed_bypasses_run_cooldown() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=3000,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=20,
+                    last_added_at=dt(11, 55),
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_emergency_shed_w=2500, min_thermal_run_minutes=20),
+    )
+
+    assert decision.thermal_should_emergency_shed
+    assert decision.thermal_action == "emergency_shed_all"
+
+
+def test_per_load_diagnostic_explains_cooldown() -> None:
+    inputs = base_inputs(
+        now=dt(12),
+        heat_loads=[
+            HeatLoadState(
+                name="Office",
+                priority=1,
+                is_on=False,
+                solar_owned=False,
+                current_temp=20,
+                last_shed_at=dt(11, 55),
+            )
+        ],
+    )
+    settings = EnergyManagerSettings(min_thermal_rest_minutes=10)
+    diagnostic = thermal_load_diagnostic(inputs.heat_loads[0], settings, inputs)
+
+    assert diagnostic.state == "cooldown"
+    assert diagnostic.attributes["blocked_by_cooldown"]
+    assert "min rest" in str(diagnostic.attributes["blocked_reason"])
+
+
+def test_auto_mode_chooses_heating_from_outdoor_temp() -> None:
+    decision = decide(
+        base_inputs(now=dt(12), outdoor_temperature=9.5),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_mode="auto"),
+    )
+
+    assert decision.effective_thermal_mode == "heating"
+    assert "outdoor temp 9.5 <= heating threshold" in decision.auto_mode_reason
+
+
+def test_auto_mode_chooses_cooling_from_outdoor_temp() -> None:
+    decision = decide(
+        base_inputs(now=dt(12), outdoor_temperature=27),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_mode="auto"),
+    )
+
+    assert decision.effective_thermal_mode == "cooling"
+    assert "outdoor temp 27.0 >= cooling threshold" in decision.auto_mode_reason
+
+
+def test_auto_mode_southern_hemisphere_month_fallback() -> None:
+    decision = decide(
+        base_inputs(now=dt(12).replace(month=7), outdoor_temperature=None),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_mode="auto"),
+    )
+
+    assert decision.effective_thermal_mode == "heating"
+    assert "Southern Hemisphere heating season" in decision.auto_mode_reason
+
+
+def test_repair_issue_for_missing_climate() -> None:
+    issues = repair_issue_definitions(
+        EnergyManagerSettings(),
+        {},
+        [
+            {
+                "name": "Office",
+                "enabled": True,
+                "climate_entity": "climate.office_heatpump",
+                "ownership_entity": "input_boolean.solar_owns_office_heatpump",
+            }
+        ],
+        lambda entity_id: entity_id == "input_boolean.solar_owns_office_heatpump",
+    )
+
+    assert "climate_entity_unavailable" in issues
+
+
+def test_repair_issue_for_missing_script_in_scripts_mode() -> None:
+    issues = repair_issue_definitions(
+        EnergyManagerSettings(thermal_actuation_mode="scripts"),
+        {},
+        [],
+        lambda _entity_id: False,
+    )
+
+    assert "scripts_missing" in issues
+
+
+def test_repair_issue_for_invalid_ev_power_sensor() -> None:
+    issues = repair_issue_definitions(
+        EnergyManagerSettings(),
+        {"ev_power": "sensor.ev_power"},
+        [],
+        lambda _entity_id: False,
+    )
+
+    assert "ev_power_invalid" in issues

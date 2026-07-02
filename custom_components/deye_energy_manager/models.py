@@ -26,6 +26,7 @@ class EnergyManagerSettings:
     return_to_normal_on_shed_enabled: bool = True
     forecast_full_override_enabled: bool = True
     thermal_rotation_enabled: bool = True
+    auto_mode_month_fallback_enabled: bool = True
     strategy: str = "normal"
     heat_mode: str = "advisory"
     thermal_mode: str = "heating"
@@ -53,6 +54,11 @@ class EnergyManagerSettings:
     ev_hold_extra_minutes: float = 10.0
     ev_fallback_hold_minutes: float = 180.0
     ev_restore_program_power_w: float = 12000.0
+    min_thermal_run_minutes: float = 20.0
+    min_thermal_rest_minutes: float = 10.0
+    thermal_rotation_cooldown_minutes: float = 15.0
+    auto_heating_below_temp: float = 16.0
+    auto_cooling_above_temp: float = 24.0
     forecast_safety_buffer_kwh: float = 2.0
     min_soc_floor: float = 12.0
     max_grid_charge_target_soc: float = 80.0
@@ -90,6 +96,11 @@ class HeatLoadState:
     enabled: bool = True
     supports_heating: bool = True
     supports_cooling: bool = False
+    last_added_at: datetime | None = None
+    last_shed_at: datetime | None = None
+    last_rotated_at: datetime | None = None
+    last_action: str | None = None
+    last_action_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -107,6 +118,8 @@ class EnergyManagerInputs:
     pv_power_now_w: float | None = None
     pv_power_in_30_minutes_w: float | None = None
     pv_power_in_1_hour_w: float | None = None
+    outdoor_temperature: float | None = None
+    indoor_average_temperature: float | None = None
     any_solar_owned_heat_load_on: bool = False
     heat_loads: list[HeatLoadState] = field(default_factory=list)
     heat_available: bool = False
@@ -160,6 +173,8 @@ class EnergyManagerDecision:
     thermal_should_return_to_normal: bool
     thermal_action: str
     thermal_action_reason: str
+    effective_thermal_mode: str
+    auto_mode_reason: str
     thermal_load_to_add: str | None
     thermal_load_to_shed: str | None
     thermal_load_to_normalise: str | None
@@ -193,3 +208,12 @@ class EnergyManagerDecision:
     pv_power_now_w: float | None = None
     ev_hold_until: datetime | None = None
     forecast_data_valid: bool = True
+
+
+@dataclass(slots=True)
+class ThermalLoadDiagnostic:
+    """Diagnostic status for one managed thermal load."""
+
+    slug: str
+    state: str
+    attributes: dict[str, object | None]

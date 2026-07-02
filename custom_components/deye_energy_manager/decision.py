@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 
-from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState
+from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState, ThermalLoadDiagnostic
 
 FORECAST_TIERS = [
     (32.0, ForecastTier("excellent", 35.0, 20.0, 75.0, 15.0, 90.0, 0.0)),
@@ -116,26 +116,60 @@ def projected_soc_at_08(inputs: EnergyManagerInputs, settings: EnergyManagerSett
     return max(inputs.battery_soc - (discharge_kwh / settings.battery_capacity_kwh * 100.0), 0.0)
 
 
-def effective_thermal_mode(settings: EnergyManagerSettings) -> str:
-    """Return the concrete thermal mode. Auto defaults to heating for now."""
+def effective_thermal_mode(
+    settings: EnergyManagerSettings,
+    now: datetime | None = None,
+    outdoor_temperature: float | None = None,
+) -> str:
+    """Return the concrete thermal mode."""
 
     if settings.thermal_mode == "auto":
+        if outdoor_temperature is not None:
+            if outdoor_temperature <= settings.auto_heating_below_temp:
+                return "heating"
+            if outdoor_temperature >= settings.auto_cooling_above_temp:
+                return "cooling"
+            return "off"
+        if settings.auto_mode_month_fallback_enabled and now is not None:
+            if now.month in {4, 5, 6, 7, 8, 9, 10, 3, 11}:
+                return "heating"
+            if now.month in {12, 1, 2}:
+                return "cooling"
         return "heating"
     return settings.thermal_mode
 
 
-def thermal_targets(settings: EnergyManagerSettings) -> tuple[float, float]:
+def auto_mode_reason(settings: EnergyManagerSettings, now: datetime, outdoor_temperature: float | None) -> str:
+    """Explain thermal auto-mode selection."""
+
+    if settings.thermal_mode != "auto":
+        return f"thermal mode fixed: {settings.thermal_mode}"
+    if outdoor_temperature is not None:
+        if outdoor_temperature <= settings.auto_heating_below_temp:
+            return f"outdoor temp {outdoor_temperature:.1f} <= heating threshold {settings.auto_heating_below_temp:.1f}"
+        if outdoor_temperature >= settings.auto_cooling_above_temp:
+            return f"outdoor temp {outdoor_temperature:.1f} >= cooling threshold {settings.auto_cooling_above_temp:.1f}"
+        return f"outdoor temp {outdoor_temperature:.1f} between thresholds; thermal idle"
+    if settings.auto_mode_month_fallback_enabled:
+        if now.month in {4, 5, 6, 7, 8, 9, 10, 3, 11}:
+            return f"month fallback: month {now.month} in Southern Hemisphere heating season"
+        if now.month in {12, 1, 2}:
+            return f"month fallback: month {now.month} in Southern Hemisphere cooling season"
+    return "auto fallback: heating"
+
+
+def thermal_targets(settings: EnergyManagerSettings, mode: str | None = None) -> tuple[float, float]:
     """Return soak and normal target temperatures for the active thermal mode."""
 
-    if effective_thermal_mode(settings) == "cooling":
+    if (mode or effective_thermal_mode(settings)) == "cooling":
         return settings.cool_soak_target_temp, settings.cool_normal_target_temp
     return settings.heat_soak_target_temp, settings.heat_normal_target_temp
 
 
-def thermal_hvac_mode(settings: EnergyManagerSettings) -> str:
+def thermal_hvac_mode(settings: EnergyManagerSettings, mode: str | None = None) -> str:
     """Return Home Assistant climate HVAC mode for the active thermal mode."""
 
-    return "cool" if effective_thermal_mode(settings) == "cooling" else "heat"
+    return "cool" if (mode or effective_thermal_mode(settings)) == "cooling" else "heat"
 
 
 def thermal_soak_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float] | None:
@@ -145,7 +179,7 @@ def thermal_soak_action(settings: EnergyManagerSettings, load: HeatLoadState) ->
     if not load_supports_mode(load, mode):
         return None
     soak_target, _normal_target = thermal_targets(settings)
-    return thermal_hvac_mode(settings), soak_target
+    return thermal_hvac_mode(settings, mode), soak_target
 
 
 def thermal_shed_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float | None]:
@@ -177,11 +211,11 @@ def load_is_active(load: HeatLoadState, mode: str) -> bool:
     return load.is_on
 
 
-def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings) -> bool:
+def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> bool:
     """Return whether a thermal load is close to the soak target or tapering."""
 
-    mode = effective_thermal_mode(settings)
-    soak_target, _normal_target = thermal_targets(settings)
+    mode = mode or effective_thermal_mode(settings)
+    soak_target, _normal_target = thermal_targets(settings, mode)
     if load.power_w is not None and load.solar_owned and load.is_on and load.power_w <= load.taper_power_threshold_w:
         return True
     if load.current_temp is None:
@@ -191,11 +225,11 @@ def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings) -> b
     return load.current_temp >= soak_target - settings.room_satisfied_delta_c
 
 
-def load_needs_soak(load: HeatLoadState, settings: EnergyManagerSettings) -> bool:
+def load_needs_soak(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> bool:
     """Return whether a load still has useful thermal storage headroom."""
 
-    mode = effective_thermal_mode(settings)
-    soak_target, _normal_target = thermal_targets(settings)
+    mode = mode or effective_thermal_mode(settings)
+    soak_target, _normal_target = thermal_targets(settings, mode)
     if load.blocked_until is not None or not load_supports_mode(load, mode):
         return False
     if load.current_temp is None:
@@ -205,7 +239,7 @@ def load_needs_soak(load: HeatLoadState, settings: EnergyManagerSettings) -> boo
     return load.current_temp < soak_target - settings.room_resume_delta_c
 
 
-def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings, mode: str | None = None) -> list[HeatLoadState]:
     """Return solar-owned thermal loads close enough to soak target or tapering."""
 
     return [
@@ -213,11 +247,11 @@ def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSett
         for load in loads
         if load.solar_owned
         and load.is_on
-        and load_is_satisfied(load, settings)
+        and load_is_satisfied(load, settings, mode)
     ]
 
 
-def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings, mode: str | None = None) -> list[HeatLoadState]:
     """Return off loads still materially away from soak target."""
 
     return [
@@ -226,8 +260,121 @@ def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings
         if load.blocked_until is None
         and not load.solar_owned
         and not load.is_on
-        and load_needs_soak(load, settings)
+        and load_needs_soak(load, settings, mode)
     ]
+
+
+def minutes_since(now: datetime, value: datetime | None) -> float | None:
+    if value is None:
+        return None
+    return (now - value).total_seconds() / 60.0
+
+
+def cooldown_block_reason(load: HeatLoadState, settings: EnergyManagerSettings, now: datetime, for_action: str) -> str | None:
+    """Return cooldown block reason for add/shed/rotate."""
+
+    if for_action == "add":
+        elapsed = minutes_since(now, load.last_shed_at)
+        if elapsed is not None and elapsed < settings.min_thermal_rest_minutes:
+            return f"blocked_by_cooldown: shed {elapsed:.0f}m ago, min rest {settings.min_thermal_rest_minutes:.0f}m"
+    if for_action == "shed":
+        elapsed = minutes_since(now, load.last_added_at)
+        if elapsed is not None and elapsed < settings.min_thermal_run_minutes:
+            return f"blocked_by_cooldown: added {elapsed:.0f}m ago, min run {settings.min_thermal_run_minutes:.0f}m"
+    if for_action == "rotate":
+        elapsed = minutes_since(now, load.last_rotated_at)
+        if elapsed is not None and elapsed < settings.thermal_rotation_cooldown_minutes:
+            return f"rotation blocked: rotated {elapsed:.0f}m ago, cooldown {settings.thermal_rotation_cooldown_minutes:.0f}m"
+    return None
+
+
+def thermal_load_diagnostic(
+    load: HeatLoadState,
+    settings: EnergyManagerSettings,
+    inputs: EnergyManagerInputs,
+    decision: EnergyManagerDecision | None = None,
+) -> ThermalLoadDiagnostic:
+    """Build a diagnostic status object for one thermal load."""
+
+    mode = effective_thermal_mode(settings, inputs.now, inputs.outdoor_temperature)
+    soak_target, normal_target = thermal_targets(settings, mode)
+    blocked_by_mode = not load_supports_mode(load, mode)
+    blocked_reason = None
+    blocked_by_cooldown = False
+    if load.blocked_until and load.blocked_until > inputs.now:
+        blocked_reason = "manual_override"
+    elif reason := cooldown_block_reason(load, settings, inputs.now, "add"):
+        blocked_reason = reason
+        blocked_by_cooldown = True
+    elif blocked_by_mode:
+        blocked_reason = "unsupported_mode"
+
+    needs = load_needs_soak(load, settings, mode)
+    satisfied = load_is_satisfied(load, settings, mode)
+    active = load_is_active(load, mode)
+    tapering = bool(load.power_w is not None and load.is_on and load.power_w <= load.taper_power_threshold_w)
+    if blocked_reason == "manual_override":
+        state = "manual_override"
+    elif blocked_by_cooldown:
+        state = "cooldown"
+    elif blocked_by_mode:
+        state = "unsupported_mode"
+    elif not load.enabled:
+        state = "blocked"
+    elif load.hvac_mode is None:
+        state = "unavailable"
+    elif tapering:
+        state = "tapering"
+    elif satisfied:
+        state = "satisfied"
+    elif load.solar_owned and active:
+        state = "soaking"
+    elif needs:
+        state = "needs_soak"
+    else:
+        state = "idle"
+
+    chosen_add = decision is not None and decision.thermal_load_to_add == load.name
+    chosen_shed = decision is not None and decision.thermal_load_to_shed == load.name
+    attrs: dict[str, object | None] = {
+        "load_name": load.name,
+        "enabled": load.enabled,
+        "priority": load.priority,
+        "thermal_mode": mode,
+        "supports_heating": load.supports_heating,
+        "supports_cooling": load.supports_cooling,
+        "current_temperature": load.current_temp,
+        "target_temperature": load.target_temp,
+        "soak_target_temperature": soak_target,
+        "normal_target_temperature": normal_target,
+        "hvac_mode": load.hvac_mode,
+        "hvac_action": load.hvac_action,
+        "power_w": load.power_w,
+        "estimated_load_w": load.estimated_load_w,
+        "active_state": "active" if active else "idle",
+        "owned_by_manager": load.solar_owned,
+        "needs_soak": needs,
+        "satisfied": satisfied,
+        "tapering": tapering,
+        "blocked_by_manual_override": blocked_reason == "manual_override",
+        "blocked_by_cooldown": blocked_by_cooldown,
+        "blocked_by_mode": blocked_by_mode,
+        "blocked_reason": blocked_reason,
+        "last_added_at": load.last_added_at.isoformat() if load.last_added_at else None,
+        "last_shed_at": load.last_shed_at.isoformat() if load.last_shed_at else None,
+        "last_rotated_at": load.last_rotated_at.isoformat() if load.last_rotated_at else None,
+        "last_action": load.last_action,
+        "last_action_reason": load.last_action_reason,
+        "chosen_for_add": chosen_add,
+        "chosen_for_shed": chosen_shed,
+        "chosen_for_rotation": bool(decision and decision.thermal_rotation_recommended and (chosen_add or chosen_shed)),
+        "not_chosen_reason": None if chosen_add or chosen_shed else blocked_reason or ("does_not_need_soak" if not needs and not satisfied else "lower_priority_or_no_action"),
+    }
+    return ThermalLoadDiagnostic(slug=slugify(load.name), state=state, attributes=attrs)
+
+
+def slugify(value: str) -> str:
+    return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_").replace("__", "_")
 
 
 def forecast_full_override_active(
@@ -361,7 +508,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     battery_discharge_w = max(inputs.battery_power_w, 0.0)
     cheap_window = time_between(inputs.now, "21:00", "07:00")
     control_blocked = not settings.enabled
-    thermal_mode = effective_thermal_mode(settings)
+    thermal_mode = effective_thermal_mode(settings, inputs.now, inputs.outdoor_temperature)
+    auto_reason = auto_mode_reason(settings, inputs.now, inputs.outdoor_temperature)
     thermal_control_enabled = settings.thermal_control_enabled or settings.heat_control_enabled
     thermal_start_min_soc = settings.thermal_start_min_soc
     thermal_start_min_charge_w = settings.thermal_start_min_charge_w
@@ -458,8 +606,23 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_discharge_w < 200.0
     )
 
-    shed_candidates = sorted(satisfied_heat_loads(inputs.heat_loads, settings), key=lambda load: load.priority, reverse=True)
-    add_candidates = sorted(needy_heat_loads(inputs.heat_loads, settings), key=lambda load: load.priority)
+    shed_candidates = sorted(
+        [
+            load
+            for load in satisfied_heat_loads(inputs.heat_loads, settings, thermal_mode)
+            if cooldown_block_reason(load, settings, inputs.now, "shed") is None
+        ],
+        key=lambda load: load.priority,
+        reverse=True,
+    )
+    add_candidates = sorted(
+        [
+            load
+            for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode)
+            if cooldown_block_reason(load, settings, inputs.now, "add") is None
+        ],
+        key=lambda load: load.priority,
+    )
     thermal_load_to_shed = shed_candidates[0].name if shed_candidates else None
     thermal_load_to_add = add_candidates[0].name if add_candidates else None
     thermal_rotation_recommended = (
@@ -468,6 +631,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and inputs.heat_available
         and thermal_load_to_shed is not None
         and thermal_load_to_add is not None
+        and cooldown_block_reason(shed_candidates[0], settings, inputs.now, "rotate") is None
+        and cooldown_block_reason(add_candidates[0], settings, inputs.now, "rotate") is None
     )
     thermal_load_to_normalise = thermal_load_to_shed if thermal_should_shed else None
     solar_owned_count = sum(1 for load in inputs.heat_loads if load.solar_owned)
@@ -627,6 +792,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_should_return_to_normal=thermal_should_return_to_normal,
         thermal_action=thermal_action,
         thermal_action_reason="; ".join(thermal_reason_parts),
+        effective_thermal_mode=thermal_mode,
+        auto_mode_reason=auto_reason,
         thermal_load_to_add=thermal_load_to_add,
         thermal_load_to_shed=thermal_load_to_shed,
         thermal_load_to_normalise=thermal_load_to_normalise,

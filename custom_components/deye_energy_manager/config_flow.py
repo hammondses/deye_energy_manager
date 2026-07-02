@@ -157,8 +157,13 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
         "room_resume_delta_c",
         "forecast_full_confidence_buffer_kwh",
         "manual_override_cooldown_min",
+        "min_thermal_run_minutes",
+        "min_thermal_rest_minutes",
+        "thermal_rotation_cooldown_minutes",
         "battery_capacity_kwh",
         "overnight_bedroom_taper_target_temp",
+        "auto_heating_below_temp",
+        "auto_cooling_above_temp",
     ]
     return vol.Schema(
         {
@@ -171,6 +176,7 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("return_to_normal_on_shed_enabled", default=defaults.get("return_to_normal_on_shed_enabled", True)): selector.BooleanSelector(),
             vol.Required("forecast_full_override_enabled", default=defaults.get("forecast_full_override_enabled", True)): selector.BooleanSelector(),
             vol.Required("thermal_rotation_enabled", default=defaults.get("thermal_rotation_enabled", True)): selector.BooleanSelector(),
+            vol.Required("auto_mode_month_fallback_enabled", default=defaults.get("auto_mode_month_fallback_enabled", True)): selector.BooleanSelector(),
             vol.Required("pv_load_test_control_enabled", default=defaults.get("pv_load_test_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("export_limited_mode_enabled", default=defaults.get("export_limited_mode_enabled", False)): selector.BooleanSelector(),
             **{
@@ -284,7 +290,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         return self.async_show_menu(
             step_id="init",
-            menu_options=["controls", "thermal", "ev", "battery", "entities", "legacy"],
+            menu_options=["controls", "thermal", "ev", "battery", "loads", "entities", "legacy"],
         )
 
     async def async_step_controls(self, user_input: dict[str, Any] | None = None):
@@ -310,6 +316,57 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             self._options.update(user_input)
             return self.async_create_entry(title="", data=self._options)
         return self.async_show_form(step_id="battery", data_schema=_battery_schema(self._options))
+
+    async def async_step_loads(self, user_input: dict[str, Any] | None = None):
+        loads = list(self.config_entry.options.get(CONF_HEAT_LOADS, self.config_entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS)))
+        if user_input is not None:
+            self._selected_load_index = int(user_input["load_index"])
+            return await self.async_step_load_detail()
+        return self.async_show_form(
+            step_id="loads",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("load_index", default=0): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                {"value": str(index), "label": str(load.get("name", f"Load {index + 1}"))}
+                                for index, load in enumerate(loads)
+                            ]
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_load_detail(self, user_input: dict[str, Any] | None = None):
+        loads = list(self.config_entry.options.get(CONF_HEAT_LOADS, self.config_entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS)))
+        index = getattr(self, "_selected_load_index", 0)
+        load = dict(loads[index])
+        if user_input is not None:
+            load.update(user_input)
+            loads[index] = load
+            self._options[CONF_HEAT_LOADS] = loads
+            return self.async_create_entry(title="", data=self._options)
+        return self.async_show_form(
+            step_id="load_detail",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("enabled", default=bool(load.get("enabled", True))): selector.BooleanSelector(),
+                    vol.Required("name", default=str(load.get("name", ""))): str,
+                    vol.Required("climate_entity", default=str(load.get("climate_entity", ""))): selector.EntitySelector(),
+                    vol.Required("ownership_entity", default=str(load.get("ownership_entity", ""))): selector.EntitySelector(),
+                    vol.Required("priority", default=int(load.get("priority", 99))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=1, step=1)),
+                    vol.Required("estimated_load_w", default=float(load.get("estimated_load_w", 0))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=100)),
+                    vol.Required("supports_heating", default=bool(load.get("supports_heating", True))): selector.BooleanSelector(),
+                    vol.Required("supports_cooling", default=bool(load.get("supports_cooling", False))): selector.BooleanSelector(),
+                    vol.Optional("optional_power_sensor", default=str(load.get("optional_power_sensor", ""))): selector.EntitySelector(),
+                    vol.Required("active_power_threshold_w", default=float(load.get("active_power_threshold_w", 800))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
+                    vol.Required("idle_power_threshold_w", default=float(load.get("idle_power_threshold_w", 150))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
+                    vol.Required("taper_power_threshold_w", default=float(load.get("taper_power_threshold_w", 400))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
+                    vol.Required("type", default=str(load.get("type", "heatpump"))): selector.SelectSelector(selector.SelectSelectorConfig(options=["heatpump", "underfloor", "other"])),
+                }
+            ),
+        )
 
     async def async_step_legacy(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:

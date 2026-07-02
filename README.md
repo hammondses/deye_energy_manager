@@ -37,6 +37,7 @@ Options are split into sections in the integration UI:
 - Thermal
 - EV
 - Battery
+- Managed Loads
 - Entity Mapping
 - Legacy
 
@@ -91,6 +92,53 @@ EV support is native to the integration and disabled by default.
 Cheap-grid EV bypass detects charging from an optional EV power sensor first, then falls back to essential-load jumps/high load and Porsche signals. When enabled during the cheap window, it sets Deye programme powers 6/1/2/3 to `0`; when EV charging stops, it restores them to `ev_restore_program_power_w`.
 
 EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power.
+
+## Diagnostics And Tuning
+
+The integration exposes one thermal status sensor per managed load, for example:
+
+- `sensor.deye_energy_manager_dining_living_heat_pump_thermal_status`
+- `sensor.deye_energy_manager_bedroom_heat_pump_thermal_status`
+- `sensor.deye_energy_manager_office_heat_pump_thermal_status`
+
+Each status sensor includes attributes for room temperature, target, ownership, active/tapering state, cooldowns, chosen/not-chosen reasons, and last action timestamps.
+
+Cooldown protection:
+
+- `number.deye_energy_manager_min_thermal_run_minutes`
+- `number.deye_energy_manager_min_thermal_rest_minutes`
+- `number.deye_energy_manager_thermal_rotation_cooldown_minutes`
+
+Emergency shed bypasses cooldowns.
+
+Dry-run visibility:
+
+- `sensor.deye_energy_manager_recent_proposed_actions`
+
+The sensor attributes include the last 10 proposed actions with subsystem, actuation mode, target, reason, and blocked reason.
+
+Diagnostics download and Home Assistant Repairs are supported for common setup issues such as missing climates, missing scripts in script mode, invalid EV power sensors, and missing Deye programme power entities.
+
+`thermal_mode = auto` can use an optional outdoor temperature sensor, with Southern Hemisphere month fallback:
+
+- Heating fallback: March-November shoulder/heating, especially April-October
+- Cooling fallback: December-February
+
+## Release Notes v0.4.0
+
+- Thermal storage controls
+- Heating/cooling thermal mode
+- Heat/cool soak and normal target temps
+- Forecast-full override
+- Direct/script/advisory actuation modes
+- EV cheap-grid bypass scaffolding/control
+- Direct climate control safety gates
+- Per-load thermal diagnostics
+- Thermal cooldown and anti-short-cycle protection
+- Repairs and diagnostics support
+- Recent proposed action log
+- Existing managed load editor
+- Outdoor/season thermal auto mode
 
 ## PV Load Testing
 
