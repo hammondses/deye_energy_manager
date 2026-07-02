@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_load_diagnostic, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager import decision as decision_module
+from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
+from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
@@ -808,6 +810,38 @@ def test_missing_fan_modes_do_not_error_and_are_reported() -> None:
     assert diagnostic.attributes["supported_fan_modes"] == []
     assert not diagnostic.attributes["fan_mode_supported"]
     assert diagnostic.attributes["fan_mode_blocked_reason"] == "climate does not expose fan_modes"
+
+
+def test_load_diagnostics_keys_for_default_loads() -> None:
+    loads = [
+        HeatLoadState(
+            name=str(load["name"]),
+            priority=int(load["priority"]),
+            slug=str(load["slug"]),
+            climate_entity=str(load["climate_entity"]),
+            ownership_entity=str(load["ownership_entity"]),
+        )
+        for load in DEFAULT_HEAT_LOADS
+    ]
+    inputs = base_inputs(heat_loads=loads)
+    decision = decide(inputs, EnergyManagerSettings())
+    diagnostics = thermal_load_diagnostics(inputs, EnergyManagerSettings(), decision)
+
+    assert {"dining", "bedroom", "office", "hallway", "underfloor"} <= set(diagnostics)
+
+
+def test_load_diagnostics_fail_safe_does_not_crash(monkeypatch) -> None:
+    inputs = base_inputs(heat_loads=[HeatLoadState(name="Dining", priority=1, slug="dining")])
+    decision = decide(inputs, EnergyManagerSettings())
+
+    def broken_diagnostic(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(decision_module, "thermal_load_diagnostic", broken_diagnostic)
+    diagnostics = decision_module.thermal_load_diagnostics(inputs, EnergyManagerSettings(), decision)
+
+    assert diagnostics["dining"].state == "unavailable"
+    assert diagnostics["dining"].attributes["blocked_reason"] == "diagnostic_error"
 
 
 def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:

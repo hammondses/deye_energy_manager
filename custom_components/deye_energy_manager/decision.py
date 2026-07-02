@@ -413,6 +413,35 @@ def thermal_load_diagnostic(
     return ThermalLoadDiagnostic(slug=load.slug or slugify(load.name), state=state, attributes=attrs)
 
 
+def thermal_load_diagnostics(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    decision: EnergyManagerDecision,
+) -> dict[str, ThermalLoadDiagnostic]:
+    """Build all per-load diagnostics without allowing one failure to break decisions."""
+
+    diagnostics: dict[str, ThermalLoadDiagnostic] = {}
+    for load in inputs.heat_loads:
+        slug = load.slug or slugify(load.name)
+        try:
+            diagnostic = thermal_load_diagnostic(load, settings, inputs, decision)
+        except Exception as err:
+            diagnostic = ThermalLoadDiagnostic(
+                slug=slug,
+                state="unavailable",
+                attributes={
+                    "load_slug": slug,
+                    "load_name": load.name,
+                    "climate_entity": load.climate_entity,
+                    "ownership_entity": load.ownership_entity,
+                    "blocked_reason": "diagnostic_error",
+                    "diagnostic_error": str(err),
+                },
+            )
+        diagnostics[diagnostic.slug] = diagnostic
+    return diagnostics
+
+
 def slugify(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_").replace("__", "_")
 

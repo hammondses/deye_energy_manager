@@ -32,7 +32,7 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import decide, forecast_tier, slot_capacity_targets, thermal_load_diagnostic
+from .decision import decide, forecast_tier, slot_capacity_targets, thermal_load_diagnostics
 from .migration import infer_load_slug
 from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -381,10 +381,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         settings: EnergyManagerSettings,
         decision: EnergyManagerDecision,
     ) -> None:
-        self.load_diagnostics = {
-            slugify(load.name): thermal_load_diagnostic(load, settings, inputs, decision)
-            for load in inputs.heat_loads
-        }
+        self.load_diagnostics = thermal_load_diagnostics(inputs, settings, decision)
 
     def _append_proposed_action(self, decision: EnergyManagerDecision) -> None:
         action = decision.expected_action

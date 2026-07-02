@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.4.3
+
+- Fix coordinator crash caused by a stale `slugify` reference in per-load diagnostics.
+- Build per-load diagnostics through a fail-safe helper so diagnostic errors cannot make all integration entities unavailable.
+- Add regression tests for default diagnostic load keys and diagnostic failure handling.
+
 ## v0.4.2
 
 - Add native heat/cool soak and normal fan-mode select entities.
