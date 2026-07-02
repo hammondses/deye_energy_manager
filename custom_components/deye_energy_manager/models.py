@@ -15,6 +15,9 @@ class EnergyManagerSettings:
     deye_control_enabled: bool = False
     grid_charge_control_enabled: bool = False
     ev_control_enabled: bool = False
+    ev_grid_bypass_enabled: bool = False
+    ev_solar_charging_enabled: bool = False
+    ev_cheap_grid_charging_enabled: bool = True
     heat_control_enabled: bool = False
     thermal_control_enabled: bool = False
     direct_climate_control_enabled: bool = False
@@ -26,6 +29,8 @@ class EnergyManagerSettings:
     strategy: str = "normal"
     heat_mode: str = "advisory"
     thermal_mode: str = "heating"
+    thermal_actuation_mode: str = "advisory"
+    flexible_load_priority: str = "battery_first"
     heat_add_min_charge_w: float = 6000.0
     heat_add_min_soc: float = 80.0
     heat_shed_discharge_w: float = 500.0
@@ -43,6 +48,11 @@ class EnergyManagerSettings:
     forecast_full_confidence_buffer_kwh: float = 3.0
     ev_start_load_jump_w: float = 5000.0
     ev_stop_load_drop_w: float = 6000.0
+    ev_active_load_threshold_w: float = 1000.0
+    ev_stopped_load_threshold_w: float = 300.0
+    ev_hold_extra_minutes: float = 10.0
+    ev_fallback_hold_minutes: float = 180.0
+    ev_restore_program_power_w: float = 12000.0
     forecast_safety_buffer_kwh: float = 2.0
     min_soc_floor: float = 12.0
     max_grid_charge_target_soc: float = 80.0
@@ -103,7 +113,10 @@ class EnergyManagerInputs:
     cooldown_passed: bool = True
     ev_latch_on: bool = False
     ev_hold_until: datetime | None = None
+    ev_power_w: float | None = None
+    ev_low_since: datetime | None = None
     porsche_soc: float | None = None
+    porsche_charging_status: str | None = None
     porsche_charging_ends: datetime | None = None
     manual_clear_ev_latch: bool = False
 
@@ -162,8 +175,16 @@ class EnergyManagerDecision:
     projected_soc_08: float | None
     grid_charge_required: bool
     ev_grid_mode_required: bool
+    ev_charging_detected: bool
+    ev_grid_bypass_required: bool
+    ev_solar_charge_allowed: bool
+    ev_latch_active: bool
+    ev_decision_reason: str
+    ev_expected_action: str
+    ev_detected_power_w: float | None
     pre_peak_preserve_required: bool
     control_blocked: bool
+    expected_action: str
     reason: str
     proposed_actions: list[str] = field(default_factory=list)
     forecast_today_kwh: float | None = None

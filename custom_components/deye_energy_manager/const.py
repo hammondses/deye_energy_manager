@@ -18,6 +18,10 @@ CONF_HEAT_LOADS = "heat_loads"
 
 THERMAL_MODE_OPTIONS = ["heating", "cooling", "auto", "off"]
 DEFAULT_THERMAL_MODE = "heating"
+THERMAL_ACTUATION_MODE_OPTIONS = ["advisory", "scripts", "direct"]
+DEFAULT_THERMAL_ACTUATION_MODE = "advisory"
+FLEXIBLE_LOAD_PRIORITY_OPTIONS = ["battery_first", "thermal_before_ev", "ev_before_thermal", "export_before_loads"]
+DEFAULT_FLEXIBLE_LOAD_PRIORITY = "battery_first"
 
 DEFAULT_ENTITY_MAP = {
     "battery_soc": "sensor.deye_battery_soc",
@@ -37,6 +41,7 @@ DEFAULT_ENTITY_MAP = {
     "porsche_charging_status": "sensor.cayenne_e_hybrid_my24_charging_status",
     "porsche_charging_ends": "sensor.cayenne_e_hybrid_my24_charging_ends",
     "porsche_charging_power": "sensor.cayenne_e_hybrid_my24_charging_power",
+    "ev_power": "",
 }
 
 DEFAULT_HEAT_LOADS = [
@@ -155,6 +160,9 @@ FEATURE_DEFAULTS = {
     "deye_control_enabled": False,
     "grid_charge_control_enabled": False,
     "ev_control_enabled": False,
+    "ev_grid_bypass_enabled": False,
+    "ev_solar_charging_enabled": False,
+    "ev_cheap_grid_charging_enabled": True,
     "heat_control_enabled": False,
     "thermal_control_enabled": False,
     "direct_climate_control_enabled": False,
@@ -183,6 +191,11 @@ NUMBER_DEFAULTS = {
     "forecast_full_confidence_buffer_kwh": 3.0,
     "ev_start_load_jump_w": 5000.0,
     "ev_stop_load_drop_w": 6000.0,
+    "ev_active_load_threshold_w": 1000.0,
+    "ev_stopped_load_threshold_w": 300.0,
+    "ev_hold_extra_minutes": 10.0,
+    "ev_fallback_hold_minutes": 180.0,
+    "ev_restore_program_power_w": 12000.0,
     "forecast_safety_buffer_kwh": 2.0,
     "min_soc_floor": 12.0,
     "max_grid_charge_target_soc": 80.0,

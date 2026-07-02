@@ -248,6 +248,109 @@ def forecast_full_override_active(
     )
 
 
+def ev_decision(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    cheap_window: bool,
+    battery_priority_satisfied: bool,
+    forecast_override: bool,
+) -> tuple[bool, bool, bool, bool, str, str, float | None, datetime | None]:
+    """Return EV detection, bypass, solar permission, latch, reason, action, power, hold."""
+
+    essential_jump_w = None
+    if inputs.previous_essential_power_w is not None:
+        essential_jump_w = inputs.essential_power_w - inputs.previous_essential_power_w
+
+    power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
+    jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w
+    high_load_detected = inputs.ev_power_w is None and cheap_window and inputs.essential_power_w > 6500.0
+    porsche_status_detected = (inputs.porsche_charging_status or "").lower() == "charging"
+    ev_charging_detected = power_detected or jump_detected or high_load_detected or (
+        porsche_status_detected and inputs.ev_latch_on
+    )
+
+    low_power_stopped = (
+        inputs.ev_power_w is not None
+        and inputs.ev_power_w < settings.ev_stopped_load_threshold_w
+        and inputs.ev_low_since is not None
+        and (inputs.now - inputs.ev_low_since) >= timedelta(minutes=2)
+    )
+    load_drop_stopped = essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w
+    soc_stopped = inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0
+    hold_expired_low = (
+        inputs.ev_hold_until is not None
+        and inputs.now >= inputs.ev_hold_until
+        and inputs.essential_power_w < 2500.0
+        and (inputs.ev_power_w is None or inputs.ev_power_w < settings.ev_active_load_threshold_w)
+    )
+    failsafe_0700 = inputs.ev_latch_on and not cheap_window
+    ev_stop = inputs.manual_clear_ev_latch or low_power_stopped or load_drop_stopped or soc_stopped or hold_expired_low or failsafe_0700
+
+    ev_grid_bypass_required = (
+        settings.enabled
+        and settings.ev_control_enabled
+        and settings.ev_grid_bypass_enabled
+        and settings.ev_cheap_grid_charging_enabled
+        and cheap_window
+        and not ev_stop
+        and (inputs.ev_latch_on or ev_charging_detected)
+    )
+    ev_latch_active = ev_grid_bypass_required
+
+    hold_until = inputs.ev_hold_until
+    if ev_grid_bypass_required and hold_until is None:
+        if inputs.porsche_charging_ends and inputs.porsche_charging_ends > inputs.now:
+            hold_until = inputs.porsche_charging_ends + timedelta(minutes=settings.ev_hold_extra_minutes)
+        else:
+            hold_until = inputs.now + timedelta(minutes=settings.ev_fallback_hold_minutes)
+    if ev_stop:
+        hold_until = None
+        ev_latch_active = False
+
+    ev_solar_charge_allowed = (
+        settings.enabled
+        and settings.ev_control_enabled
+        and settings.ev_solar_charging_enabled
+        and battery_priority_satisfied
+        and forecast_override
+        and settings.flexible_load_priority in {"ev_before_thermal", "battery_first"}
+    )
+
+    action = "none"
+    if ev_stop and inputs.ev_latch_on:
+        action = "ev_grid_bypass_restore"
+    elif ev_grid_bypass_required and not inputs.ev_latch_on:
+        action = "ev_grid_bypass_start"
+    elif ev_grid_bypass_required:
+        action = "ev_grid_bypass_hold"
+    elif ev_solar_charge_allowed:
+        action = "allow_solar_charge"
+
+    if power_detected:
+        reason = f"EV charging detected: EV power {inputs.ev_power_w:.0f}W > {settings.ev_active_load_threshold_w:.0f}W"
+    elif jump_detected:
+        reason = f"EV charging inferred: essential load jump {essential_jump_w:.0f}W >= {settings.ev_start_load_jump_w:.0f}W"
+    elif high_load_detected:
+        reason = f"EV charging inferred: essential load {inputs.essential_power_w:.0f}W high in cheap window"
+    elif ev_stop:
+        reason = "EV stop condition active"
+    elif ev_solar_charge_allowed:
+        reason = "EV solar charge allowed: battery priority satisfied and forecast override active"
+    else:
+        reason = "EV idle"
+
+    return (
+        ev_charging_detected,
+        ev_grid_bypass_required,
+        ev_solar_charge_allowed,
+        ev_latch_active,
+        reason,
+        action,
+        inputs.ev_power_w,
+        hold_until,
+    )
+
+
 def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None = None) -> EnergyManagerDecision:
     """Calculate the current energy-management decision."""
 
@@ -371,29 +474,17 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     active_thermal_loads = [load.name for load in inputs.heat_loads if load.solar_owned and load_is_active(load, thermal_mode)]
     thermal_should_return_to_normal = thermal_should_shed and settings.return_to_normal_on_shed_enabled
 
-    essential_jump_w = None
-    if inputs.previous_essential_power_w is not None:
-        essential_jump_w = inputs.essential_power_w - inputs.previous_essential_power_w
-
-    ev_start = (
-        cheap_window
-        and (
-            (essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w)
-            or inputs.essential_power_w > 6500.0
-        )
-    )
-    ev_stop = (
-        inputs.manual_clear_ev_latch
-        or not cheap_window
-        or (inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0)
-        or (essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w)
-        or (
-            inputs.ev_hold_until is not None
-            and inputs.now >= inputs.ev_hold_until
-            and inputs.essential_power_w < 2500.0
-        )
-    )
-    ev_grid_mode_required = False if ev_stop else inputs.ev_latch_on or ev_start
+    (
+        ev_charging_detected,
+        ev_grid_bypass_required,
+        ev_solar_charge_allowed,
+        ev_latch_active,
+        ev_reason,
+        ev_action,
+        ev_detected_power_w,
+        ev_hold_until,
+    ) = ev_decision(inputs, settings, cheap_window, battery_priority_satisfied, forecast_override)
+    ev_grid_mode_required = ev_grid_bypass_required
 
     grid_charge_required = (
         settings.enabled
@@ -401,7 +492,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and time_between(inputs.now, "03:00", "07:00")
         and tier.grid_charge_target_soc > 0
         and inputs.battery_soc < tier.grid_charge_target_soc - 1.0
-        and not ev_grid_mode_required
+        and not (ev_grid_bypass_required or inputs.ev_latch_on)
     )
 
     thermal_action = "none"
@@ -496,18 +587,22 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if ev_grid_mode_required:
         proposed_actions.append("ev_grid_mode")
         reason_parts.append("ev_grid_mode_required=true")
+    if ev_action != "none":
+        proposed_actions.append(ev_action)
+        reason_parts.append(ev_reason)
     if pre_peak_preserve_required:
         reason_parts.append(
             f"pre_peak_preserve_required=true: SOC {inputs.battery_soc:.0f} < target_17 {tier.target_17_soc:.0f} "
             f"and charge {battery_charge_w:.0f}W < {settings.heat_add_min_charge_w:.0f}W"
         )
 
-    ev_hold_until = inputs.ev_hold_until
-    if ev_start and ev_hold_until is None:
-        if inputs.porsche_charging_ends and inputs.porsche_charging_ends > inputs.now:
-            ev_hold_until = inputs.porsche_charging_ends + timedelta(minutes=10)
-        else:
-            ev_hold_until = inputs.now + timedelta(hours=3)
+    expected_action = "none"
+    if ev_action != "none":
+        expected_action = ev_action
+    elif grid_charge_required:
+        expected_action = "grid_charge_enable"
+    elif thermal_action != "none":
+        expected_action = f"thermal_{thermal_action}"
 
     return EnergyManagerDecision(
         now=inputs.now,
@@ -547,8 +642,16 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         projected_soc_08=projected_soc,
         grid_charge_required=grid_charge_required,
         ev_grid_mode_required=ev_grid_mode_required,
+        ev_charging_detected=ev_charging_detected,
+        ev_grid_bypass_required=ev_grid_bypass_required,
+        ev_solar_charge_allowed=ev_solar_charge_allowed,
+        ev_latch_active=ev_latch_active,
+        ev_decision_reason=ev_reason,
+        ev_expected_action=ev_action,
+        ev_detected_power_w=ev_detected_power_w,
         pre_peak_preserve_required=pre_peak_preserve_required,
         control_blocked=control_blocked,
+        expected_action=expected_action,
         reason="; ".join(reason_parts),
         proposed_actions=proposed_actions,
         forecast_today_kwh=inputs.forecast_today_kwh,

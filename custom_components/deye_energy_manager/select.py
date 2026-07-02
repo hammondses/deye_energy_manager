@@ -7,13 +7,27 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DEFAULT_HEAT_MODE, DEFAULT_STRATEGY, DEFAULT_THERMAL_MODE, DOMAIN, HEAT_MODE_OPTIONS, STRATEGY_OPTIONS, THERMAL_MODE_OPTIONS
+from .const import (
+    DEFAULT_FLEXIBLE_LOAD_PRIORITY,
+    DEFAULT_HEAT_MODE,
+    DEFAULT_STRATEGY,
+    DEFAULT_THERMAL_ACTUATION_MODE,
+    DEFAULT_THERMAL_MODE,
+    DOMAIN,
+    FLEXIBLE_LOAD_PRIORITY_OPTIONS,
+    HEAT_MODE_OPTIONS,
+    STRATEGY_OPTIONS,
+    THERMAL_ACTUATION_MODE_OPTIONS,
+    THERMAL_MODE_OPTIONS,
+)
 from .entity import DeyeEnergyManagerEntity
 
 SELECTS = {
     "strategy": ("Strategy", STRATEGY_OPTIONS, DEFAULT_STRATEGY),
     "heat_mode": ("Heat mode", HEAT_MODE_OPTIONS, DEFAULT_HEAT_MODE),
     "thermal_mode": ("Thermal mode", THERMAL_MODE_OPTIONS, DEFAULT_THERMAL_MODE),
+    "thermal_actuation_mode": ("Thermal actuation mode", THERMAL_ACTUATION_MODE_OPTIONS, DEFAULT_THERMAL_ACTUATION_MODE),
+    "flexible_load_priority": ("Flexible load priority", FLEXIBLE_LOAD_PRIORITY_OPTIONS, DEFAULT_FLEXIBLE_LOAD_PRIORITY),
 }
 
 

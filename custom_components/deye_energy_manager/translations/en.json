@@ -9,6 +9,36 @@
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Deye Energy Manager Options",
+        "description": "Choose one section to configure."
+      },
+      "controls": {
+        "title": "Controls",
+        "description": "Top-level control gates and flexible-load priority."
+      },
+      "thermal": {
+        "title": "Thermal",
+        "description": "Thermal storage mode, actuation, temperatures, thresholds, and rotation."
+      },
+      "ev": {
+        "title": "EV",
+        "description": "EV detection, cheap-grid bypass, solar charging, and latch thresholds."
+      },
+      "battery": {
+        "title": "Battery",
+        "description": "Battery reserve, Deye, and grid-charge settings."
+      },
+      "entities": {
+        "title": "Input entity mapping"
+      },
+      "legacy": {
+        "title": "Legacy",
+        "description": "Compatibility view containing the full legacy options form."
+      }
+    }
   }
 }
-

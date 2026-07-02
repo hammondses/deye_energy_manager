@@ -90,20 +90,96 @@ def test_grid_charge_rules() -> None:
 
 
 def test_ev_start_and_stop_rules() -> None:
+    settings = EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True)
     assert decide(
         base_inputs(now=dt(22), essential_power_w=6200, previous_essential_power_w=1000),
+        settings,
     ).ev_grid_mode_required
     assert decide(
         base_inputs(now=dt(22), ev_latch_on=True, essential_power_w=3200, previous_essential_power_w=3300),
+        settings,
     ).ev_grid_mode_required
     assert not decide(
         base_inputs(now=dt(22), ev_latch_on=True, essential_power_w=2000, previous_essential_power_w=8600),
+        settings,
     ).ev_grid_mode_required
-    assert not decide(base_inputs(now=dt(22), ev_latch_on=True, porsche_soc=99)).ev_grid_mode_required
-    assert not decide(base_inputs(now=dt(7), ev_latch_on=True)).ev_grid_mode_required
+    assert not decide(base_inputs(now=dt(22), ev_latch_on=True, porsche_soc=99), settings).ev_grid_mode_required
+    assert not decide(base_inputs(now=dt(7), ev_latch_on=True), settings).ev_grid_mode_required
     assert not decide(
         base_inputs(now=dt(3), ev_latch_on=True, ev_hold_until=dt(3) - timedelta(minutes=1), essential_power_w=2400),
+        settings,
     ).ev_grid_mode_required
+
+
+def test_ev_power_sensor_detects_charging() -> None:
+    decision = decide(
+        base_inputs(now=dt(22), ev_power_w=1500),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert decision.ev_charging_detected
+    assert decision.ev_grid_bypass_required
+    assert decision.ev_expected_action == "ev_grid_bypass_start"
+
+
+def test_ev_power_sensor_stop_restores_latch() -> None:
+    decision = decide(
+        base_inputs(now=dt(22), ev_latch_on=True, ev_power_w=100, ev_low_since=dt(21, 55)),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert not decision.ev_latch_active
+    assert decision.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_porsche_stale_status_does_not_hold_after_expiry_and_low_load() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(3),
+            ev_latch_on=True,
+            ev_hold_until=dt(2, 50),
+            essential_power_w=1200,
+            ev_power_w=0,
+            porsche_charging_status="charging",
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert not decision.ev_latch_active
+    assert decision.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_ev_bypass_suppresses_battery_grid_charge() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(4),
+            forecast_tomorrow_kwh=12,
+            battery_soc=50,
+            ev_power_w=2000,
+        ),
+        EnergyManagerSettings(
+            grid_charge_control_enabled=True,
+            ev_control_enabled=True,
+            ev_grid_bypass_enabled=True,
+        ),
+    )
+
+    assert decision.ev_grid_bypass_required
+    assert not decision.grid_charge_required
+
+
+def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
+    decision = decide(
+        base_inputs(now=dt(12), battery_soc=90, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=10),
+        EnergyManagerSettings(
+            ev_control_enabled=True,
+            ev_solar_charging_enabled=True,
+            flexible_load_priority="ev_before_thermal",
+        ),
+    )
+
+    assert decision.ev_solar_charge_allowed
+    assert decision.ev_expected_action == "allow_solar_charge"
 
 
 def test_pv_load_test_recommended_when_expected_pv_is_clipped() -> None:

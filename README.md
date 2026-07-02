@@ -31,11 +31,21 @@ Actual writes are guarded by explicit toggles:
 
 Leave these off until advisory sensors match the current automations.
 
+Options are split into sections in the integration UI:
+
+- Controls
+- Thermal
+- EV
+- Battery
+- Entity Mapping
+- Legacy
+
 ## Thermal Storage
 
 The integration now owns native thermal storage decisions and direct climate actuation.
 
 - `select.deye_energy_manager_thermal_mode`: `heating`, `cooling`, `auto`, `off`
+- `select.deye_energy_manager_thermal_actuation_mode`: `advisory`, `scripts`, `direct`
 - `number.deye_energy_manager_heat_soak_target_temp`
 - `number.deye_energy_manager_heat_normal_target_temp`
 - `number.deye_energy_manager_cool_soak_target_temp`
@@ -48,7 +58,13 @@ The integration now owns native thermal storage decisions and direct climate act
 
 Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer.
 
-When `select.deye_energy_manager_heat_mode` is `auto_direct` and direct climate control is enabled, the integration directly controls managed climates:
+Actuation modes:
+
+- `advisory`: decisions only, no service calls
+- `scripts`: compatibility bridge to external scripts
+- `direct`: integration directly controls climates and ownership booleans
+
+When `thermal_actuation_mode` is `direct` and direct climate control is enabled, the integration directly controls managed climates:
 
 - Heating soak: HVAC `heat`, target `heat_soak_target_temp`
 - Heating normalise: HVAC `heat`, target `heat_normal_target_temp`
@@ -56,7 +72,25 @@ When `select.deye_energy_manager_heat_mode` is `auto_direct` and direct climate 
 - Cooling normalise: HVAC `cool`, target `cool_normal_target_temp`
 - Underfloor loads are heating-only and turn off on shed.
 
-Script mode remains available as a compatibility fallback.
+Script mode remains available as a compatibility fallback. Legacy `heat_*` entities remain as compatibility aliases, but `thermal_*` entities are preferred.
+
+## EV Charging
+
+EV support is native to the integration and disabled by default.
+
+- `switch.deye_energy_manager_ev_control_enabled`
+- `switch.deye_energy_manager_ev_grid_bypass_enabled`
+- `switch.deye_energy_manager_ev_solar_charging_enabled`
+- `switch.deye_energy_manager_ev_cheap_grid_charging_enabled`
+- `number.deye_energy_manager_ev_start_load_jump`
+- `number.deye_energy_manager_ev_stop_load_drop`
+- `number.deye_energy_manager_ev_active_load_threshold`
+- `number.deye_energy_manager_ev_stopped_load_threshold`
+- `number.deye_energy_manager_ev_restore_program_power`
+
+Cheap-grid EV bypass detects charging from an optional EV power sensor first, then falls back to essential-load jumps/high load and Porsche signals. When enabled during the cheap window, it sets Deye programme powers 6/1/2/3 to `0`; when EV charging stops, it restores them to `ev_restore_program_power_w`.
+
+EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power.
 
 ## PV Load Testing
 
