@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -23,6 +23,18 @@ NUMBERS = (
     DeyeNumberDescription(key="heat_add_min_charge_w", name="Heat add min charge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_add_min_charge_w"]),
     DeyeNumberDescription(key="heat_add_min_soc", name="Heat add min SOC", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_add_min_soc"]),
     DeyeNumberDescription(key="heat_shed_discharge_w", name="Heat shed discharge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_shed_discharge_w"]),
+    DeyeNumberDescription(key="heat_soak_target_temp", name="Heat soak target temp", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=20, native_max_value=30, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_soak_target_temp"]),
+    DeyeNumberDescription(key="heat_normal_target_temp", name="Heat normal target temp", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=16, native_max_value=25, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_normal_target_temp"]),
+    DeyeNumberDescription(key="cool_soak_target_temp", name="Cool soak target temp", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=16, native_max_value=24, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cool_soak_target_temp"]),
+    DeyeNumberDescription(key="cool_normal_target_temp", name="Cool normal target temp", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=20, native_max_value=30, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cool_normal_target_temp"]),
+    DeyeNumberDescription(key="thermal_start_min_soc", name="Thermal start min SOC", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["thermal_start_min_soc"]),
+    DeyeNumberDescription(key="thermal_start_min_charge_w", name="Thermal start min charge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["thermal_start_min_charge_w"]),
+    DeyeNumberDescription(key="thermal_keep_running_min_charge_w", name="Thermal keep running min charge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["thermal_keep_running_min_charge_w"]),
+    DeyeNumberDescription(key="thermal_shed_discharge_w", name="Thermal shed discharge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["thermal_shed_discharge_w"]),
+    DeyeNumberDescription(key="thermal_emergency_shed_w", name="Thermal emergency shed", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["thermal_emergency_shed_w"]),
+    DeyeNumberDescription(key="room_satisfied_delta_c", name="Room satisfied delta", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=0, native_step=0.1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["room_satisfied_delta_c"]),
+    DeyeNumberDescription(key="room_resume_delta_c", name="Room resume delta", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=0, native_step=0.1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["room_resume_delta_c"]),
+    DeyeNumberDescription(key="forecast_full_confidence_buffer_kwh", name="Forecast full confidence buffer", native_min_value=0, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["forecast_full_confidence_buffer_kwh"]),
     DeyeNumberDescription(key="ev_start_load_jump_w", name="EV start load jump", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["ev_start_load_jump_w"]),
     DeyeNumberDescription(key="ev_stop_load_drop_w", name="EV stop load drop", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["ev_stop_load_drop_w"]),
     DeyeNumberDescription(key="forecast_safety_buffer_kwh", name="Forecast safety buffer", native_min_value=0, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["forecast_safety_buffer_kwh"]),

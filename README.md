@@ -1,6 +1,6 @@
 # Deye Energy Manager
 
-Home Assistant custom integration for Deye battery reserve planning, Solcast-aware grid charging, EV grid-bypass policy, solar heat diversion decisions, and diagnostics.
+Home Assistant custom integration for Deye battery reserve planning, Solcast-aware grid charging, EV grid-bypass policy, thermal storage control, and diagnostics.
 
 The integration defaults to advisory/read-only behavior:
 
@@ -24,11 +24,39 @@ Actual writes are guarded by explicit toggles:
 - `switch.deye_energy_manager_deye_control_enabled`
 - `switch.deye_energy_manager_grid_charge_control_enabled`
 - `switch.deye_energy_manager_ev_control_enabled`
+- `switch.deye_energy_manager_thermal_control_enabled`
 - `switch.deye_energy_manager_heat_control_enabled`
 - `switch.deye_energy_manager_direct_climate_control_enabled`
 - `switch.deye_energy_manager_pv_load_test_control_enabled`
 
 Leave these off until advisory sensors match the current automations.
+
+## Thermal Storage
+
+The integration now owns native thermal storage decisions and direct climate actuation.
+
+- `select.deye_energy_manager_thermal_mode`: `heating`, `cooling`, `auto`, `off`
+- `number.deye_energy_manager_heat_soak_target_temp`
+- `number.deye_energy_manager_heat_normal_target_temp`
+- `number.deye_energy_manager_cool_soak_target_temp`
+- `number.deye_energy_manager_cool_normal_target_temp`
+- `number.deye_energy_manager_thermal_start_min_soc`
+- `number.deye_energy_manager_thermal_start_min_charge`
+- `number.deye_energy_manager_thermal_keep_running_min_charge`
+- `number.deye_energy_manager_thermal_shed_discharge`
+- `number.deye_energy_manager_thermal_emergency_shed`
+
+Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer.
+
+When `select.deye_energy_manager_heat_mode` is `auto_direct` and direct climate control is enabled, the integration directly controls managed climates:
+
+- Heating soak: HVAC `heat`, target `heat_soak_target_temp`
+- Heating normalise: HVAC `heat`, target `heat_normal_target_temp`
+- Cooling soak: HVAC `cool`, target `cool_soak_target_temp`
+- Cooling normalise: HVAC `cool`, target `cool_normal_target_temp`
+- Underfloor loads are heating-only and turn off on shed.
+
+Script mode remains available as a compatibility fallback.
 
 ## PV Load Testing
 

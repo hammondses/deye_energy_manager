@@ -22,6 +22,11 @@ class DeyeBinarySensorDescription(BinarySensorEntityDescription):
 
 BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="battery_priority_satisfied", name="Battery priority satisfied", value_fn=lambda d: d.battery_priority_satisfied),
+    DeyeBinarySensorDescription(key="thermal_allowed", name="Thermal allowed", value_fn=lambda d: d.thermal_allowed),
+    DeyeBinarySensorDescription(key="thermal_should_shed", name="Thermal should shed", value_fn=lambda d: d.thermal_should_shed),
+    DeyeBinarySensorDescription(key="thermal_should_emergency_shed", name="Thermal should emergency shed", value_fn=lambda d: d.thermal_should_emergency_shed),
+    DeyeBinarySensorDescription(key="thermal_rotation_recommended", name="Thermal rotation recommended", value_fn=lambda d: d.thermal_rotation_recommended),
+    DeyeBinarySensorDescription(key="forecast_full_override_active", name="Forecast full override active", value_fn=lambda d: d.forecast_full_override_active),
     DeyeBinarySensorDescription(key="heat_allowed", name="Heat allowed", value_fn=lambda d: d.heat_allowed),
     DeyeBinarySensorDescription(key="heat_should_shed", name="Heat should shed", value_fn=lambda d: d.heat_should_shed),
     DeyeBinarySensorDescription(key="pv_load_test_recommended", name="PV load test recommended", value_fn=lambda d: d.pv_load_test_recommended),

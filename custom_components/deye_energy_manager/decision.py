@@ -116,22 +116,109 @@ def projected_soc_at_08(inputs: EnergyManagerInputs, settings: EnergyManagerSett
     return max(inputs.battery_soc - (discharge_kwh / settings.battery_capacity_kwh * 100.0), 0.0)
 
 
+def effective_thermal_mode(settings: EnergyManagerSettings) -> str:
+    """Return the concrete thermal mode. Auto defaults to heating for now."""
+
+    if settings.thermal_mode == "auto":
+        return "heating"
+    return settings.thermal_mode
+
+
+def thermal_targets(settings: EnergyManagerSettings) -> tuple[float, float]:
+    """Return soak and normal target temperatures for the active thermal mode."""
+
+    if effective_thermal_mode(settings) == "cooling":
+        return settings.cool_soak_target_temp, settings.cool_normal_target_temp
+    return settings.heat_soak_target_temp, settings.heat_normal_target_temp
+
+
+def thermal_hvac_mode(settings: EnergyManagerSettings) -> str:
+    """Return Home Assistant climate HVAC mode for the active thermal mode."""
+
+    return "cool" if effective_thermal_mode(settings) == "cooling" else "heat"
+
+
+def thermal_soak_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float] | None:
+    """Return direct climate action for soaking one load."""
+
+    mode = effective_thermal_mode(settings)
+    if not load_supports_mode(load, mode):
+        return None
+    soak_target, _normal_target = thermal_targets(settings)
+    return thermal_hvac_mode(settings), soak_target
+
+
+def thermal_shed_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float | None]:
+    """Return direct climate action for shedding/normalising one load."""
+
+    if not settings.return_to_normal_on_shed_enabled or load.load_type == "underfloor":
+        return "off", None
+    _soak_target, normal_target = thermal_targets(settings)
+    return thermal_hvac_mode(settings), normal_target
+
+
+def load_supports_mode(load: HeatLoadState, mode: str) -> bool:
+    """Return whether a managed load can be used for the thermal mode."""
+
+    if not load.enabled:
+        return False
+    if mode == "cooling":
+        return load.supports_cooling
+    return load.supports_heating
+
+
+def load_is_active(load: HeatLoadState, mode: str) -> bool:
+    """Return whether a thermal load is actually working, using power/action when available."""
+
+    if load.power_w is not None:
+        return load.power_w >= load.active_power_threshold_w
+    if load.hvac_action:
+        return (mode == "heating" and load.hvac_action == "heating") or (mode == "cooling" and load.hvac_action == "cooling")
+    return load.is_on
+
+
+def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings) -> bool:
+    """Return whether a thermal load is close to the soak target or tapering."""
+
+    mode = effective_thermal_mode(settings)
+    soak_target, _normal_target = thermal_targets(settings)
+    if load.power_w is not None and load.solar_owned and load.is_on and load.power_w <= load.taper_power_threshold_w:
+        return True
+    if load.current_temp is None:
+        return False
+    if mode == "cooling":
+        return load.current_temp <= soak_target + settings.room_satisfied_delta_c
+    return load.current_temp >= soak_target - settings.room_satisfied_delta_c
+
+
+def load_needs_soak(load: HeatLoadState, settings: EnergyManagerSettings) -> bool:
+    """Return whether a load still has useful thermal storage headroom."""
+
+    mode = effective_thermal_mode(settings)
+    soak_target, _normal_target = thermal_targets(settings)
+    if load.blocked_until is not None or not load_supports_mode(load, mode):
+        return False
+    if load.current_temp is None:
+        return not load.solar_owned and not load.is_on
+    if mode == "cooling":
+        return load.current_temp > soak_target + settings.room_resume_delta_c
+    return load.current_temp < soak_target - settings.room_resume_delta_c
+
+
 def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
-    """Return solar-owned loads close enough to target that they may be tapering."""
+    """Return solar-owned thermal loads close enough to soak target or tapering."""
 
     return [
         load
         for load in loads
         if load.solar_owned
         and load.is_on
-        and load.current_temp is not None
-        and load.target_temp is not None
-        and load.current_temp >= load.target_temp - settings.heat_satisfied_margin_c
+        and load_is_satisfied(load, settings)
     ]
 
 
 def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
-    """Return off loads still materially below target."""
+    """Return off loads still materially away from soak target."""
 
     return [
         load
@@ -139,10 +226,26 @@ def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings
         if load.blocked_until is None
         and not load.solar_owned
         and not load.is_on
-        and load.current_temp is not None
-        and load.target_temp is not None
-        and load.current_temp <= load.target_temp - settings.heat_need_margin_c
+        and load_needs_soak(load, settings)
     ]
+
+
+def forecast_full_override_active(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    tier: ForecastTier,
+) -> bool:
+    """Return whether forecast is strong enough to start thermal storage early."""
+
+    remaining = inputs.forecast_remaining_today_kwh
+    if remaining is None:
+        return False
+    required_kwh = max(tier.target_17_soc - inputs.battery_soc, 0.0) / 100.0 * settings.battery_capacity_kwh
+    return (
+        settings.forecast_full_override_enabled
+        and tier.mode in {"excellent", "good"}
+        and remaining >= required_kwh + settings.forecast_full_confidence_buffer_kwh
+    )
 
 
 def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None = None) -> EnergyManagerDecision:
@@ -155,6 +258,20 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     battery_discharge_w = max(inputs.battery_power_w, 0.0)
     cheap_window = time_between(inputs.now, "21:00", "07:00")
     control_blocked = not settings.enabled
+    thermal_mode = effective_thermal_mode(settings)
+    thermal_control_enabled = settings.thermal_control_enabled or settings.heat_control_enabled
+    thermal_start_min_soc = settings.thermal_start_min_soc
+    thermal_start_min_charge_w = settings.thermal_start_min_charge_w
+    thermal_shed_discharge_w = settings.thermal_shed_discharge_w
+    forecast_override = forecast_full_override_active(inputs, settings, tier)
+    expected_pv_power_w = max(
+        inputs.pv_power_now_w or 0.0,
+        inputs.pv_power_in_30_minutes_w or 0.0,
+        inputs.pv_power_in_1_hour_w or 0.0,
+    )
+    remaining_forecast_kwh = inputs.forecast_remaining_today_kwh
+    if remaining_forecast_kwh is None:
+        remaining_forecast_kwh = max((inputs.forecast_tomorrow_kwh or 0.0) / 3.0, 0.0)
 
     pre_peak_preserve_required = (
         time_between(inputs.now, "13:00", "17:00")
@@ -167,13 +284,24 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         or battery_charge_w >= settings.heat_add_min_charge_w
     )
 
-    heat_allowed = (
+    thermal_time_allowed = time_between(inputs.now, "08:00", "17:00") or (
+        tier.mode in {"excellent", "good"}
+        and time_between(inputs.now, "07:00", "17:00")
+        and (forecast_override or expected_pv_power_w >= settings.thermal_keep_running_min_charge_w)
+    )
+    thermal_allowed = (
         settings.enabled
+        and thermal_control_enabled
+        and thermal_mode != "off"
         and inputs.heat_available
-        and time_between(inputs.now, "08:00", "17:00")
+        and thermal_time_allowed
         and inputs.cooldown_passed
-        and battery_priority_satisfied
-        and battery_discharge_w < 200.0
+        and (
+            inputs.battery_soc >= thermal_start_min_soc
+            or battery_charge_w >= thermal_start_min_charge_w
+            or forecast_override
+        )
+        and battery_discharge_w < thermal_shed_discharge_w
     )
 
     projected_soc = projected_soc_at_08(inputs, settings)
@@ -189,30 +317,29 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and any(load.solar_owned and load.is_on and "bedroom" in f"{load.name} {load.load_type}".lower() for load in inputs.heat_loads)
     )
 
-    heat_should_shed = (
+    thermal_should_shed = (
         inputs.any_solar_owned_heat_load_on
         and (
-            battery_discharge_w >= settings.heat_shed_discharge_w
-            or (battery_charge_w < settings.heat_add_min_charge_w and inputs.battery_soc < tier.target_17_soc)
-            or pre_peak_preserve_required
+            battery_discharge_w >= thermal_shed_discharge_w
+            or (
+                not forecast_override
+                and inputs.battery_soc < thermal_start_min_soc
+                and battery_charge_w < settings.thermal_keep_running_min_charge_w
+            )
+            or (
+                pre_peak_preserve_required
+                and not forecast_override
+                and inputs.battery_soc < thermal_start_min_soc
+            )
             or overnight_protection_required
         )
     )
 
-    emergency_shed_all_required = (
+    thermal_should_emergency_shed = (
         settings.enabled
         and inputs.any_solar_owned_heat_load_on
-        and battery_discharge_w >= settings.emergency_shed_discharge_w
+        and battery_discharge_w >= settings.thermal_emergency_shed_w
     )
-
-    expected_pv_power_w = max(
-        inputs.pv_power_now_w or 0.0,
-        inputs.pv_power_in_30_minutes_w or 0.0,
-        inputs.pv_power_in_1_hour_w or 0.0,
-    )
-    remaining_forecast_kwh = inputs.forecast_remaining_today_kwh
-    if remaining_forecast_kwh is None:
-        remaining_forecast_kwh = max((inputs.forecast_tomorrow_kwh or 0.0) / 3.0, 0.0)
     pv_load_test_recommended = (
         settings.enabled
         and settings.export_limited_mode_enabled
@@ -230,20 +357,19 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     shed_candidates = sorted(satisfied_heat_loads(inputs.heat_loads, settings), key=lambda load: load.priority, reverse=True)
     add_candidates = sorted(needy_heat_loads(inputs.heat_loads, settings), key=lambda load: load.priority)
-    heat_load_to_shed = shed_candidates[0].name if shed_candidates else None
-    heat_load_to_add = add_candidates[0].name if add_candidates else None
-    heat_rotation_recommended = (
-        settings.enabled
-        and settings.export_limited_mode_enabled
+    thermal_load_to_shed = shed_candidates[0].name if shed_candidates else None
+    thermal_load_to_add = add_candidates[0].name if add_candidates else None
+    thermal_rotation_recommended = (
+        thermal_allowed
+        and settings.thermal_rotation_enabled
         and inputs.heat_available
-        and time_between(inputs.now, "08:00", "16:30")
-        and not pre_peak_preserve_required
-        and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
-        and remaining_forecast_kwh >= settings.pv_load_test_min_remaining_forecast_kwh
-        and battery_discharge_w < 200.0
-        and heat_load_to_shed is not None
-        and heat_load_to_add is not None
+        and thermal_load_to_shed is not None
+        and thermal_load_to_add is not None
     )
+    thermal_load_to_normalise = thermal_load_to_shed if thermal_should_shed else None
+    solar_owned_count = sum(1 for load in inputs.heat_loads if load.solar_owned)
+    active_thermal_loads = [load.name for load in inputs.heat_loads if load.solar_owned and load_is_active(load, thermal_mode)]
+    thermal_should_return_to_normal = thermal_should_shed and settings.return_to_normal_on_shed_enabled
 
     essential_jump_w = None
     if inputs.previous_essential_power_w is not None:
@@ -278,30 +404,67 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and not ev_grid_mode_required
     )
 
+    thermal_action = "none"
+    if thermal_should_emergency_shed:
+        thermal_action = "emergency_shed_all"
+    elif thermal_rotation_recommended:
+        thermal_action = "rotate"
+    elif thermal_should_shed:
+        thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
+    elif thermal_allowed and thermal_load_to_add:
+        thermal_action = "add_one"
+    elif thermal_allowed:
+        thermal_action = "hold"
+
     proposed_actions: list[str] = []
     reason_parts = []
+    thermal_reason_parts: list[str] = []
     if control_blocked:
         reason_parts.append("manager disabled")
     reason_parts.append(f"forecast {tier.mode}")
-    if heat_allowed:
-        proposed_actions.append("add_one_heat_load")
-        if battery_charge_w >= settings.heat_add_min_charge_w:
-            reason_parts.append(f"heat_allowed=true: charge {battery_charge_w:.0f}W >= {settings.heat_add_min_charge_w:.0f}W")
+    if thermal_allowed:
+        reason = "thermal_allowed=true"
+        if inputs.battery_soc >= thermal_start_min_soc:
+            reason += f": SOC {inputs.battery_soc:.1f} >= thermal_start_min_soc {thermal_start_min_soc:.0f}"
+        elif forecast_override:
+            required_kwh = max(tier.target_17_soc - inputs.battery_soc, 0.0) / 100.0 * settings.battery_capacity_kwh
+            reason += (
+                f": forecast_full_override active; remaining {remaining_forecast_kwh:.1f}kWh > "
+                f"required {required_kwh:.1f}kWh + buffer {settings.forecast_full_confidence_buffer_kwh:.0f}kWh"
+            )
         else:
-            reason_parts.append(f"heat_allowed=true: SOC {inputs.battery_soc:.1f} >= target_17 {tier.target_17_soc:.0f}")
+            reason += f": battery charge {battery_charge_w:.0f}W >= start threshold {thermal_start_min_charge_w:.0f}W"
+        reason_parts.append(reason)
+        thermal_reason_parts.append(reason)
     else:
-        reason_parts.append(
-            "heat_allowed=false: "
-            f"SOC {inputs.battery_soc:.1f} < target_17 {tier.target_17_soc:.0f} "
-            f"and charge {battery_charge_w:.0f}W < {settings.heat_add_min_charge_w:.0f}W"
-        )
-    if heat_should_shed:
+        if thermal_mode == "off":
+            reason = "thermal_allowed=false: thermal mode off"
+        elif not thermal_control_enabled:
+            reason = "thermal_allowed=false: thermal control disabled"
+        elif battery_discharge_w >= thermal_shed_discharge_w:
+            reason = f"thermal_allowed=false: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W"
+        else:
+            reason = (
+                "thermal_allowed=false: "
+                f"SOC {inputs.battery_soc:.1f} < thermal_start_min_soc {thermal_start_min_soc:.0f}, "
+                f"charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W, "
+                f"forecast_full_override={forecast_override}"
+            )
+        reason_parts.append(reason)
+        thermal_reason_parts.append(reason)
+    if thermal_allowed and thermal_load_to_add:
+        proposed_actions.append("add_one_heat_load")
+    if thermal_should_shed:
         proposed_actions.append("shed_one_heat_load")
-        reason_parts.append("heat_should_shed=true")
-    if emergency_shed_all_required:
+        shed_reason = f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W" if battery_discharge_w >= thermal_shed_discharge_w else "thermal_should_shed=true"
+        reason_parts.append(shed_reason)
+        thermal_reason_parts.append(shed_reason)
+    else:
+        reason_parts.append(f"thermal_should_shed=false: battery charge {battery_charge_w:.0f}W, forecast_full_override={forecast_override}")
+    if thermal_should_emergency_shed:
         proposed_actions.append("emergency_shed_all_heat_loads")
         reason_parts.append(
-            f"emergency_shed_all_required=true: discharge {battery_discharge_w:.0f}W >= {settings.emergency_shed_discharge_w:.0f}W"
+            f"thermal_should_emergency_shed=true: discharge {battery_discharge_w:.0f}W >= {settings.thermal_emergency_shed_w:.0f}W"
         )
     if overnight_protection_required:
         proposed_actions.append("overnight_shed_nonessential_heat")
@@ -319,11 +482,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             f"charge {battery_charge_w:.0f}W <= {settings.pv_load_test_max_battery_charge_w:.0f}W, "
             f"SOC {inputs.battery_soc:.0f}% >= {settings.pv_load_test_min_soc:.0f}%"
         )
-    if heat_rotation_recommended:
+    if thermal_rotation_recommended:
         proposed_actions.append("rotate_heat_load")
+        proposed_actions.append("rotate_thermal_load")
         reason_parts.append(
-            "heat_rotation_recommended=true: "
-            f"shed {heat_load_to_shed}, add {heat_load_to_add}, expected PV {expected_pv_power_w:.0f}W"
+            f"rotation_recommended=true: {thermal_load_to_shed} satisfied/tapering, {thermal_load_to_add} needs {thermal_mode}"
         )
     if grid_charge_required:
         proposed_actions.append("enable_grid_charge")
@@ -359,13 +522,26 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         battery_charge_w=battery_charge_w,
         battery_discharge_w=battery_discharge_w,
         battery_priority_satisfied=battery_priority_satisfied,
-        heat_allowed=heat_allowed,
-        heat_should_shed=heat_should_shed,
+        heat_allowed=thermal_allowed,
+        heat_should_shed=thermal_should_shed,
+        thermal_allowed=thermal_allowed,
+        thermal_should_shed=thermal_should_shed,
+        thermal_should_emergency_shed=thermal_should_emergency_shed,
+        forecast_full_override_active=forecast_override,
+        thermal_rotation_recommended=thermal_rotation_recommended,
+        thermal_should_return_to_normal=thermal_should_return_to_normal,
+        thermal_action=thermal_action,
+        thermal_action_reason="; ".join(thermal_reason_parts),
+        thermal_load_to_add=thermal_load_to_add,
+        thermal_load_to_shed=thermal_load_to_shed,
+        thermal_load_to_normalise=thermal_load_to_normalise,
+        solar_owned_thermal_load_count=solar_owned_count,
+        active_thermal_loads=active_thermal_loads,
         pv_load_test_recommended=pv_load_test_recommended,
-        heat_rotation_recommended=heat_rotation_recommended,
-        heat_load_to_shed=heat_load_to_shed,
-        heat_load_to_add=heat_load_to_add,
-        emergency_shed_all_required=emergency_shed_all_required,
+        heat_rotation_recommended=thermal_rotation_recommended,
+        heat_load_to_shed=thermal_load_to_shed,
+        heat_load_to_add=thermal_load_to_add,
+        emergency_shed_all_required=thermal_should_emergency_shed,
         overnight_protection_required=overnight_protection_required,
         bedroom_heat_taper_recommended=bedroom_heat_taper_recommended,
         projected_soc_08=projected_soc,

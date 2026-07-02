@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window
+from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 
 TZ = ZoneInfo("Pacific/Auckland")
@@ -61,10 +61,11 @@ def test_time_slots_and_tariff_windows() -> None:
 
 
 def test_heat_allowed_rules() -> None:
-    assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-300)).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-6500)).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=91, battery_power_w=0)).heat_allowed
-    assert not decide(base_inputs(now=dt(10), battery_soc=85, battery_power_w=-2000, forecast_tomorrow_kwh=35)).heat_allowed
+    settings = EnergyManagerSettings(thermal_control_enabled=True)
+    assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-300), settings).heat_allowed
+    assert decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-6500), settings).heat_allowed
+    assert decide(base_inputs(now=dt(10), battery_soc=91, battery_power_w=0), settings).heat_allowed
+    assert decide(base_inputs(now=dt(10), battery_soc=85, battery_power_w=-2000, forecast_tomorrow_kwh=35), settings).heat_allowed
 
 
 def test_heat_shed_rules() -> None:
@@ -177,7 +178,7 @@ def test_pv_load_test_waits_for_healthy_soc_and_expected_pv() -> None:
 
 
 def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> None:
-    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    settings = EnergyManagerSettings(thermal_control_enabled=True, export_limited_mode_enabled=True)
     decision = decide(
         base_inputs(
             now=dt(11),
@@ -193,8 +194,8 @@ def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> N
                     priority=1,
                     is_on=True,
                     solar_owned=True,
-                    current_temp=22.6,
-                    target_temp=23.0,
+                    current_temp=26.4,
+                    target_temp=27.0,
                     estimated_load_w=3000,
                 ),
                 HeatLoadState(
@@ -202,8 +203,8 @@ def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> N
                     priority=3,
                     is_on=False,
                     solar_owned=False,
-                    current_temp=19.5,
-                    target_temp=22.0,
+                    current_temp=23.0,
+                    target_temp=27.0,
                     estimated_load_w=1800,
                 ),
             ],
@@ -218,7 +219,7 @@ def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> N
 
 
 def test_heat_rotation_requires_colder_add_candidate() -> None:
-    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+    settings = EnergyManagerSettings(thermal_control_enabled=True, export_limited_mode_enabled=True)
     decision = decide(
         base_inputs(
             now=dt(11),
@@ -234,16 +235,16 @@ def test_heat_rotation_requires_colder_add_candidate() -> None:
                     priority=1,
                     is_on=True,
                     solar_owned=True,
-                    current_temp=22.6,
-                    target_temp=23.0,
+                    current_temp=26.4,
+                    target_temp=27.0,
                 ),
                 HeatLoadState(
                     name="Office heat pump",
                     priority=3,
                     is_on=False,
                     solar_owned=False,
-                    current_temp=21.5,
-                    target_temp=22.0,
+                    current_temp=26.0,
+                    target_temp=27.0,
                 ),
             ],
         ),
@@ -352,3 +353,191 @@ def test_controls_block_when_manager_disabled() -> None:
     decision = decide(base_inputs(), EnergyManagerSettings(enabled=False))
     assert decision.control_blocked
     assert not decision.heat_allowed
+
+
+def test_thermal_start_uses_thermal_min_soc_not_target_17_soc() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(14),
+            battery_soc=89,
+            battery_power_w=-2500,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=18,
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_start_min_soc=80),
+    )
+
+    assert decision.target_17_soc == 90
+    assert decision.thermal_allowed
+    assert "SOC 89.0 >= thermal_start_min_soc 80" in decision.thermal_action_reason
+
+
+def test_forecast_override_allows_thermal_before_soc_threshold() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(10),
+            battery_soc=75,
+            battery_power_w=-2500,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=12,
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            thermal_start_min_soc=80,
+            battery_capacity_kwh=30,
+            forecast_full_confidence_buffer_kwh=3,
+        ),
+    )
+
+    assert decision.forecast_full_override_active
+    assert decision.thermal_allowed
+    assert "forecast_full_override active" in decision.thermal_action_reason
+
+
+def test_keep_running_threshold_avoids_shed_while_charging() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=82,
+            battery_power_w=-1800,
+            any_solar_owned_heat_load_on=True,
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            thermal_start_min_soc=80,
+            thermal_keep_running_min_charge_w=1500,
+        ),
+    )
+
+    assert not decision.thermal_should_shed
+
+
+def test_thermal_sheds_on_discharge_threshold() -> None:
+    decision = decide(
+        base_inputs(now=dt(12), battery_power_w=700, any_solar_owned_heat_load_on=True),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
+    )
+
+    assert decision.thermal_should_shed
+
+
+def test_thermal_emergency_shed_threshold() -> None:
+    decision = decide(
+        base_inputs(now=dt(12), battery_power_w=2600, any_solar_owned_heat_load_on=True),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_emergency_shed_w=2500),
+    )
+
+    assert decision.thermal_should_emergency_shed
+    assert decision.thermal_action == "emergency_shed_all"
+
+
+def test_cooling_rotation_uses_cool_soak_target() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=85,
+            battery_power_w=-2500,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=18.5,
+                    supports_cooling=True,
+                ),
+                HeatLoadState(
+                    name="Office",
+                    priority=3,
+                    is_on=False,
+                    solar_owned=False,
+                    current_temp=21.0,
+                    supports_cooling=True,
+                ),
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_mode="cooling"),
+    )
+
+    assert decision.thermal_rotation_recommended
+    assert decision.thermal_load_to_shed == "Dining"
+    assert decision.thermal_load_to_add == "Office"
+
+
+def test_power_sensor_marks_owned_load_as_tapering() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=85,
+            battery_power_w=-2500,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=24,
+                    power_w=120,
+                    taper_power_threshold_w=400,
+                ),
+                HeatLoadState(
+                    name="Office",
+                    priority=3,
+                    is_on=False,
+                    solar_owned=False,
+                    current_temp=23,
+                ),
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.thermal_rotation_recommended
+    assert decision.thermal_load_to_shed == "Dining"
+
+
+def test_heating_mode_soak_actuation_plan() -> None:
+    action = thermal_soak_action(
+        EnergyManagerSettings(thermal_mode="heating", heat_soak_target_temp=27),
+        HeatLoadState(name="Office", priority=3, supports_heating=True),
+    )
+
+    assert action == ("heat", 27)
+
+
+def test_cooling_mode_soak_actuation_plan() -> None:
+    action = thermal_soak_action(
+        EnergyManagerSettings(thermal_mode="cooling", cool_soak_target_temp=18),
+        HeatLoadState(name="Office", priority=3, supports_cooling=True),
+    )
+
+    assert action == ("cool", 18)
+
+
+def test_heating_return_to_normal_actuation_plan() -> None:
+    action = thermal_shed_action(
+        EnergyManagerSettings(thermal_mode="heating", heat_normal_target_temp=21, return_to_normal_on_shed_enabled=True),
+        HeatLoadState(name="Office", priority=3, load_type="heatpump"),
+    )
+
+    assert action == ("heat", 21)
+
+
+def test_cooling_return_to_normal_actuation_plan() -> None:
+    action = thermal_shed_action(
+        EnergyManagerSettings(thermal_mode="cooling", cool_normal_target_temp=24, return_to_normal_on_shed_enabled=True),
+        HeatLoadState(name="Office", priority=3, load_type="heatpump"),
+    )
+
+    assert action == ("cool", 24)
+
+
+def test_underfloor_shed_turns_off() -> None:
+    action = thermal_shed_action(
+        EnergyManagerSettings(thermal_mode="heating", return_to_normal_on_shed_enabled=True),
+        HeatLoadState(name="Underfloor", priority=2, load_type="underfloor"),
+    )
+
+    assert action == ("off", None)

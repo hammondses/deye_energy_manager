@@ -16,6 +16,9 @@ WRITE_RATE_LIMIT = timedelta(seconds=60)
 CONF_ENTITY_MAP = "entity_map"
 CONF_HEAT_LOADS = "heat_loads"
 
+THERMAL_MODE_OPTIONS = ["heating", "cooling", "auto", "off"]
+DEFAULT_THERMAL_MODE = "heating"
+
 DEFAULT_ENTITY_MAP = {
     "battery_soc": "sensor.deye_battery_soc",
     "battery_power": "sensor.deye_battery_power",
@@ -46,6 +49,12 @@ DEFAULT_HEAT_LOADS = [
         "hvac_mode": "heat",
         "target_temp": 23,
         "type": "heatpump",
+        "enabled": True,
+        "supports_heating": True,
+        "supports_cooling": True,
+        "active_power_threshold_w": 800,
+        "idle_power_threshold_w": 150,
+        "taper_power_threshold_w": 400,
     },
     {
         "name": "Bathroom underfloor",
@@ -56,6 +65,12 @@ DEFAULT_HEAT_LOADS = [
         "hvac_mode": "heat",
         "target_temp": 24,
         "type": "underfloor",
+        "enabled": True,
+        "supports_heating": True,
+        "supports_cooling": False,
+        "active_power_threshold_w": 200,
+        "idle_power_threshold_w": 50,
+        "taper_power_threshold_w": 100,
     },
     {
         "name": "Office heat pump",
@@ -66,6 +81,12 @@ DEFAULT_HEAT_LOADS = [
         "hvac_mode": "heat",
         "target_temp": 22,
         "type": "heatpump",
+        "enabled": True,
+        "supports_heating": True,
+        "supports_cooling": True,
+        "active_power_threshold_w": 800,
+        "idle_power_threshold_w": 150,
+        "taper_power_threshold_w": 400,
     },
     {
         "name": "Bedroom heat pump",
@@ -76,6 +97,12 @@ DEFAULT_HEAT_LOADS = [
         "hvac_mode": "heat",
         "target_temp": 21,
         "type": "heatpump",
+        "enabled": True,
+        "supports_heating": True,
+        "supports_cooling": True,
+        "active_power_threshold_w": 800,
+        "idle_power_threshold_w": 150,
+        "taper_power_threshold_w": 400,
     },
     {
         "name": "Hallway heat pump",
@@ -86,6 +113,12 @@ DEFAULT_HEAT_LOADS = [
         "hvac_mode": "heat",
         "target_temp": 21,
         "type": "heatpump",
+        "enabled": True,
+        "supports_heating": True,
+        "supports_cooling": True,
+        "active_power_threshold_w": 800,
+        "idle_power_threshold_w": 150,
+        "taper_power_threshold_w": 400,
     },
 ]
 
@@ -123,15 +156,31 @@ FEATURE_DEFAULTS = {
     "grid_charge_control_enabled": False,
     "ev_control_enabled": False,
     "heat_control_enabled": False,
+    "thermal_control_enabled": False,
     "direct_climate_control_enabled": False,
     "pv_load_test_control_enabled": False,
     "export_limited_mode_enabled": False,
+    "return_to_normal_on_shed_enabled": True,
+    "forecast_full_override_enabled": True,
+    "thermal_rotation_enabled": True,
 }
 
 NUMBER_DEFAULTS = {
     "heat_add_min_charge_w": 6000.0,
-    "heat_add_min_soc": 90.0,
+    "heat_add_min_soc": 80.0,
     "heat_shed_discharge_w": 500.0,
+    "heat_soak_target_temp": 27.0,
+    "heat_normal_target_temp": 21.0,
+    "cool_soak_target_temp": 18.0,
+    "cool_normal_target_temp": 24.0,
+    "thermal_start_min_soc": 80.0,
+    "thermal_start_min_charge_w": 6000.0,
+    "thermal_keep_running_min_charge_w": 1500.0,
+    "thermal_shed_discharge_w": 500.0,
+    "thermal_emergency_shed_w": 2500.0,
+    "room_satisfied_delta_c": 0.7,
+    "room_resume_delta_c": 1.5,
+    "forecast_full_confidence_buffer_kwh": 3.0,
     "ev_start_load_jump_w": 5000.0,
     "ev_stop_load_drop_w": 6000.0,
     "forecast_safety_buffer_kwh": 2.0,

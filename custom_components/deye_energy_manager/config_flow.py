@@ -17,11 +17,13 @@ from .const import (
     DEFAULT_HEAT_LOADS,
     DEFAULT_HEAT_MODE,
     DEFAULT_STRATEGY,
+    DEFAULT_THERMAL_MODE,
     DOMAIN,
     FEATURE_DEFAULTS,
     HEAT_MODE_OPTIONS,
     NUMBER_DEFAULTS,
     STRATEGY_OPTIONS,
+    THERMAL_MODE_OPTIONS,
 )
 
 
@@ -50,14 +52,41 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults.get("heat_control_enabled", False),
             ): selector.BooleanSelector(),
             vol.Required(
+                "thermal_control_enabled",
+                default=defaults.get("thermal_control_enabled", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
                 "direct_climate_control_enabled",
                 default=defaults.get("direct_climate_control_enabled", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "pv_load_test_control_enabled",
+                default=defaults.get("pv_load_test_control_enabled", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "export_limited_mode_enabled",
+                default=defaults.get("export_limited_mode_enabled", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "return_to_normal_on_shed_enabled",
+                default=defaults.get("return_to_normal_on_shed_enabled", True),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "forecast_full_override_enabled",
+                default=defaults.get("forecast_full_override_enabled", True),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "thermal_rotation_enabled",
+                default=defaults.get("thermal_rotation_enabled", True),
             ): selector.BooleanSelector(),
             vol.Required("strategy", default=defaults.get("strategy", DEFAULT_STRATEGY)): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=STRATEGY_OPTIONS)
             ),
             vol.Required("heat_mode", default=defaults.get("heat_mode", DEFAULT_HEAT_MODE)): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=HEAT_MODE_OPTIONS)
+            ),
+            vol.Required("thermal_mode", default=defaults.get("thermal_mode", DEFAULT_THERMAL_MODE)): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=THERMAL_MODE_OPTIONS)
             ),
             **{
                 vol.Required(key, default=defaults.get(key, value)): selector.NumberSelector(
@@ -101,6 +130,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     **NUMBER_DEFAULTS,
                     "strategy": DEFAULT_STRATEGY,
                     "heat_mode": DEFAULT_HEAT_MODE,
+                    "thermal_mode": DEFAULT_THERMAL_MODE,
                 },
             )
 

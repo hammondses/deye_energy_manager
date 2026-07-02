@@ -22,6 +22,7 @@ from .const import (
     DEFAULT_HEAT_MODE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_STRATEGY,
+    DEFAULT_THERMAL_MODE,
     FEATURE_DEFAULTS,
     NUMBER_DEFAULTS,
     PROG_CAPACITY_ENTITIES,
@@ -92,14 +93,31 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             grid_charge_control_enabled=bool(options["grid_charge_control_enabled"]),
             ev_control_enabled=bool(options["ev_control_enabled"]),
             heat_control_enabled=bool(options["heat_control_enabled"]),
+            thermal_control_enabled=bool(options["thermal_control_enabled"]),
             direct_climate_control_enabled=bool(options["direct_climate_control_enabled"]),
             pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
             export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
+            return_to_normal_on_shed_enabled=bool(options["return_to_normal_on_shed_enabled"]),
+            forecast_full_override_enabled=bool(options["forecast_full_override_enabled"]),
+            thermal_rotation_enabled=bool(options["thermal_rotation_enabled"]),
             strategy=str(options.get("strategy", DEFAULT_STRATEGY)),
             heat_mode=str(options.get("heat_mode", DEFAULT_HEAT_MODE)),
-            heat_add_min_charge_w=float(options["heat_add_min_charge_w"]),
-            heat_add_min_soc=float(options["heat_add_min_soc"]),
-            heat_shed_discharge_w=float(options["heat_shed_discharge_w"]),
+            thermal_mode=str(options.get("thermal_mode", DEFAULT_THERMAL_MODE)),
+            heat_add_min_charge_w=float(options.get("heat_add_min_charge_w", options["thermal_start_min_charge_w"])),
+            heat_add_min_soc=float(options.get("heat_add_min_soc", options["thermal_start_min_soc"])),
+            heat_shed_discharge_w=float(options.get("heat_shed_discharge_w", options["thermal_shed_discharge_w"])),
+            heat_soak_target_temp=float(options["heat_soak_target_temp"]),
+            heat_normal_target_temp=float(options["heat_normal_target_temp"]),
+            cool_soak_target_temp=float(options["cool_soak_target_temp"]),
+            cool_normal_target_temp=float(options["cool_normal_target_temp"]),
+            thermal_start_min_soc=float(options.get("thermal_start_min_soc", options.get("heat_add_min_soc", 80.0))),
+            thermal_start_min_charge_w=float(options.get("thermal_start_min_charge_w", options.get("heat_add_min_charge_w", 6000.0))),
+            thermal_keep_running_min_charge_w=float(options["thermal_keep_running_min_charge_w"]),
+            thermal_shed_discharge_w=float(options.get("thermal_shed_discharge_w", options.get("heat_shed_discharge_w", 500.0))),
+            thermal_emergency_shed_w=float(options["thermal_emergency_shed_w"]),
+            room_satisfied_delta_c=float(options["room_satisfied_delta_c"]),
+            room_resume_delta_c=float(options["room_resume_delta_c"]),
+            forecast_full_confidence_buffer_kwh=float(options["forecast_full_confidence_buffer_kwh"]),
             ev_start_load_jump_w=float(options["ev_start_load_jump_w"]),
             ev_stop_load_drop_w=float(options["ev_stop_load_drop_w"]),
             forecast_safety_buffer_kwh=float(options["forecast_safety_buffer_kwh"]),
@@ -112,7 +130,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             heat_satisfied_margin_c=float(options["heat_satisfied_margin_c"]),
             heat_need_margin_c=float(options["heat_need_margin_c"]),
             manual_override_cooldown_min=float(options["manual_override_cooldown_min"]),
-            emergency_shed_discharge_w=float(options["emergency_shed_discharge_w"]),
+            emergency_shed_discharge_w=float(options.get("emergency_shed_discharge_w", options["thermal_emergency_shed_w"])),
             battery_capacity_kwh=float(options["battery_capacity_kwh"]),
             overnight_bedroom_taper_target_temp=float(options["overnight_bedroom_taper_target_temp"]),
         )
@@ -175,6 +193,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ownership = str(load.get("ownership_entity", ""))
             climate_state = self.hass.states.get(climate) if climate else None
             ownership_state = self.hass.states.get(ownership) if ownership else None
+            power_w = None
+            if power_entity := str(load.get("optional_power_sensor", "")):
+                power_state = self.hass.states.get(power_entity)
+                if power_state is not None and power_state.state not in UNAVAILABLE:
+                    try:
+                        power_w = float(power_state.state)
+                    except (TypeError, ValueError):
+                        power_w = None
             current_temp = None
             target_temp = None
             if climate_state is not None:
@@ -212,6 +238,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                     estimated_load_w=float(load.get("estimated_load_w", 0.0) or 0.0),
                     blocked_until=blocked_until,
                     load_type=str(load.get("type", "other")),
+                    hvac_mode=climate_state.state if climate_state is not None else None,
+                    hvac_action=str(climate_state.attributes.get("hvac_action")) if climate_state is not None and climate_state.attributes.get("hvac_action") is not None else None,
+                    power_w=power_w,
+                    active_power_threshold_w=float(load.get("active_power_threshold_w", 800.0) or 800.0),
+                    idle_power_threshold_w=float(load.get("idle_power_threshold_w", 150.0) or 150.0),
+                    taper_power_threshold_w=float(load.get("taper_power_threshold_w", 400.0) or 400.0),
+                    enabled=bool(load.get("enabled", True)),
+                    supports_heating=bool(load.get("supports_heating", True)),
+                    supports_cooling=bool(load.get("supports_cooling", False)),
                 )
             )
         return states
@@ -279,7 +314,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self._apply_ev_mode(decision.ev_grid_mode_required)
         if settings.grid_charge_control_enabled:
             await self._apply_grid_charge(decision)
-        if settings.heat_control_enabled:
+        if settings.heat_control_enabled or settings.thermal_control_enabled:
             await self._apply_heat(decision)
 
     async def _call_number_set(self, entity_id: str, value: float) -> None:
@@ -363,7 +398,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         heat_mode = self.settings.heat_mode
         if heat_mode == "off" or heat_mode == "advisory":
             return
-        if decision.emergency_shed_all_required:
+        if decision.thermal_should_emergency_shed:
             if heat_mode == "auto_direct" and self.settings.direct_climate_control_enabled:
                 await self._direct_shed_all_heat_loads("emergency battery discharge")
             else:
@@ -375,12 +410,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_taper_bedroom_heat()
             if decision.overnight_protection_required:
                 await self._direct_shed_one_heat_load(nonessential_only=True)
-            elif decision.heat_should_shed:
-                await self._direct_shed_one_heat_load()
-            elif decision.heat_rotation_recommended and self.settings.pv_load_test_control_enabled:
+            elif decision.thermal_should_shed:
+                await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise)
+            elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
                 await self._direct_rotate_heat_load(decision)
-            elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
-                await self._direct_add_one_heat_load(decision.heat_load_to_add)
+            elif decision.thermal_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
+                await self._direct_add_one_heat_load(decision.thermal_load_to_add)
             return
         if decision.bedroom_heat_taper_recommended:
             await self.hass.services.async_call("script", "deye_energy_manager_taper_bedroom_heat", {}, blocking=False)
@@ -389,20 +424,38 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested overnight protection heat shed script"
             return
-        if decision.heat_should_shed:
+        if decision.thermal_should_shed:
             await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested heat shed script"
-        elif decision.heat_rotation_recommended and self.settings.pv_load_test_control_enabled:
+        elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
             await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
             await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested heat rotation scripts"
-        elif decision.heat_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
+        elif decision.thermal_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
             await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
             self.last_control_action = "requested PV load test script" if decision.pv_load_test_recommended else "requested heat add script"
+
+    def _thermal_mode(self) -> str:
+        return "heating" if self.settings.thermal_mode == "auto" else self.settings.thermal_mode
+
+    def _soak_target(self) -> float:
+        return self.settings.cool_soak_target_temp if self._thermal_mode() == "cooling" else self.settings.heat_soak_target_temp
+
+    def _normal_target(self) -> float:
+        return self.settings.cool_normal_target_temp if self._thermal_mode() == "cooling" else self.settings.heat_normal_target_temp
+
+    def _hvac_mode(self) -> str:
+        return "cool" if self._thermal_mode() == "cooling" else "heat"
 
     async def _direct_add_one_heat_load(self, preferred_name: str | None = None) -> None:
         for load in sorted(self.heat_loads, key=lambda item: int(item.get("priority", 999))):
             if preferred_name and str(load.get("name", "")) != preferred_name:
+                continue
+            if not bool(load.get("enabled", True)):
+                continue
+            if self._thermal_mode() == "cooling" and not bool(load.get("supports_cooling", False)):
+                continue
+            if self._thermal_mode() == "heating" and not bool(load.get("supports_heating", True)):
                 continue
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
@@ -416,19 +469,18 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self.hass.services.async_call(
                 "climate",
                 "set_hvac_mode",
-                {"entity_id": climate, "hvac_mode": str(load.get("hvac_mode", "heat"))},
+                {"entity_id": climate, "hvac_mode": self._hvac_mode()},
                 blocking=False,
             )
-            if target_temp := load.get("target_temp"):
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_temperature",
-                    {"entity_id": climate, "temperature": float(target_temp)},
-                    blocking=False,
-                )
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": climate, "temperature": self._soak_target()},
+                blocking=False,
+            )
             if ownership and self.hass.states.get(ownership):
                 await self.hass.services.async_call("input_boolean", "turn_on", {"entity_id": ownership}, blocking=False)
-            self.last_control_action = f"direct added heat load {load.get('name', climate)}"
+            self.last_control_action = f"direct added thermal load {load.get('name', climate)} at {self._soak_target():.1f}C"
             return
 
     async def _direct_shed_one_heat_load(self, preferred_name: str | None = None, nonessential_only: bool = False) -> None:
@@ -446,16 +498,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
             if climate and self.hass.states.get(climate):
-                await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+                await self._normalise_or_turn_off_load(load)
             if ownership and self.hass.states.get(ownership):
                 await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
-            self.last_control_action = f"direct shed heat load {load.get('name', climate)}"
+            self.last_control_action = f"direct normalised thermal load {load.get('name', climate)}"
             return
 
     async def _direct_rotate_heat_load(self, decision: EnergyManagerDecision) -> None:
-        await self._direct_shed_one_heat_load(decision.heat_load_to_shed)
-        await self._direct_add_one_heat_load(decision.heat_load_to_add)
-        self.last_control_action = f"direct rotated heat load {decision.heat_load_to_shed} -> {decision.heat_load_to_add}"
+        await self._direct_shed_one_heat_load(decision.thermal_load_to_shed)
+        await self._direct_add_one_heat_load(decision.thermal_load_to_add)
+        self.last_control_action = f"direct rotated thermal load {decision.thermal_load_to_shed} -> {decision.thermal_load_to_add}"
 
     async def _clear_heat_ownership(self, load: dict[str, object], reason: str) -> None:
         ownership = str(load.get("ownership_entity", ""))
@@ -471,9 +523,28 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 continue
             climate = str(load.get("climate_entity", ""))
             if climate and self.hass.states.get(climate):
-                await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+                await self._normalise_or_turn_off_load(load)
             await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
         self.last_control_action = f"direct emergency shed all heat loads: {reason}"
+
+    async def _normalise_or_turn_off_load(self, load: dict[str, object]) -> None:
+        climate = str(load.get("climate_entity", ""))
+        is_underfloor = str(load.get("type", "")).lower() == "underfloor"
+        if not self.settings.return_to_normal_on_shed_enabled or is_underfloor:
+            await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+            return
+        await self.hass.services.async_call(
+            "climate",
+            "set_hvac_mode",
+            {"entity_id": climate, "hvac_mode": self._hvac_mode()},
+            blocking=False,
+        )
+        await self.hass.services.async_call(
+            "climate",
+            "set_temperature",
+            {"entity_id": climate, "temperature": self._normal_target()},
+            blocking=False,
+        )
 
     async def _direct_taper_bedroom_heat(self) -> None:
         for load in self.heat_loads:

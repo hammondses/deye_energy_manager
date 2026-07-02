@@ -9,6 +9,7 @@ Keep actuator writes behind feature gates. Defaults must remain:
 - `deye_control_enabled = false`
 - `grid_charge_control_enabled = false`
 - `ev_control_enabled = false`
+- `thermal_control_enabled = false`
 - `heat_control_enabled = false`
 - `direct_climate_control_enabled = false`
 - `pv_load_test_control_enabled = false`
@@ -21,9 +22,11 @@ Primary edit locations:
 - `custom_components/deye_energy_manager/const.py`: default entity IDs, thresholds, select options, and feature defaults.
 - `tests/components/deye_energy_manager/test_decision.py`: pure logic regression tests.
 
-PV load testing is separate from normal heat allowance. It is for export-limited/clipped inverter behavior where expected PV is high but observed battery charge is low. Keep recommendation logic pure in `decision.py`, and keep automatic action behind `pv_load_test_control_enabled`.
+Thermal storage is the primary climate-control concept. Do not use `target_17_soc` as a thermal start threshold. Thermal permission must use `thermal_start_min_soc`, `thermal_start_min_charge_w`, `thermal_keep_running_min_charge_w`, and forecast-full override.
 
-Smart heat rotation uses climate `current_temperature` and `temperature` attributes. A solar-owned load near target can be shed and an unowned/off colder load can be added, but automatic control must stay behind explicit heat/direct/PV-load-test toggles.
+PV load testing is separate from normal thermal allowance. It is for export-limited/clipped inverter behavior where expected PV is high but observed battery charge is low. Keep recommendation logic pure in `decision.py`, and keep automatic action behind `pv_load_test_control_enabled`.
+
+Smart thermal rotation uses climate `current_temperature`, `temperature`, `hvac_action`, and optional power sensors. A solar-owned load near/tapering at soak target can be normalised and an unowned/off room needing soak can be added, but automatic control must stay behind explicit thermal/direct toggles.
 
 Manual overrides are respected. If a manager-owned climate is off or its target was lowered below the configured solar target, clear ownership and block that load until the manual override cooldown expires. Emergency shed-all and overnight SOC protection are safety paths; keep their decision logic pure and make direct actions clear ownership flags.
 

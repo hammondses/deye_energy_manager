@@ -16,14 +16,31 @@ class EnergyManagerSettings:
     grid_charge_control_enabled: bool = False
     ev_control_enabled: bool = False
     heat_control_enabled: bool = False
+    thermal_control_enabled: bool = False
     direct_climate_control_enabled: bool = False
     pv_load_test_control_enabled: bool = False
     export_limited_mode_enabled: bool = False
+    return_to_normal_on_shed_enabled: bool = True
+    forecast_full_override_enabled: bool = True
+    thermal_rotation_enabled: bool = True
     strategy: str = "normal"
     heat_mode: str = "advisory"
+    thermal_mode: str = "heating"
     heat_add_min_charge_w: float = 6000.0
-    heat_add_min_soc: float = 90.0
+    heat_add_min_soc: float = 80.0
     heat_shed_discharge_w: float = 500.0
+    heat_soak_target_temp: float = 27.0
+    heat_normal_target_temp: float = 21.0
+    cool_soak_target_temp: float = 18.0
+    cool_normal_target_temp: float = 24.0
+    thermal_start_min_soc: float = 80.0
+    thermal_start_min_charge_w: float = 6000.0
+    thermal_keep_running_min_charge_w: float = 1500.0
+    thermal_shed_discharge_w: float = 500.0
+    thermal_emergency_shed_w: float = 2500.0
+    room_satisfied_delta_c: float = 0.7
+    room_resume_delta_c: float = 1.5
+    forecast_full_confidence_buffer_kwh: float = 3.0
     ev_start_load_jump_w: float = 5000.0
     ev_stop_load_drop_w: float = 6000.0
     forecast_safety_buffer_kwh: float = 2.0
@@ -54,6 +71,15 @@ class HeatLoadState:
     estimated_load_w: float = 0.0
     blocked_until: datetime | None = None
     load_type: str = "other"
+    hvac_mode: str | None = None
+    hvac_action: str | None = None
+    power_w: float | None = None
+    active_power_threshold_w: float = 800.0
+    idle_power_threshold_w: float = 150.0
+    taper_power_threshold_w: float = 400.0
+    enabled: bool = True
+    supports_heating: bool = True
+    supports_cooling: bool = False
 
 
 @dataclass(slots=True)
@@ -113,6 +139,19 @@ class EnergyManagerDecision:
     battery_priority_satisfied: bool
     heat_allowed: bool
     heat_should_shed: bool
+    thermal_allowed: bool
+    thermal_should_shed: bool
+    thermal_should_emergency_shed: bool
+    forecast_full_override_active: bool
+    thermal_rotation_recommended: bool
+    thermal_should_return_to_normal: bool
+    thermal_action: str
+    thermal_action_reason: str
+    thermal_load_to_add: str | None
+    thermal_load_to_shed: str | None
+    thermal_load_to_normalise: str | None
+    solar_owned_thermal_load_count: int
+    active_thermal_loads: list[str]
     pv_load_test_recommended: bool
     heat_rotation_recommended: bool
     heat_load_to_shed: str | None
