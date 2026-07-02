@@ -26,6 +26,7 @@ class EnergyManagerSettings:
     return_to_normal_on_shed_enabled: bool = True
     forecast_full_override_enabled: bool = True
     thermal_rotation_enabled: bool = True
+    shed_unowned_managed_loads_on_battery_discharge: bool = False
     auto_mode_month_fallback_enabled: bool = True
     max_fallback_soc_age_minutes: float = 360.0
     strategy: str = "normal"

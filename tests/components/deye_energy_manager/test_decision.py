@@ -502,6 +502,117 @@ def test_thermal_sheds_on_discharge_threshold() -> None:
     assert decision.thermal_should_shed
 
 
+def test_discharge_with_owned_load_sheds() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=700,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    current_temp=27,
+                    target_temp=27,
+                    hvac_mode="heat",
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
+    )
+
+    assert decision.thermal_should_shed
+
+
+def test_discharge_without_owned_load_explains_unowned_shedding_disabled() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=1079,
+            any_solar_owned_heat_load_on=False,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=False,
+                    current_temp=25,
+                    target_temp=27,
+                    hvac_mode="heat",
+                    fan_mode="high",
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
+    )
+
+    assert not decision.thermal_should_shed
+    assert "no owned thermal loads and unowned shedding disabled" in decision.reason
+
+
+def test_discharge_with_unowned_shedding_enabled_selects_soak_like_load() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=1079,
+            any_solar_owned_heat_load_on=False,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=False,
+                    current_temp=25,
+                    target_temp=27,
+                    hvac_mode="heat",
+                    fan_mode="high",
+                )
+            ],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            thermal_shed_discharge_w=500,
+            shed_unowned_managed_loads_on_battery_discharge=True,
+        ),
+    )
+
+    assert decision.thermal_should_shed
+    assert decision.thermal_load_to_normalise == "Dining"
+    assert "normalising unowned managed load due to battery discharge" in decision.reason
+
+
+def test_unowned_shedding_does_not_select_non_soak_like_managed_load() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=1079,
+            any_solar_owned_heat_load_on=False,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=False,
+                    current_temp=21,
+                    target_temp=21,
+                    hvac_mode="heat",
+                    fan_mode="low",
+                )
+            ],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            thermal_shed_discharge_w=500,
+            shed_unowned_managed_loads_on_battery_discharge=True,
+        ),
+    )
+
+    assert not decision.thermal_should_shed
+    assert decision.thermal_load_to_normalise is None
+
+
 def test_thermal_emergency_shed_threshold() -> None:
     decision = decide(
         base_inputs(now=dt(12), battery_power_w=2600, any_solar_owned_heat_load_on=True),
@@ -802,6 +913,28 @@ def test_unsupported_fan_mode_is_reported_in_diagnostic() -> None:
     assert diagnostic.attributes["desired_soak_fan_mode"] == "high"
     assert not diagnostic.attributes["fan_mode_supported"]
     assert "not in supported" in str(diagnostic.attributes["fan_mode_blocked_reason"])
+
+
+def test_unowned_shed_candidate_is_reported_in_diagnostic() -> None:
+    inputs = base_inputs(
+        heat_loads=[
+            HeatLoadState(
+                name="Dining",
+                priority=1,
+                is_on=True,
+                solar_owned=False,
+                current_temp=25,
+                target_temp=27,
+                hvac_mode="heat",
+                fan_mode="high",
+            )
+        ]
+    )
+    diagnostic = thermal_load_diagnostic(inputs.heat_loads[0], EnergyManagerSettings(), inputs)
+
+    assert diagnostic.attributes["owned_by_manager"] is False
+    assert diagnostic.attributes["unowned_shed_candidate"] is True
+    assert diagnostic.attributes["unowned_shed_reason"]
 
 
 def test_missing_fan_modes_do_not_error_and_are_reported() -> None:

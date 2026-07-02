@@ -318,6 +318,46 @@ def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings
     ]
 
 
+def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> str | None:
+    """Return why an unowned configured load looks like a solar-soak load."""
+
+    mode = mode or effective_thermal_mode(settings)
+    if load.solar_owned or not load.enabled or load.load_type == "underfloor" or not load_supports_mode(load, mode):
+        return None
+    soak_fan_mode, _normal_fan_mode = thermal_fan_modes(settings, mode)
+    fan_high_modes = {soak_fan_mode, "high", "max", "maximum", "powerful", "turbo"}
+    fan_matches = bool(load.fan_mode and load.fan_mode.lower() in {str(item).lower() for item in fan_high_modes if item})
+    tolerance = settings.room_satisfied_delta_c
+    if mode == "cooling":
+        if load.hvac_mode != "cool":
+            return None
+        if load.target_temp is not None and load.target_temp <= settings.cool_soak_target_temp + tolerance:
+            return "cool target at soak setpoint"
+        if fan_matches:
+            return "cool fan mode looks like soak"
+        return None
+    if load.hvac_mode != "heat":
+        return None
+    if load.target_temp is not None and load.target_temp >= settings.heat_soak_target_temp - tolerance:
+        return "heat target at soak setpoint"
+    if fan_matches:
+        return "heat fan mode looks like soak"
+    if (
+        load.current_temp is not None
+        and load.target_temp is not None
+        and load.current_temp > settings.heat_normal_target_temp
+        and load.target_temp > settings.heat_normal_target_temp
+    ):
+        return "room and target above normal heat target"
+    return None
+
+
+def unowned_shed_candidates(loads: list[HeatLoadState], settings: EnergyManagerSettings, mode: str | None = None) -> list[HeatLoadState]:
+    """Return unowned managed loads safe to normalise when the battery is discharging."""
+
+    return [load for load in loads if unowned_shed_reason(load, settings, mode)]
+
+
 def minutes_since(now: datetime, value: datetime | None) -> float | None:
     if value is None:
         return None
@@ -367,6 +407,7 @@ def thermal_load_diagnostic(
     satisfied = load_is_satisfied(load, settings, mode)
     active = load_is_active(load, mode)
     soak_fan_mode, normal_fan_mode = thermal_fan_modes(settings, mode)
+    unowned_reason = unowned_shed_reason(load, settings, mode)
     tapering = bool(load.power_w is not None and load.is_on and load.power_w <= load.taper_power_threshold_w)
     if blocked_reason == "manual_override":
         state = "manual_override"
@@ -419,6 +460,8 @@ def thermal_load_diagnostic(
         "estimated_load_w": load.estimated_load_w,
         "active_state": "active" if active else "idle",
         "owned_by_manager": load.solar_owned,
+        "unowned_shed_candidate": bool(unowned_reason),
+        "unowned_shed_reason": unowned_reason,
         "needs_soak": needs,
         "satisfied": satisfied,
         "tapering": tapering,
@@ -665,9 +708,19 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and time_between(inputs.now, "21:00", "08:00")
         and any(load.solar_owned and load.is_on and "bedroom" in f"{load.name} {load.load_type}".lower() for load in inputs.heat_loads)
     )
+    unowned_candidates = sorted(
+        unowned_shed_candidates(inputs.heat_loads, settings, thermal_mode),
+        key=lambda load: load.priority,
+        reverse=True,
+    )
+    unowned_shed_allowed = (
+        settings.shed_unowned_managed_loads_on_battery_discharge
+        and battery_discharge_w >= thermal_shed_discharge_w
+        and bool(unowned_candidates)
+    )
 
     thermal_should_shed = (
-        inputs.any_solar_owned_heat_load_on
+        (inputs.any_solar_owned_heat_load_on or unowned_shed_allowed)
         and (
             battery_discharge_w >= thermal_shed_discharge_w
             or (
@@ -724,7 +777,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ],
         key=lambda load: load.priority,
     )
-    thermal_load_to_shed = shed_candidates[0].name if shed_candidates else None
+    thermal_load_to_shed = shed_candidates[0].name if shed_candidates else unowned_candidates[0].name if unowned_shed_allowed else None
     thermal_load_to_add = add_candidates[0].name if add_candidates else None
     thermal_rotation_recommended = (
         thermal_allowed
@@ -826,11 +879,23 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         proposed_actions.append("add_one_heat_load")
     if thermal_should_shed:
         proposed_actions.append("shed_one_heat_load")
-        shed_reason = f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W" if battery_discharge_w >= thermal_shed_discharge_w else "thermal_should_shed=true"
+        if unowned_shed_allowed and not inputs.any_solar_owned_heat_load_on:
+            shed_reason = (
+                f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= threshold {thermal_shed_discharge_w:.0f}W; "
+                f"normalising unowned managed load due to battery discharge"
+            )
+        else:
+            shed_reason = f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W" if battery_discharge_w >= thermal_shed_discharge_w else "thermal_should_shed=true"
         reason_parts.append(shed_reason)
         thermal_reason_parts.append(shed_reason)
     else:
-        reason_parts.append(f"thermal_should_shed=false: battery charge {battery_charge_w:.0f}W, forecast_full_override={forecast_override}")
+        if battery_discharge_w >= thermal_shed_discharge_w and not inputs.any_solar_owned_heat_load_on:
+            reason_parts.append(
+                f"thermal_should_shed=false: battery discharging {battery_discharge_w:.0f}W >= threshold {thermal_shed_discharge_w:.0f}W, "
+                "but no owned thermal loads and unowned shedding disabled"
+            )
+        else:
+            reason_parts.append(f"thermal_should_shed=false: battery charge {battery_charge_w:.0f}W, forecast_full_override={forecast_override}")
     if thermal_should_emergency_shed:
         proposed_actions.append("emergency_shed_all_heat_loads")
         reason_parts.append(

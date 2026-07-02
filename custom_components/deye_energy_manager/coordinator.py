@@ -124,6 +124,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return_to_normal_on_shed_enabled=bool(options["return_to_normal_on_shed_enabled"]),
             forecast_full_override_enabled=bool(options["forecast_full_override_enabled"]),
             thermal_rotation_enabled=bool(options["thermal_rotation_enabled"]),
+            shed_unowned_managed_loads_on_battery_discharge=bool(options["shed_unowned_managed_loads_on_battery_discharge"]),
             auto_mode_month_fallback_enabled=bool(options["auto_mode_month_fallback_enabled"]),
             max_fallback_soc_age_minutes=float(options["max_fallback_soc_age_minutes"]),
             strategy=str(options.get("strategy", DEFAULT_STRATEGY)),
@@ -738,6 +739,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             state = self.hass.states.get(ownership) if ownership else None
             if state and state.state == "on":
                 owned_loads.append(load)
+            elif preferred_name and self.settings.shed_unowned_managed_loads_on_battery_discharge:
+                owned_loads.append(load)
         for load in sorted(owned_loads, key=lambda item: int(item.get("priority", 999)), reverse=True):
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
@@ -747,8 +750,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
             name = str(load.get("name", climate))
             self._thermal_last_shed_at[name] = dt_util.now()
-            self._thermal_last_action[name] = ("shed", "direct thermal normalise/shed")
-            self.last_control_action = f"direct normalised thermal load {load.get('name', climate)}"
+            action_reason = "normalising unowned managed load due to battery discharge" if not (ownership and self.hass.states.get(ownership) and self.hass.states.get(ownership).state == "on") else "direct thermal normalise/shed"
+            self._thermal_last_action[name] = ("shed", action_reason)
+            self.last_control_action = f"direct normalised thermal load {load.get('name', climate)}: {action_reason}"
             return
 
     async def _direct_rotate_heat_load(self, decision: EnergyManagerDecision) -> None:

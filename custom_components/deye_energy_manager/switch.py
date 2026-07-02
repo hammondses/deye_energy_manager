@@ -27,6 +27,7 @@ SWITCHES = {
     "return_to_normal_on_shed_enabled": "Return to normal on shed enabled",
     "forecast_full_override_enabled": "Forecast full override enabled",
     "thermal_rotation_enabled": "Thermal rotation enabled",
+    "shed_unowned_managed_loads_on_battery_discharge": "Shed unowned managed loads on battery discharge",
     "auto_mode_month_fallback_enabled": "Auto mode month fallback enabled",
 }
 

@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.4.5
+
+- Add opt-in unowned managed-load shedding on battery discharge.
+- Add `switch.deye_energy_manager_shed_unowned_managed_loads_on_battery_discharge`.
+- Detect soak-like unowned managed heat pumps from HVAC mode, target temperature, room temperature, and fan mode.
+- Add per-load diagnostic attributes for unowned shed candidacy and reason.
+- Improve thermal shed reason strings when battery discharge is high but no owned loads exist.
+
 ## v0.4.4
 
 - Add last-known-good local Deye SOC fallback support.

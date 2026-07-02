@@ -190,6 +190,7 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("return_to_normal_on_shed_enabled", default=defaults.get("return_to_normal_on_shed_enabled", True)): selector.BooleanSelector(),
             vol.Required("forecast_full_override_enabled", default=defaults.get("forecast_full_override_enabled", True)): selector.BooleanSelector(),
             vol.Required("thermal_rotation_enabled", default=defaults.get("thermal_rotation_enabled", True)): selector.BooleanSelector(),
+            vol.Required("shed_unowned_managed_loads_on_battery_discharge", default=defaults.get("shed_unowned_managed_loads_on_battery_discharge", False)): selector.BooleanSelector(),
             vol.Required("auto_mode_month_fallback_enabled", default=defaults.get("auto_mode_month_fallback_enabled", True)): selector.BooleanSelector(),
             vol.Required("heat_soak_fan_mode", default=defaults.get("heat_soak_fan_mode", FAN_MODE_DEFAULTS["heat_soak_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("heat_normal_fan_mode", default=defaults.get("heat_normal_fan_mode", FAN_MODE_DEFAULTS["heat_normal_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),

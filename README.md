@@ -126,14 +126,24 @@ Cooldown protection:
 
 Emergency shed bypasses cooldowns.
 
+Battery-discharge safety shedding:
+
+- `switch.deye_energy_manager_shed_unowned_managed_loads_on_battery_discharge`
+
+This is off by default. When enabled, battery discharge above the thermal shed threshold can normalise a configured managed heat pump that looks like it is still in a soak state even if its ownership boolean is off. It never acts on climate entities outside the configured managed-load list, and it does not include underfloor loads.
+
 Last-known-good SOC fallback:
 
 - `primary_soc_entity`: defaults to `sensor.deye_battery_soc`
 - `fallback_soc_entity`: defaults to `input_number.deye_battery_soc_last_good`
 - `fallback_soc_timestamp_entity`: defaults to `input_datetime.deye_battery_soc_last_good_updated`
 - `number.deye_energy_manager_max_fallback_soc_age_minutes`: defaults to `360`
+- `sensor.deye_energy_manager_soc_source`
+- `sensor.deye_energy_manager_soc_age_minutes`
 
 The integration uses live local Deye SOC when numeric. If live SOC is `unknown`/`unavailable`, it can use the local helper value while the timestamp is fresh. It does not use cloud/Solarman SOC entities by default, and it never converts unknown SOC to `0`.
+
+Home Assistant may prefix these entities with the config entry name, for example `sensor.garage_deye_energy_manager_soc_source`. The `input_number` and `input_datetime` fallback helpers are external Home Assistant helpers; the integration reads them but does not create them automatically.
 
 Optional helper example:
 

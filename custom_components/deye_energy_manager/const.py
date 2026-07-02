@@ -188,6 +188,7 @@ FEATURE_DEFAULTS = {
     "return_to_normal_on_shed_enabled": True,
     "forecast_full_override_enabled": True,
     "thermal_rotation_enabled": True,
+    "shed_unowned_managed_loads_on_battery_discharge": False,
     "auto_mode_month_fallback_enabled": True,
 }
 
