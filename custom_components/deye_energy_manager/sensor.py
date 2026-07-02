@@ -63,8 +63,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     coordinator = hass.data[DOMAIN][entry.entry_id]
     entities = [DeyeSensor(coordinator, description) for description in SENSORS]
     for load in coordinator.heat_loads:
+        slug = str(load.get("slug") or slugify(str(load.get("name", load.get("climate_entity", "thermal_load")))))
         name = str(load.get("name", load.get("climate_entity", "thermal_load")))
-        entities.append(DeyeThermalLoadStatusSensor(coordinator, name))
+        entities.append(DeyeThermalLoadStatusSensor(coordinator, slug, name))
     async_add_entities(entities)
 
 
@@ -97,9 +98,11 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
 class DeyeThermalLoadStatusSensor(DeyeEnergyManagerEntity, SensorEntity):
     """Per-managed-load thermal diagnostic sensor."""
 
-    def __init__(self, coordinator, load_name: str) -> None:
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, coordinator, slug: str, load_name: str) -> None:
         self._load_name = load_name
-        self._slug = slugify(load_name)
+        self._slug = slug
         super().__init__(coordinator, f"{self._slug}_thermal_status", f"{load_name} thermal status")
 
     @property

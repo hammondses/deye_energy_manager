@@ -337,7 +337,10 @@ def thermal_load_diagnostic(
     chosen_add = decision is not None and decision.thermal_load_to_add == load.name
     chosen_shed = decision is not None and decision.thermal_load_to_shed == load.name
     attrs: dict[str, object | None] = {
+        "load_slug": load.slug or slugify(load.name),
         "load_name": load.name,
+        "climate_entity": load.climate_entity,
+        "ownership_entity": load.ownership_entity,
         "enabled": load.enabled,
         "priority": load.priority,
         "thermal_mode": mode,
@@ -349,6 +352,7 @@ def thermal_load_diagnostic(
         "normal_target_temperature": normal_target,
         "hvac_mode": load.hvac_mode,
         "hvac_action": load.hvac_action,
+        "power_sensor": load.power_sensor,
         "power_w": load.power_w,
         "estimated_load_w": load.estimated_load_w,
         "active_state": "active" if active else "idle",
@@ -370,7 +374,7 @@ def thermal_load_diagnostic(
         "chosen_for_rotation": bool(decision and decision.thermal_rotation_recommended and (chosen_add or chosen_shed)),
         "not_chosen_reason": None if chosen_add or chosen_shed else blocked_reason or ("does_not_need_soak" if not needs and not satisfied else "lower_priority_or_no_action"),
     }
-    return ThermalLoadDiagnostic(slug=slugify(load.name), state=state, attributes=attrs)
+    return ThermalLoadDiagnostic(slug=load.slug or slugify(load.name), state=state, attributes=attrs)
 
 
 def slugify(value: str) -> str:

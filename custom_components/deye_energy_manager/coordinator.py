@@ -31,7 +31,8 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import decide, forecast_tier, slot_capacity_targets, thermal_load_diagnostic, slugify
+from .decision import decide, forecast_tier, slot_capacity_targets, thermal_load_diagnostic
+from .migration import infer_load_slug
 from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
 
@@ -89,7 +90,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def heat_loads(self) -> list[dict[str, object]]:
         """Return configured heat loads."""
 
-        return list(self.entry.options.get(CONF_HEAT_LOADS, self.entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS)))
+        configured = self.entry.options.get(CONF_HEAT_LOADS, self.entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS))
+        loads = list(configured) or list(DEFAULT_HEAT_LOADS)
+        return [self._normalise_heat_load(load) for load in loads]
+
+    def _normalise_heat_load(self, load: dict[str, object]) -> dict[str, object]:
+        """Return a load config with a stable slug for entity unique IDs."""
+
+        normalised = dict(load)
+        normalised["slug"] = str(normalised.get("slug") or infer_load_slug(normalised))
+        return normalised
 
     @property
     def settings(self) -> EnergyManagerSettings:
@@ -106,7 +116,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_solar_charging_enabled=bool(options["ev_solar_charging_enabled"]),
             ev_cheap_grid_charging_enabled=bool(options["ev_cheap_grid_charging_enabled"]),
             heat_control_enabled=bool(options["heat_control_enabled"]),
-            thermal_control_enabled=bool(options["thermal_control_enabled"]),
+            thermal_control_enabled=bool(options["thermal_control_enabled"] or options["heat_control_enabled"]),
             direct_climate_control_enabled=bool(options["direct_climate_control_enabled"]),
             pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
             export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
@@ -117,7 +127,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             strategy=str(options.get("strategy", DEFAULT_STRATEGY)),
             heat_mode=str(options.get("heat_mode", DEFAULT_HEAT_MODE)),
             thermal_mode=str(options.get("thermal_mode", DEFAULT_THERMAL_MODE)),
-            thermal_actuation_mode=str(options.get("thermal_actuation_mode", self._legacy_thermal_actuation_mode(options))),
+            thermal_actuation_mode=self._effective_thermal_actuation_mode(options),
             flexible_load_priority=str(options.get("flexible_load_priority", "battery_first")),
             heat_add_min_charge_w=float(options.get("heat_add_min_charge_w", options["thermal_start_min_charge_w"])),
             heat_add_min_soc=float(options.get("heat_add_min_soc", options["thermal_start_min_soc"])),
@@ -168,6 +178,17 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if heat_mode == "auto_direct":
             return "direct"
         return DEFAULT_THERMAL_ACTUATION_MODE
+
+    def _effective_thermal_actuation_mode(self, options: dict[str, object]) -> str:
+        thermal_mode = str(options.get("thermal_actuation_mode", DEFAULT_THERMAL_ACTUATION_MODE))
+        legacy_mode = self._legacy_thermal_actuation_mode(options)
+        if (
+            bool(options.get("heat_control_enabled", False))
+            and thermal_mode == DEFAULT_THERMAL_ACTUATION_MODE
+            and legacy_mode != DEFAULT_THERMAL_ACTUATION_MODE
+        ):
+            return legacy_mode
+        return thermal_mode
 
     @callback
     def _handle_state_change(self, _event) -> None:
@@ -266,6 +287,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 HeatLoadState(
                     name=name,
                     priority=int(load.get("priority", 999)),
+                    slug=str(load.get("slug") or infer_load_slug(load)),
+                    climate_entity=climate or None,
+                    ownership_entity=ownership or None,
+                    power_sensor=str(load.get("optional_power_sensor", "")) or None,
                     is_on=climate_state is not None and climate_state.state not in {"off", *UNAVAILABLE},
                     solar_owned=ownership_state is not None and ownership_state.state == "on",
                     current_temp=current_temp,
@@ -396,9 +421,28 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     async def async_set_option(self, key: str, value: object) -> None:
         """Update one config option."""
 
+        options = {**self.entry.options, key: value}
+        if key == "heat_control_enabled":
+            options["thermal_control_enabled"] = bool(value)
+        elif key == "thermal_control_enabled":
+            options["heat_control_enabled"] = bool(value)
+        elif key == "heat_mode":
+            if value == "auto_scripts":
+                options["thermal_actuation_mode"] = "scripts"
+            elif value == "auto_direct":
+                options["thermal_actuation_mode"] = "direct"
+            elif value == "advisory":
+                options["thermal_actuation_mode"] = "advisory"
+        elif key == "thermal_actuation_mode":
+            if value == "scripts":
+                options["heat_mode"] = "auto_scripts"
+            elif value == "direct":
+                options["heat_mode"] = "auto_direct"
+            elif value == "advisory":
+                options["heat_mode"] = "advisory"
         self.hass.config_entries.async_update_entry(
             self.entry,
-            options={**self.entry.options, key: value},
+            options=options,
         )
         await self.async_request_refresh()
 

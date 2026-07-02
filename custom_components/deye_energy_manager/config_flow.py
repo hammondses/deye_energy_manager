@@ -318,7 +318,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(step_id="battery", data_schema=_battery_schema(self._options))
 
     async def async_step_loads(self, user_input: dict[str, Any] | None = None):
-        loads = list(self.config_entry.options.get(CONF_HEAT_LOADS, self.config_entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS)))
+        loads = list(self.config_entry.options.get(CONF_HEAT_LOADS, self.config_entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS))) or list(DEFAULT_HEAT_LOADS)
         if user_input is not None:
             self._selected_load_index = int(user_input["load_index"])
             return await self.async_step_load_detail()
@@ -339,7 +339,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
     async def async_step_load_detail(self, user_input: dict[str, Any] | None = None):
-        loads = list(self.config_entry.options.get(CONF_HEAT_LOADS, self.config_entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS)))
+        loads = list(self.config_entry.options.get(CONF_HEAT_LOADS, self.config_entry.data.get(CONF_HEAT_LOADS, DEFAULT_HEAT_LOADS))) or list(DEFAULT_HEAT_LOADS)
         index = getattr(self, "_selected_load_index", 0)
         load = dict(loads[index])
         if user_input is not None:
@@ -352,6 +352,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("enabled", default=bool(load.get("enabled", True))): selector.BooleanSelector(),
+                    vol.Required("slug", default=str(load.get("slug", ""))): str,
                     vol.Required("name", default=str(load.get("name", ""))): str,
                     vol.Required("climate_entity", default=str(load.get("climate_entity", ""))): selector.EntitySelector(),
                     vol.Required("ownership_entity", default=str(load.get("ownership_entity", ""))): selector.EntitySelector(),

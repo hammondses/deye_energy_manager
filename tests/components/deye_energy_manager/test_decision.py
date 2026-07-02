@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_load_diagnostic, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
 
@@ -757,3 +758,37 @@ def test_repair_issue_for_invalid_ev_power_sensor() -> None:
     )
 
     assert "ev_power_invalid" in issues
+
+
+def test_per_load_diagnostic_uses_stable_slug() -> None:
+    inputs = base_inputs(
+        heat_loads=[
+            HeatLoadState(
+                name="Dining/living heat pump",
+                priority=1,
+                slug="dining",
+                climate_entity="climate.diningheatpump_mqtt_hvac",
+                ownership_entity="input_boolean.solar_owns_dining_heatpump",
+            )
+        ]
+    )
+    diagnostic = thermal_load_diagnostic(inputs.heat_loads[0], EnergyManagerSettings(), inputs)
+
+    assert diagnostic.slug == "dining"
+    assert diagnostic.attributes["load_slug"] == "dining"
+    assert diagnostic.attributes["climate_entity"] == "climate.diningheatpump_mqtt_hvac"
+
+
+def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:
+    options, changed = migrate_options(
+        {
+            "heat_control_enabled": True,
+            "thermal_control_enabled": False,
+            "heat_mode": "auto_scripts",
+            "thermal_actuation_mode": "advisory",
+        }
+    )
+
+    assert changed
+    assert options["thermal_control_enabled"]
+    assert options["thermal_actuation_mode"] == "scripts"

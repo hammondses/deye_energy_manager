@@ -48,6 +48,7 @@ DEFAULT_ENTITY_MAP = {
 
 DEFAULT_HEAT_LOADS = [
     {
+        "slug": "dining",
         "name": "Dining/living heat pump",
         "climate_entity": "climate.diningheatpump_mqtt_hvac",
         "ownership_entity": "input_boolean.solar_owns_dining_heatpump",
@@ -64,6 +65,7 @@ DEFAULT_HEAT_LOADS = [
         "taper_power_threshold_w": 400,
     },
     {
+        "slug": "underfloor",
         "name": "Bathroom underfloor",
         "climate_entity": "climate.master_bathroom_underfloor_heating",
         "ownership_entity": "input_boolean.solar_owns_underfloor",
@@ -80,6 +82,7 @@ DEFAULT_HEAT_LOADS = [
         "taper_power_threshold_w": 100,
     },
     {
+        "slug": "office",
         "name": "Office heat pump",
         "climate_entity": "climate.office_heatpump",
         "ownership_entity": "input_boolean.solar_owns_office_heatpump",
@@ -96,6 +99,7 @@ DEFAULT_HEAT_LOADS = [
         "taper_power_threshold_w": 400,
     },
     {
+        "slug": "bedroom",
         "name": "Bedroom heat pump",
         "climate_entity": "climate.bedroom_heatpump",
         "ownership_entity": "input_boolean.solar_owns_bedroom_heatpump",
@@ -112,6 +116,7 @@ DEFAULT_HEAT_LOADS = [
         "taper_power_threshold_w": 400,
     },
     {
+        "slug": "hallway",
         "name": "Hallway heat pump",
         "climate_entity": "climate.hallwayheatpump_mqtt_hvac",
         "ownership_entity": "input_boolean.solar_owns_hallway_heatpump",

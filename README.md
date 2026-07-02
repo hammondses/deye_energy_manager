@@ -97,11 +97,17 @@ EV bypass wins over battery grid charging so the system does not create a batter
 
 The integration exposes one thermal status sensor per managed load, for example:
 
-- `sensor.deye_energy_manager_dining_living_heat_pump_thermal_status`
-- `sensor.deye_energy_manager_bedroom_heat_pump_thermal_status`
-- `sensor.deye_energy_manager_office_heat_pump_thermal_status`
+- `sensor.deye_energy_manager_dining_thermal_status`
+- `sensor.deye_energy_manager_bedroom_thermal_status`
+- `sensor.deye_energy_manager_office_thermal_status`
+- `sensor.deye_energy_manager_hallway_thermal_status`
+- `sensor.deye_energy_manager_underfloor_thermal_status`
 
 Each status sensor includes attributes for room temperature, target, ownership, active/tapering state, cooldowns, chosen/not-chosen reasons, and last action timestamps.
+
+Load diagnostic entity IDs use the managed-load `slug`, not the display name. The default slugs are `dining`, `bedroom`, `office`, `hallway`, and `underfloor`.
+
+Legacy heat controls remain as compatibility aliases during the thermal cutover. If `heat_control_enabled` is on, `thermal_control_enabled` is migrated on; `heat_mode = auto_scripts` maps to `thermal_actuation_mode = scripts`, and `heat_mode = auto_direct` maps to `thermal_actuation_mode = direct`. New installs should use the thermal controls directly.
 
 Cooldown protection:
 

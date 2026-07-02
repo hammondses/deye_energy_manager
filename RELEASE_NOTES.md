@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.4.1
+
+- Fix per-load thermal diagnostic sensor registration by using stable managed-load slugs.
+- Default diagnostic sensors now register as `dining`, `bedroom`, `office`, `hallway`, and `underfloor` thermal status entities.
+- Add setup migration for existing installs so stored managed loads receive stable slugs.
+- Make legacy heat/script controls visibly map into thermal controls during cutover.
+- Keep direct thermal control as the canonical path while leaving legacy heat entities as aliases for now.
+
 ## v0.4.0
 
 - Thermal storage controls with heating/cooling/auto modes.

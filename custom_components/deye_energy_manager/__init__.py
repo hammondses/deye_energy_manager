@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from .const import DOMAIN, PLATFORMS
+from .migration import migrate_options
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if DeyeEnergyManagerCoordinator is None or Platform is None:
         return False
+    _migrate_options(hass, entry)
     coordinator = DeyeEnergyManagerCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
@@ -34,6 +36,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, [Platform(platform) for platform in PLATFORMS])
     entry.async_on_unload(entry.add_update_listener(async_update_entry))
     return True
+
+
+def _migrate_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Apply lightweight option migrations before entities are registered."""
+
+    options, changed = migrate_options(dict(entry.options), dict(entry.data))
+    if changed:
+        hass.config_entries.async_update_entry(entry, options=options)
 
 
 async def async_update_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

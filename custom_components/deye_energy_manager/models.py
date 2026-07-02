@@ -80,6 +80,10 @@ class HeatLoadState:
 
     name: str
     priority: int
+    slug: str | None = None
+    climate_entity: str | None = None
+    ownership_entity: str | None = None
+    power_sensor: str | None = None
     is_on: bool = False
     solar_owned: bool = False
     current_temp: float | None = None
