@@ -21,6 +21,8 @@ from .const import (
     DEFAULT_THERMAL_ACTUATION_MODE,
     DEFAULT_THERMAL_MODE,
     DOMAIN,
+    FAN_MODE_DEFAULTS,
+    FAN_MODE_OPTIONS,
     FEATURE_DEFAULTS,
     FLEXIBLE_LOAD_PRIORITY_OPTIONS,
     HEAT_MODE_OPTIONS,
@@ -112,6 +114,18 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 "flexible_load_priority",
                 default=defaults.get("flexible_load_priority", DEFAULT_FLEXIBLE_LOAD_PRIORITY),
             ): selector.SelectSelector(selector.SelectSelectorConfig(options=FLEXIBLE_LOAD_PRIORITY_OPTIONS)),
+            vol.Required("heat_soak_fan_mode", default=defaults.get("heat_soak_fan_mode", FAN_MODE_DEFAULTS["heat_soak_fan_mode"])): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
+            ),
+            vol.Required("heat_normal_fan_mode", default=defaults.get("heat_normal_fan_mode", FAN_MODE_DEFAULTS["heat_normal_fan_mode"])): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
+            ),
+            vol.Required("cool_soak_fan_mode", default=defaults.get("cool_soak_fan_mode", FAN_MODE_DEFAULTS["cool_soak_fan_mode"])): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
+            ),
+            vol.Required("cool_normal_fan_mode", default=defaults.get("cool_normal_fan_mode", FAN_MODE_DEFAULTS["cool_normal_fan_mode"])): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
+            ),
             **{
                 vol.Required(key, default=defaults.get(key, value)): selector.NumberSelector(
                     selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=1)
@@ -177,6 +191,10 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("forecast_full_override_enabled", default=defaults.get("forecast_full_override_enabled", True)): selector.BooleanSelector(),
             vol.Required("thermal_rotation_enabled", default=defaults.get("thermal_rotation_enabled", True)): selector.BooleanSelector(),
             vol.Required("auto_mode_month_fallback_enabled", default=defaults.get("auto_mode_month_fallback_enabled", True)): selector.BooleanSelector(),
+            vol.Required("heat_soak_fan_mode", default=defaults.get("heat_soak_fan_mode", FAN_MODE_DEFAULTS["heat_soak_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
+            vol.Required("heat_normal_fan_mode", default=defaults.get("heat_normal_fan_mode", FAN_MODE_DEFAULTS["heat_normal_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
+            vol.Required("cool_soak_fan_mode", default=defaults.get("cool_soak_fan_mode", FAN_MODE_DEFAULTS["cool_soak_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
+            vol.Required("cool_normal_fan_mode", default=defaults.get("cool_normal_fan_mode", FAN_MODE_DEFAULTS["cool_normal_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("pv_load_test_control_enabled", default=defaults.get("pv_load_test_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("export_limited_mode_enabled", default=defaults.get("export_limited_mode_enabled", False)): selector.BooleanSelector(),
             **{
@@ -266,6 +284,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "thermal_mode": DEFAULT_THERMAL_MODE,
                     "thermal_actuation_mode": DEFAULT_THERMAL_ACTUATION_MODE,
                     "flexible_load_priority": DEFAULT_FLEXIBLE_LOAD_PRIORITY,
+                    **FAN_MODE_DEFAULTS,
                 },
             )
 

@@ -32,6 +32,10 @@ class EnergyManagerSettings:
     thermal_mode: str = "heating"
     thermal_actuation_mode: str = "advisory"
     flexible_load_priority: str = "battery_first"
+    heat_soak_fan_mode: str = "high"
+    heat_normal_fan_mode: str = "low"
+    cool_soak_fan_mode: str = "high"
+    cool_normal_fan_mode: str = "low"
     heat_add_min_charge_w: float = 6000.0
     heat_add_min_soc: float = 80.0
     heat_shed_discharge_w: float = 500.0
@@ -93,6 +97,8 @@ class HeatLoadState:
     load_type: str = "other"
     hvac_mode: str | None = None
     hvac_action: str | None = None
+    fan_mode: str | None = None
+    supported_fan_modes: tuple[str, ...] = ()
     power_w: float | None = None
     active_power_threshold_w: float = 800.0
     idle_power_threshold_w: float = 150.0

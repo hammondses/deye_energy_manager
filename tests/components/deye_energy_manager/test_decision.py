@@ -582,7 +582,7 @@ def test_heating_mode_soak_actuation_plan() -> None:
         HeatLoadState(name="Office", priority=3, supports_heating=True),
     )
 
-    assert action == ("heat", 27)
+    assert action == ("heat", 27, "high")
 
 
 def test_cooling_mode_soak_actuation_plan() -> None:
@@ -591,7 +591,7 @@ def test_cooling_mode_soak_actuation_plan() -> None:
         HeatLoadState(name="Office", priority=3, supports_cooling=True),
     )
 
-    assert action == ("cool", 18)
+    assert action == ("cool", 18, "high")
 
 
 def test_heating_return_to_normal_actuation_plan() -> None:
@@ -600,7 +600,7 @@ def test_heating_return_to_normal_actuation_plan() -> None:
         HeatLoadState(name="Office", priority=3, load_type="heatpump"),
     )
 
-    assert action == ("heat", 21)
+    assert action == ("heat", 21, "low")
 
 
 def test_cooling_return_to_normal_actuation_plan() -> None:
@@ -609,7 +609,7 @@ def test_cooling_return_to_normal_actuation_plan() -> None:
         HeatLoadState(name="Office", priority=3, load_type="heatpump"),
     )
 
-    assert action == ("cool", 24)
+    assert action == ("cool", 24, "low")
 
 
 def test_underfloor_shed_turns_off() -> None:
@@ -618,7 +618,7 @@ def test_underfloor_shed_turns_off() -> None:
         HeatLoadState(name="Underfloor", priority=2, load_type="underfloor"),
     )
 
-    assert action == ("off", None)
+    assert action == ("off", None, None)
 
 
 def test_cooldown_prevents_short_cycle_add() -> None:
@@ -777,6 +777,37 @@ def test_per_load_diagnostic_uses_stable_slug() -> None:
     assert diagnostic.slug == "dining"
     assert diagnostic.attributes["load_slug"] == "dining"
     assert diagnostic.attributes["climate_entity"] == "climate.diningheatpump_mqtt_hvac"
+
+
+def test_unsupported_fan_mode_is_reported_in_diagnostic() -> None:
+    inputs = base_inputs(
+        heat_loads=[
+            HeatLoadState(
+                name="Office",
+                priority=1,
+                current_temp=20,
+                supported_fan_modes=("auto", "quiet"),
+            )
+        ]
+    )
+    decision = decide(
+        inputs,
+        EnergyManagerSettings(thermal_control_enabled=True, heat_soak_fan_mode="high"),
+    )
+    diagnostic = thermal_load_diagnostic(inputs.heat_loads[0], EnergyManagerSettings(heat_soak_fan_mode="high"), inputs, decision)
+
+    assert diagnostic.attributes["desired_soak_fan_mode"] == "high"
+    assert not diagnostic.attributes["fan_mode_supported"]
+    assert "not in supported" in str(diagnostic.attributes["fan_mode_blocked_reason"])
+
+
+def test_missing_fan_modes_do_not_error_and_are_reported() -> None:
+    inputs = base_inputs(heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20)])
+    diagnostic = thermal_load_diagnostic(inputs.heat_loads[0], EnergyManagerSettings(), inputs)
+
+    assert diagnostic.attributes["supported_fan_modes"] == []
+    assert not diagnostic.attributes["fan_mode_supported"]
+    assert diagnostic.attributes["fan_mode_blocked_reason"] == "climate does not expose fan_modes"
 
 
 def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:

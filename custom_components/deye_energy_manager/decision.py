@@ -172,23 +172,51 @@ def thermal_hvac_mode(settings: EnergyManagerSettings, mode: str | None = None) 
     return "cool" if (mode or effective_thermal_mode(settings)) == "cooling" else "heat"
 
 
-def thermal_soak_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float] | None:
+def thermal_fan_modes(settings: EnergyManagerSettings, mode: str | None = None) -> tuple[str, str]:
+    """Return soak and normal fan modes for the active thermal mode."""
+
+    if (mode or effective_thermal_mode(settings)) == "cooling":
+        return settings.cool_soak_fan_mode, settings.cool_normal_fan_mode
+    return settings.heat_soak_fan_mode, settings.heat_normal_fan_mode
+
+
+def fan_mode_supported(load: HeatLoadState, fan_mode: str | None) -> bool:
+    """Return whether a climate load supports a desired fan mode."""
+
+    return bool(fan_mode and load.supported_fan_modes and fan_mode in load.supported_fan_modes)
+
+
+def fan_mode_blocked_reason(load: HeatLoadState, fan_mode: str | None) -> str | None:
+    """Return a diagnostic reason when a fan mode cannot be applied."""
+
+    if not fan_mode:
+        return "no fan mode selected"
+    if not load.supported_fan_modes:
+        return "climate does not expose fan_modes"
+    if fan_mode not in load.supported_fan_modes:
+        return f"fan mode {fan_mode} not in supported fan_modes"
+    return None
+
+
+def thermal_soak_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float, str] | None:
     """Return direct climate action for soaking one load."""
 
     mode = effective_thermal_mode(settings)
     if not load_supports_mode(load, mode):
         return None
     soak_target, _normal_target = thermal_targets(settings)
-    return thermal_hvac_mode(settings, mode), soak_target
+    soak_fan_mode, _normal_fan_mode = thermal_fan_modes(settings, mode)
+    return thermal_hvac_mode(settings, mode), soak_target, soak_fan_mode
 
 
-def thermal_shed_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float | None]:
+def thermal_shed_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float | None, str | None]:
     """Return direct climate action for shedding/normalising one load."""
 
     if not settings.return_to_normal_on_shed_enabled or load.load_type == "underfloor":
-        return "off", None
+        return "off", None, None
     _soak_target, normal_target = thermal_targets(settings)
-    return thermal_hvac_mode(settings), normal_target
+    _soak_fan_mode, normal_fan_mode = thermal_fan_modes(settings)
+    return thermal_hvac_mode(settings), normal_target, normal_fan_mode
 
 
 def load_supports_mode(load: HeatLoadState, mode: str) -> bool:
@@ -312,6 +340,7 @@ def thermal_load_diagnostic(
     needs = load_needs_soak(load, settings, mode)
     satisfied = load_is_satisfied(load, settings, mode)
     active = load_is_active(load, mode)
+    soak_fan_mode, normal_fan_mode = thermal_fan_modes(settings, mode)
     tapering = bool(load.power_w is not None and load.is_on and load.power_w <= load.taper_power_threshold_w)
     if blocked_reason == "manual_override":
         state = "manual_override"
@@ -352,6 +381,13 @@ def thermal_load_diagnostic(
         "normal_target_temperature": normal_target,
         "hvac_mode": load.hvac_mode,
         "hvac_action": load.hvac_action,
+        "current_fan_mode": load.fan_mode,
+        "supported_fan_modes": list(load.supported_fan_modes),
+        "desired_soak_fan_mode": soak_fan_mode,
+        "desired_normal_fan_mode": normal_fan_mode,
+        "fan_mode_supported": fan_mode_supported(load, soak_fan_mode) or fan_mode_supported(load, normal_fan_mode),
+        "fan_mode_action": "set_fan_mode" if chosen_add or chosen_shed else "none",
+        "fan_mode_blocked_reason": fan_mode_blocked_reason(load, soak_fan_mode if chosen_add else normal_fan_mode if chosen_shed else soak_fan_mode),
         "power_sensor": load.power_sensor,
         "power_w": load.power_w,
         "estimated_load_w": load.estimated_load_w,

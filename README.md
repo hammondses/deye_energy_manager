@@ -109,6 +109,15 @@ Load diagnostic entity IDs use the managed-load `slug`, not the display name. Th
 
 Legacy heat controls remain as compatibility aliases during the thermal cutover. If `heat_control_enabled` is on, `thermal_control_enabled` is migrated on; `heat_mode = auto_scripts` maps to `thermal_actuation_mode = scripts`, and `heat_mode = auto_direct` maps to `thermal_actuation_mode = direct`. New installs should use the thermal controls directly.
 
+Fan mode controls:
+
+- `select.deye_energy_manager_heat_soak_fan_mode`
+- `select.deye_energy_manager_heat_normal_fan_mode`
+- `select.deye_energy_manager_cool_soak_fan_mode`
+- `select.deye_energy_manager_cool_normal_fan_mode`
+
+Direct thermal control sets soak fan modes before ownership is marked on, and normal fan modes when returning a heat pump to comfort temperature. Fan mode service calls are skipped if the climate does not expose `fan_modes` or if the selected mode is not supported; the per-load diagnostics explain the skip reason.
+
 Cooldown protection:
 
 - `number.deye_energy_manager_min_thermal_run_minutes`

@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_STRATEGY,
     DEFAULT_THERMAL_ACTUATION_MODE,
     DEFAULT_THERMAL_MODE,
+    FAN_MODE_DEFAULTS,
     FEATURE_DEFAULTS,
     NUMBER_DEFAULTS,
     PROG_CAPACITY_ENTITIES,
@@ -105,7 +106,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def settings(self) -> EnergyManagerSettings:
         """Build settings from config entry options."""
 
-        options = {**FEATURE_DEFAULTS, **NUMBER_DEFAULTS, **self.entry.options}
+        options = {**FEATURE_DEFAULTS, **FAN_MODE_DEFAULTS, **NUMBER_DEFAULTS, **self.entry.options}
         return EnergyManagerSettings(
             enabled=bool(options["enabled"]),
             advisory_enabled=bool(options["advisory_enabled"]),
@@ -129,6 +130,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             thermal_mode=str(options.get("thermal_mode", DEFAULT_THERMAL_MODE)),
             thermal_actuation_mode=self._effective_thermal_actuation_mode(options),
             flexible_load_priority=str(options.get("flexible_load_priority", "battery_first")),
+            heat_soak_fan_mode=str(options["heat_soak_fan_mode"]),
+            heat_normal_fan_mode=str(options["heat_normal_fan_mode"]),
+            cool_soak_fan_mode=str(options["cool_soak_fan_mode"]),
+            cool_normal_fan_mode=str(options["cool_normal_fan_mode"]),
             heat_add_min_charge_w=float(options.get("heat_add_min_charge_w", options["thermal_start_min_charge_w"])),
             heat_add_min_soc=float(options.get("heat_add_min_soc", options["thermal_start_min_soc"])),
             heat_shed_discharge_w=float(options.get("heat_shed_discharge_w", options["thermal_shed_discharge_w"])),
@@ -259,9 +264,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                         power_w = None
             current_temp = None
             target_temp = None
+            fan_mode = None
+            supported_fan_modes: tuple[str, ...] = ()
             if climate_state is not None:
                 raw_current = climate_state.attributes.get("current_temperature")
                 raw_target = climate_state.attributes.get("temperature", load.get("target_temp"))
+                fan_mode = climate_state.attributes.get("fan_mode")
+                raw_fan_modes = climate_state.attributes.get("fan_modes") or ()
+                if isinstance(raw_fan_modes, (list, tuple)):
+                    supported_fan_modes = tuple(str(mode) for mode in raw_fan_modes)
                 try:
                     current_temp = float(raw_current) if raw_current is not None else None
                     target_temp = float(raw_target) if raw_target is not None else None
@@ -300,6 +311,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                     load_type=str(load.get("type", "other")),
                     hvac_mode=climate_state.state if climate_state is not None else None,
                     hvac_action=str(climate_state.attributes.get("hvac_action")) if climate_state is not None and climate_state.attributes.get("hvac_action") is not None else None,
+                    fan_mode=str(fan_mode) if fan_mode is not None else None,
+                    supported_fan_modes=supported_fan_modes,
                     power_w=power_w,
                     active_power_threshold_w=float(load.get("active_power_threshold_w", 800.0) or 800.0),
                     idle_power_threshold_w=float(load.get("idle_power_threshold_w", 150.0) or 150.0),
@@ -608,6 +621,32 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def _hvac_mode(self) -> str:
         return "cool" if self._thermal_mode() == "cooling" else "heat"
 
+    def _soak_fan_mode(self) -> str:
+        return self.settings.cool_soak_fan_mode if self._thermal_mode() == "cooling" else self.settings.heat_soak_fan_mode
+
+    def _normal_fan_mode(self) -> str:
+        return self.settings.cool_normal_fan_mode if self._thermal_mode() == "cooling" else self.settings.heat_normal_fan_mode
+
+    async def _call_climate_fan_mode(self, entity_id: str, fan_mode: str) -> str | None:
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE:
+            return "climate unavailable"
+        supported = state.attributes.get("fan_modes") or ()
+        if not isinstance(supported, (list, tuple)) or not supported:
+            return "climate does not expose fan_modes"
+        if fan_mode not in supported:
+            return f"fan mode {fan_mode} not in supported fan_modes"
+        if state.attributes.get("fan_mode") == fan_mode or self._last_written.get(f"{entity_id}:fan_mode") == fan_mode:
+            return None
+        await self.hass.services.async_call(
+            "climate",
+            "set_fan_mode",
+            {"entity_id": entity_id, "fan_mode": fan_mode},
+            blocking=False,
+        )
+        self._last_written[f"{entity_id}:fan_mode"] = fan_mode
+        return None
+
     async def _direct_add_one_heat_load(self, preferred_name: str | None = None) -> None:
         for load in sorted(self.heat_loads, key=lambda item: int(item.get("priority", 999))):
             if preferred_name and str(load.get("name", "")) != preferred_name:
@@ -639,12 +678,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 {"entity_id": climate, "temperature": self._soak_target()},
                 blocking=False,
             )
+            fan_blocked_reason = await self._call_climate_fan_mode(climate, self._soak_fan_mode())
             if ownership and self.hass.states.get(ownership):
                 await self.hass.services.async_call("input_boolean", "turn_on", {"entity_id": ownership}, blocking=False)
             now = dt_util.now()
             self._thermal_last_added_at[name] = now
-            self._thermal_last_action[name] = ("add", f"direct thermal add {self._hvac_mode()} {self._soak_target():.1f}")
-            self.last_control_action = f"direct added thermal load {load.get('name', climate)} at {self._soak_target():.1f}C"
+            fan_detail = f", fan {self._soak_fan_mode()}" if fan_blocked_reason is None else f", fan skipped: {fan_blocked_reason}"
+            self._thermal_last_action[name] = ("add", f"direct thermal add {self._hvac_mode()} {self._soak_target():.1f}{fan_detail}")
+            self.last_control_action = f"direct added thermal load {load.get('name', climate)} at {self._soak_target():.1f}C{fan_detail}"
             return
 
     async def _direct_shed_one_heat_load(self, preferred_name: str | None = None, nonessential_only: bool = False) -> None:
@@ -720,6 +761,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             {"entity_id": climate, "temperature": self._normal_target()},
             blocking=False,
         )
+        await self._call_climate_fan_mode(climate, self._normal_fan_mode())
 
     async def _direct_taper_bedroom_heat(self) -> None:
         for load in self.heat_loads:

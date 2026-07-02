@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.4.2
+
+- Add native heat/cool soak and normal fan-mode select entities.
+- Direct thermal control now sets supported climate fan modes during soak and normalise actions.
+- Fan mode calls are skipped when the climate does not expose `fan_modes` or the selected mode is unsupported.
+- Per-load diagnostics now include current fan mode, supported fan modes, desired fan modes, and fan-mode skip reasons.
+
 ## v0.4.1
 
 - Fix per-load thermal diagnostic sensor registration by using stable managed-load slugs.

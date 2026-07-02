@@ -14,6 +14,8 @@ from .const import (
     DEFAULT_THERMAL_ACTUATION_MODE,
     DEFAULT_THERMAL_MODE,
     DOMAIN,
+    FAN_MODE_DEFAULTS,
+    FAN_MODE_OPTIONS,
     FLEXIBLE_LOAD_PRIORITY_OPTIONS,
     HEAT_MODE_OPTIONS,
     STRATEGY_OPTIONS,
@@ -28,6 +30,10 @@ SELECTS = {
     "thermal_mode": ("Thermal mode", THERMAL_MODE_OPTIONS, DEFAULT_THERMAL_MODE),
     "thermal_actuation_mode": ("Thermal actuation mode", THERMAL_ACTUATION_MODE_OPTIONS, DEFAULT_THERMAL_ACTUATION_MODE),
     "flexible_load_priority": ("Flexible load priority", FLEXIBLE_LOAD_PRIORITY_OPTIONS, DEFAULT_FLEXIBLE_LOAD_PRIORITY),
+    "heat_soak_fan_mode": ("Heat soak fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["heat_soak_fan_mode"]),
+    "heat_normal_fan_mode": ("Heat normal fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["heat_normal_fan_mode"]),
+    "cool_soak_fan_mode": ("Cool soak fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["cool_soak_fan_mode"]),
+    "cool_normal_fan_mode": ("Cool normal fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["cool_normal_fan_mode"]),
 }
 
 

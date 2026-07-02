@@ -22,6 +22,13 @@ THERMAL_ACTUATION_MODE_OPTIONS = ["advisory", "scripts", "direct"]
 DEFAULT_THERMAL_ACTUATION_MODE = "advisory"
 FLEXIBLE_LOAD_PRIORITY_OPTIONS = ["battery_first", "thermal_before_ev", "ev_before_thermal", "export_before_loads"]
 DEFAULT_FLEXIBLE_LOAD_PRIORITY = "battery_first"
+FAN_MODE_OPTIONS = ["auto", "low", "medium", "high", "quiet"]
+FAN_MODE_DEFAULTS = {
+    "heat_soak_fan_mode": "high",
+    "heat_normal_fan_mode": "low",
+    "cool_soak_fan_mode": "high",
+    "cool_normal_fan_mode": "low",
+}
 
 DEFAULT_ENTITY_MAP = {
     "battery_soc": "sensor.deye_battery_soc",
