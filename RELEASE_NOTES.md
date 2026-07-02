@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.4.6
+
+- Fix `thermal_should_shed` so high battery discharge sets the shed-needed sensor even when no owned load is available.
+- Fix emergency shed so it is based on discharge threshold, not ownership flags.
+- Add `shed_blocked_no_owned_loads` expected action when shedding is needed but no eligible managed load can be acted on.
+- Improve high-discharge reason strings so they no longer report `battery charge 0W, forecast_full_override=False`.
+- Narrow unowned active-load detection to real `hvac_action`/power evidence while still allowing soak-like target/fan detection.
+
 ## v0.4.5
 
 - Add opt-in unowned managed-load shedding on battery discharge.

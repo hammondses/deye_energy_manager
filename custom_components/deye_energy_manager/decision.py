@@ -327,6 +327,10 @@ def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mo
     soak_fan_mode, _normal_fan_mode = thermal_fan_modes(settings, mode)
     fan_high_modes = {soak_fan_mode, "high", "max", "maximum", "powerful", "turbo"}
     fan_matches = bool(load.fan_mode and load.fan_mode.lower() in {str(item).lower() for item in fan_high_modes if item})
+    active_evidence = (
+        load.hvac_action in {"heating", "cooling"}
+        or (load.power_w is not None and load.power_w >= load.active_power_threshold_w)
+    )
     tolerance = settings.room_satisfied_delta_c
     if mode == "cooling":
         if load.hvac_mode != "cool":
@@ -335,6 +339,8 @@ def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mo
             return "cool target at soak setpoint"
         if fan_matches:
             return "cool fan mode looks like soak"
+        if active_evidence:
+            return "active cooling managed load"
         return None
     if load.hvac_mode != "heat":
         return None
@@ -342,6 +348,8 @@ def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mo
         return "heat target at soak setpoint"
     if fan_matches:
         return "heat fan mode looks like soak"
+    if active_evidence:
+        return "active heating managed load"
     if (
         load.current_temp is not None
         and load.target_temp is not None
@@ -718,31 +726,36 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_discharge_w >= thermal_shed_discharge_w
         and bool(unowned_candidates)
     )
+    discharge_shed_required = settings.enabled and battery_discharge_w >= thermal_shed_discharge_w
 
     thermal_should_shed = (
-        (inputs.any_solar_owned_heat_load_on or unowned_shed_allowed)
-        and (
-            battery_discharge_w >= thermal_shed_discharge_w
-            or (
-                not forecast_override
-                and soc_known
-                and soc < thermal_start_min_soc
-                and battery_charge_w < settings.thermal_keep_running_min_charge_w
+        discharge_shed_required
+        or (
+            inputs.any_solar_owned_heat_load_on
+            and (
+                (
+                    not forecast_override
+                    and soc_known
+                    and soc < thermal_start_min_soc
+                    and battery_charge_w < settings.thermal_keep_running_min_charge_w
+                )
+                or (
+                    pre_peak_preserve_required
+                    and not forecast_override
+                    and soc_known
+                    and soc < thermal_start_min_soc
+                )
+                or overnight_protection_required
             )
-            or (
-                pre_peak_preserve_required
-                and not forecast_override
-                and soc_known
-                and soc < thermal_start_min_soc
-            )
-            or overnight_protection_required
         )
     )
 
     thermal_should_emergency_shed = (
         settings.enabled
-        and inputs.any_solar_owned_heat_load_on
-        and battery_discharge_w >= settings.thermal_emergency_shed_w
+        and (
+            battery_discharge_w >= settings.thermal_emergency_shed_w
+            or battery_discharge_w >= settings.emergency_shed_discharge_w
+        )
     )
     pv_load_test_recommended = (
         settings.enabled
@@ -816,10 +829,13 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
 
     thermal_action = "none"
-    if thermal_should_emergency_shed:
+    shed_blocked_no_loads = thermal_should_shed and not inputs.any_solar_owned_heat_load_on and thermal_load_to_shed is None
+    if thermal_should_emergency_shed and not shed_blocked_no_loads:
         thermal_action = "emergency_shed_all"
     elif thermal_rotation_recommended:
         thermal_action = "rotate"
+    elif shed_blocked_no_loads:
+        thermal_action = "shed_blocked_no_owned_loads"
     elif thermal_should_shed:
         thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
     elif thermal_allowed and thermal_load_to_add:
@@ -878,8 +894,16 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if thermal_allowed and thermal_load_to_add:
         proposed_actions.append("add_one_heat_load")
     if thermal_should_shed:
-        proposed_actions.append("shed_one_heat_load")
-        if unowned_shed_allowed and not inputs.any_solar_owned_heat_load_on:
+        if thermal_load_to_shed:
+            proposed_actions.append("shed_one_heat_load")
+        if not thermal_load_to_shed:
+            shed_reason = (
+                f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W; "
+                "no owned thermal loads to shed"
+            )
+            if not settings.shed_unowned_managed_loads_on_battery_discharge:
+                shed_reason += "; unowned shedding disabled"
+        elif unowned_shed_allowed and not inputs.any_solar_owned_heat_load_on:
             shed_reason = (
                 f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= threshold {thermal_shed_discharge_w:.0f}W; "
                 f"normalising unowned managed load due to battery discharge"
@@ -896,7 +920,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             )
         else:
             reason_parts.append(f"thermal_should_shed=false: battery charge {battery_charge_w:.0f}W, forecast_full_override={forecast_override}")
-    if thermal_should_emergency_shed:
+    if thermal_should_emergency_shed and not shed_blocked_no_loads:
         proposed_actions.append("emergency_shed_all_heat_loads")
         reason_parts.append(
             f"thermal_should_emergency_shed=true: discharge {battery_discharge_w:.0f}W >= {settings.thermal_emergency_shed_w:.0f}W"
@@ -945,6 +969,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         expected_action = ev_action
     elif grid_charge_required:
         expected_action = "grid_charge_enable"
+    elif thermal_action == "shed_blocked_no_owned_loads":
+        expected_action = "shed_blocked_no_owned_loads"
     elif thermal_action != "none":
         expected_action = f"thermal_{thermal_action}"
 

@@ -610,6 +610,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if decision.thermal_should_emergency_shed:
             if mode == "direct" and self.settings.direct_climate_control_enabled:
                 await self._direct_shed_all_heat_loads("emergency battery discharge")
+                if decision.thermal_load_to_shed and self.settings.shed_unowned_managed_loads_on_battery_discharge:
+                    await self._direct_shed_one_heat_load(decision.thermal_load_to_shed)
             elif mode == "scripts":
                 await self.hass.services.async_call("script", "deye_energy_manager_emergency_shed_all_heat_loads", {}, blocking=False)
                 self.last_control_action = "requested thermal emergency shed all script"

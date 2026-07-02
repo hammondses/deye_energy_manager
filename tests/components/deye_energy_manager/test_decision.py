@@ -548,8 +548,11 @@ def test_discharge_without_owned_load_explains_unowned_shedding_disabled() -> No
         EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
     )
 
-    assert not decision.thermal_should_shed
-    assert "no owned thermal loads and unowned shedding disabled" in decision.reason
+    assert decision.thermal_should_shed
+    assert decision.thermal_load_to_normalise is None
+    assert decision.expected_action == "shed_blocked_no_owned_loads"
+    assert "no owned thermal loads to shed" in decision.reason
+    assert "unowned shedding disabled" in decision.reason
 
 
 def test_discharge_with_unowned_shedding_enabled_selects_soak_like_load() -> None:
@@ -609,8 +612,9 @@ def test_unowned_shedding_does_not_select_non_soak_like_managed_load() -> None:
         ),
     )
 
-    assert not decision.thermal_should_shed
+    assert decision.thermal_should_shed
     assert decision.thermal_load_to_normalise is None
+    assert decision.expected_action == "shed_blocked_no_owned_loads"
 
 
 def test_thermal_emergency_shed_threshold() -> None:
@@ -621,6 +625,24 @@ def test_thermal_emergency_shed_threshold() -> None:
 
     assert decision.thermal_should_emergency_shed
     assert decision.thermal_action == "emergency_shed_all"
+
+
+def test_high_discharge_sets_shed_and_emergency_without_owned_loads() -> None:
+    decision = decide(
+        base_inputs(now=dt(12), battery_power_w=4204, any_solar_owned_heat_load_on=False),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            thermal_shed_discharge_w=500,
+            thermal_emergency_shed_w=2500,
+            emergency_shed_discharge_w=4000,
+        ),
+    )
+
+    assert decision.thermal_should_shed
+    assert decision.thermal_should_emergency_shed
+    assert decision.expected_action == "shed_blocked_no_owned_loads"
+    assert "thermal_should_shed=true: battery discharging 4204W >= shed threshold 500W" in decision.reason
+    assert "battery charge 0W, forecast_full_override" not in decision.reason
 
 
 def test_cooling_rotation_uses_cool_soak_target() -> None:
