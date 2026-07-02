@@ -32,6 +32,8 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="tomorrow_forecast_kwh", name="Tomorrow forecast", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.forecast_tomorrow_kwh),
     DeyeSensorDescription(key="target_17_soc", name="Target 17 SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.target_17_soc),
     DeyeSensorDescription(key="current_reserve_soc", name="Current reserve SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.current_reserve_soc),
+    DeyeSensorDescription(key="soc_source", name="SOC source", value_fn=lambda d: d.soc_source),
+    DeyeSensorDescription(key="soc_age_minutes", name="SOC age minutes", value_fn=lambda d: d.soc_age_minutes),
     DeyeSensorDescription(key="grid_charge_target_soc", name="Grid charge target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.grid_charge_target_soc),
     DeyeSensorDescription(key="battery_charge_w", name="Battery charge", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.battery_charge_w),
     DeyeSensorDescription(key="battery_discharge_w", name="Battery discharge", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.battery_discharge_w),
@@ -92,6 +94,16 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, object] | None:
         if self.entity_description.key == "recent_proposed_actions":
             return {"entries": list(self.coordinator.recent_proposed_actions)}
+        if self.entity_description.key in {"expected_action", "last_decision_reason", "thermal_action_reason", "soc_source", "soc_age_minutes"}:
+            decision = self.coordinator.data
+            if decision is None:
+                return None
+            return {
+                "raw_soc": decision.raw_soc,
+                "resolved_soc": decision.resolved_soc,
+                "soc_source": decision.soc_source,
+                "soc_age_minutes": decision.soc_age_minutes,
+            }
         return None
 
 

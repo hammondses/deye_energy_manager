@@ -104,9 +104,35 @@ def hours_until_time(now: datetime, target: str) -> float:
     return (target_dt - now).total_seconds() / 3600.0
 
 
+def resolve_soc_value(
+    raw_soc: str | None,
+    fallback_soc: float | None,
+    fallback_updated: datetime | None,
+    now: datetime,
+    max_age_minutes: float,
+) -> tuple[float | None, str, float | None]:
+    """Resolve live/fallback SOC without converting unknown values to zero."""
+
+    try:
+        if raw_soc not in {None, "unknown", "unavailable", ""}:
+            return float(raw_soc), "live", 0.0
+    except (TypeError, ValueError):
+        pass
+
+    if fallback_soc is not None and fallback_updated is not None:
+        age_minutes = max((now - fallback_updated).total_seconds() / 60.0, 0.0)
+        if age_minutes <= max_age_minutes:
+            return fallback_soc, "last_known_good", age_minutes
+        return None, "unavailable", age_minutes
+
+    return None, "unavailable", None
+
+
 def projected_soc_at_08(inputs: EnergyManagerInputs, settings: EnergyManagerSettings) -> float | None:
     """Project SOC at 08:00 from current discharge rate."""
 
+    if inputs.battery_soc is None:
+        return None
     if not time_between(inputs.now, "21:00", "08:00"):
         return None
     battery_discharge_w = max(inputs.battery_power_w, 0.0)
@@ -454,7 +480,7 @@ def forecast_full_override_active(
     """Return whether forecast is strong enough to start thermal storage early."""
 
     remaining = inputs.forecast_remaining_today_kwh
-    if remaining is None:
+    if remaining is None or inputs.battery_soc is None:
         return False
     required_kwh = max(tier.target_17_soc - inputs.battery_soc, 0.0) / 100.0 * settings.battery_capacity_kwh
     return (
@@ -575,6 +601,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     reserve_soc = current_reserve_soc(inputs.now, tier)
     battery_charge_w = max(-inputs.battery_power_w, 0.0)
     battery_discharge_w = max(inputs.battery_power_w, 0.0)
+    soc_known = inputs.battery_soc is not None
+    soc = inputs.battery_soc
     cheap_window = time_between(inputs.now, "21:00", "07:00")
     control_blocked = not settings.enabled
     thermal_mode = effective_thermal_mode(settings, inputs.now, inputs.outdoor_temperature)
@@ -595,12 +623,13 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     pre_peak_preserve_required = (
         time_between(inputs.now, "13:00", "17:00")
-        and inputs.battery_soc < tier.target_17_soc
+        and soc_known
+        and soc < tier.target_17_soc
         and battery_charge_w < settings.heat_add_min_charge_w
     )
 
     battery_priority_satisfied = (
-        inputs.battery_soc >= tier.target_17_soc
+        (soc_known and soc >= tier.target_17_soc)
         or battery_charge_w >= settings.heat_add_min_charge_w
     )
 
@@ -617,7 +646,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and thermal_time_allowed
         and inputs.cooldown_passed
         and (
-            inputs.battery_soc >= thermal_start_min_soc
+            (soc_known and soc >= thermal_start_min_soc)
             or battery_charge_w >= thermal_start_min_charge_w
             or forecast_override
         )
@@ -643,13 +672,15 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             battery_discharge_w >= thermal_shed_discharge_w
             or (
                 not forecast_override
-                and inputs.battery_soc < thermal_start_min_soc
+                and soc_known
+                and soc < thermal_start_min_soc
                 and battery_charge_w < settings.thermal_keep_running_min_charge_w
             )
             or (
                 pre_peak_preserve_required
                 and not forecast_override
-                and inputs.battery_soc < thermal_start_min_soc
+                and soc_known
+                and soc < thermal_start_min_soc
             )
             or overnight_protection_required
         )
@@ -667,8 +698,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and time_between(inputs.now, "08:00", "16:30")
         and not inputs.any_solar_owned_heat_load_on
         and not pre_peak_preserve_required
-        and inputs.battery_soc >= settings.pv_load_test_min_soc
-        and inputs.battery_soc < tier.target_17_soc
+        and soc_known
+        and soc >= settings.pv_load_test_min_soc
+        and soc < tier.target_17_soc
         and battery_charge_w <= settings.pv_load_test_max_battery_charge_w
         and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
         and remaining_forecast_kwh >= settings.pv_load_test_min_remaining_forecast_kwh
@@ -725,7 +757,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and settings.grid_charge_control_enabled
         and time_between(inputs.now, "03:00", "07:00")
         and tier.grid_charge_target_soc > 0
-        and inputs.battery_soc < tier.grid_charge_target_soc - 1.0
+        and soc_known
+        and soc < tier.grid_charge_target_soc - 1.0
         and not (ev_grid_bypass_required or inputs.ev_latch_on)
     )
 
@@ -747,12 +780,18 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if control_blocked:
         reason_parts.append("manager disabled")
     reason_parts.append(f"forecast {tier.mode}")
+    if inputs.soc_source == "live" and soc_known:
+        reason_parts.append(f"SOC live: {soc:.0f}%")
+    elif inputs.soc_source == "last_known_good" and soc_known:
+        reason_parts.append(f"SOC last-known-good: {soc:.0f}%, age {inputs.soc_age_minutes or 0:.0f}m")
+    else:
+        reason_parts.append(f"SOC unavailable: raw {inputs.raw_soc or 'missing'} and fallback stale")
     if thermal_allowed:
         reason = "thermal_allowed=true"
-        if inputs.battery_soc >= thermal_start_min_soc:
-            reason += f": SOC {inputs.battery_soc:.1f} >= thermal_start_min_soc {thermal_start_min_soc:.0f}"
+        if soc_known and soc >= thermal_start_min_soc:
+            reason += f": SOC {soc:.1f} >= thermal_start_min_soc {thermal_start_min_soc:.0f}"
         elif forecast_override:
-            required_kwh = max(tier.target_17_soc - inputs.battery_soc, 0.0) / 100.0 * settings.battery_capacity_kwh
+            required_kwh = max(tier.target_17_soc - (soc or 0.0), 0.0) / 100.0 * settings.battery_capacity_kwh
             reason += (
                 f": forecast_full_override active; remaining {remaining_forecast_kwh:.1f}kWh > "
                 f"required {required_kwh:.1f}kWh + buffer {settings.forecast_full_confidence_buffer_kwh:.0f}kWh"
@@ -768,10 +807,16 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             reason = "thermal_allowed=false: thermal control disabled"
         elif battery_discharge_w >= thermal_shed_discharge_w:
             reason = f"thermal_allowed=false: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W"
+        elif not soc_known:
+            reason = (
+                "thermal_allowed=false: "
+                f"SOC unavailable, charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W, "
+                f"forecast_full_override={forecast_override}"
+            )
         else:
             reason = (
                 "thermal_allowed=false: "
-                f"SOC {inputs.battery_soc:.1f} < thermal_start_min_soc {thermal_start_min_soc:.0f}, "
+                f"SOC {soc:.1f} < thermal_start_min_soc {thermal_start_min_soc:.0f}, "
                 f"charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W, "
                 f"forecast_full_override={forecast_override}"
             )
@@ -805,7 +850,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             "pv_load_test_recommended=true: "
             f"expected PV {expected_pv_power_w:.0f}W >= {settings.pv_load_test_min_expected_power_w:.0f}W, "
             f"charge {battery_charge_w:.0f}W <= {settings.pv_load_test_max_battery_charge_w:.0f}W, "
-            f"SOC {inputs.battery_soc:.0f}% >= {settings.pv_load_test_min_soc:.0f}%"
+            f"SOC {soc:.0f}% >= {settings.pv_load_test_min_soc:.0f}%"
         )
     if thermal_rotation_recommended:
         proposed_actions.append("rotate_heat_load")
@@ -816,7 +861,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if grid_charge_required:
         proposed_actions.append("enable_grid_charge")
         reason_parts.append(
-            f"grid_charge_required=true: forecast {tier.mode}, SOC {inputs.battery_soc:.0f} < target {tier.grid_charge_target_soc:.0f}, EV mode off"
+            f"grid_charge_required=true: forecast {tier.mode}, SOC {soc:.0f} < target {tier.grid_charge_target_soc:.0f}, EV mode off"
         )
     if ev_grid_mode_required:
         proposed_actions.append("ev_grid_mode")
@@ -826,7 +871,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         reason_parts.append(ev_reason)
     if pre_peak_preserve_required:
         reason_parts.append(
-            f"pre_peak_preserve_required=true: SOC {inputs.battery_soc:.0f} < target_17 {tier.target_17_soc:.0f} "
+            f"pre_peak_preserve_required=true: SOC {soc:.0f} < target_17 {tier.target_17_soc:.0f} "
             f"and charge {battery_charge_w:.0f}W < {settings.heat_add_min_charge_w:.0f}W"
         )
 
@@ -847,6 +892,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         current_reserve_soc=reserve_soc,
         grid_charge_target_soc=tier.grid_charge_target_soc,
         battery_soc=inputs.battery_soc,
+        raw_soc=inputs.raw_soc,
+        resolved_soc=inputs.battery_soc,
+        soc_source=inputs.soc_source,
+        soc_age_minutes=inputs.soc_age_minutes,
         battery_power_w=inputs.battery_power_w,
         battery_charge_w=battery_charge_w,
         battery_discharge_w=battery_discharge_w,

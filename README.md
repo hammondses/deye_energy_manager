@@ -126,6 +126,52 @@ Cooldown protection:
 
 Emergency shed bypasses cooldowns.
 
+Last-known-good SOC fallback:
+
+- `primary_soc_entity`: defaults to `sensor.deye_battery_soc`
+- `fallback_soc_entity`: defaults to `input_number.deye_battery_soc_last_good`
+- `fallback_soc_timestamp_entity`: defaults to `input_datetime.deye_battery_soc_last_good_updated`
+- `number.deye_energy_manager_max_fallback_soc_age_minutes`: defaults to `360`
+
+The integration uses live local Deye SOC when numeric. If live SOC is `unknown`/`unavailable`, it can use the local helper value while the timestamp is fresh. It does not use cloud/Solarman SOC entities by default, and it never converts unknown SOC to `0`.
+
+Optional helper example:
+
+```yaml
+input_number:
+  deye_battery_soc_last_good:
+    name: Deye battery SOC last good
+    min: 0
+    max: 100
+    step: 0.1
+
+input_datetime:
+  deye_battery_soc_last_good_updated:
+    name: Deye battery SOC last good updated
+    has_date: true
+    has_time: true
+
+automation:
+  - alias: Deye battery SOC last-known-good
+    triggers:
+      - trigger: state
+        entity_id: sensor.deye_battery_soc
+    conditions:
+      - condition: template
+        value_template: "{{ states('sensor.deye_battery_soc') | is_number }}"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.deye_battery_soc_last_good
+        data:
+          value: "{{ states('sensor.deye_battery_soc') | float }}"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.deye_battery_soc_last_good_updated
+        data:
+          datetime: "{{ now().isoformat() }}"
+```
+
 Dry-run visibility:
 
 - `sensor.deye_energy_manager_recent_proposed_actions`

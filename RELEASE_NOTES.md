@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.4.4
+
+- Add last-known-good local Deye SOC fallback support.
+- Add `soc_source` and `soc_age_minutes` sensors plus SOC attributes on decision sensors.
+- Keep SOC unavailable as `None`; unknown/unavailable SOC is never converted to `0.0`.
+- Allow charge-rate based thermal add and discharge/emergency shed decisions even when SOC is unavailable.
+- Add README helper/automation guidance for local SOC cache helpers.
+
 ## v0.4.3
 
 - Fix coordinator crash caused by a stale `slugify` reference in per-load diagnostics.

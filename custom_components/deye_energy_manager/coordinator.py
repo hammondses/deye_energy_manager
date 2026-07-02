@@ -32,7 +32,7 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import decide, forecast_tier, slot_capacity_targets, thermal_load_diagnostics
+from .decision import decide, forecast_tier, resolve_soc_value, slot_capacity_targets, thermal_load_diagnostics
 from .migration import infer_load_slug
 from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -125,6 +125,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             forecast_full_override_enabled=bool(options["forecast_full_override_enabled"]),
             thermal_rotation_enabled=bool(options["thermal_rotation_enabled"]),
             auto_mode_month_fallback_enabled=bool(options["auto_mode_month_fallback_enabled"]),
+            max_fallback_soc_age_minutes=float(options["max_fallback_soc_age_minutes"]),
             strategy=str(options.get("strategy", DEFAULT_STRATEGY)),
             heat_mode=str(options.get("heat_mode", DEFAULT_HEAT_MODE)),
             thermal_mode=str(options.get("thermal_mode", DEFAULT_THERMAL_MODE)),
@@ -222,6 +223,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         entity_id = self.entity_map.get(key)
         if not entity_id:
             return None
+        return self._entity_float(entity_id)
+
+    def _entity_float(self, entity_id: str) -> float | None:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
             return None
@@ -230,12 +234,46 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         except (TypeError, ValueError):
             return None
 
+    def _entity_state_string(self, entity_id: str | None) -> str | None:
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return str(state.state) if state is not None else None
+
     def _state_datetime(self, key: str) -> datetime | None:
         entity_id = self.entity_map.get(key)
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None or state.state in UNAVAILABLE:
             return None
         return dt_util.parse_datetime(state.state)
+
+    def _entity_datetime(self, entity_id: str | None) -> datetime | None:
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return None
+        return dt_util.parse_datetime(state.state)
+
+    def _resolve_soc(self, now: datetime, settings: EnergyManagerSettings) -> tuple[float | None, str | None, str, float | None]:
+        primary_entity = self.entity_map.get("primary_soc_entity") or self.entity_map.get("battery_soc")
+        fallback_entity = self.entity_map.get("fallback_soc_entity")
+        fallback_timestamp_entity = self.entity_map.get("fallback_soc_timestamp_entity")
+        raw_soc = self._entity_state_string(primary_entity)
+        live_soc = self._entity_float(primary_entity) if primary_entity else None
+        if live_soc is not None:
+            return live_soc, raw_soc, "live", 0.0
+
+        fallback_soc = self._entity_float(fallback_entity) if fallback_entity else None
+        fallback_ts = self._entity_datetime(fallback_timestamp_entity)
+        if fallback_soc is not None and fallback_ts is not None:
+            if fallback_ts.tzinfo is None:
+                fallback_ts = dt_util.as_local(fallback_ts)
+        resolved_soc, soc_source, soc_age_minutes = resolve_soc_value(
+            raw_soc,
+            fallback_soc,
+            fallback_ts,
+            now,
+            settings.max_fallback_soc_age_minutes,
+        )
+        return resolved_soc, raw_soc, soc_source, soc_age_minutes
+
 
     def _any_owned_heat_on(self) -> bool:
         for load in self.heat_loads:
@@ -338,13 +376,17 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         essential_power = self._state_float("essential_power") or 0.0
         ev_power = self._state_float("ev_power")
         settings = self.settings
+        resolved_soc, raw_soc, soc_source, soc_age_minutes = self._resolve_soc(now, settings)
         if ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w:
             self.ev_low_since = self.ev_low_since or now
         else:
             self.ev_low_since = None
         inputs = EnergyManagerInputs(
             now=now,
-            battery_soc=self._state_float("battery_soc") or 0.0,
+            battery_soc=resolved_soc,
+            raw_soc=raw_soc,
+            soc_source=soc_source,
+            soc_age_minutes=soc_age_minutes,
             battery_power_w=self._state_float("battery_power") or 0.0,
             essential_power_w=essential_power,
             previous_essential_power_w=self.previous_essential_power_w,

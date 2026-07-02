@@ -32,6 +32,9 @@ FAN_MODE_DEFAULTS = {
 
 DEFAULT_ENTITY_MAP = {
     "battery_soc": "sensor.deye_battery_soc",
+    "primary_soc_entity": "sensor.deye_battery_soc",
+    "fallback_soc_entity": "input_number.deye_battery_soc_last_good",
+    "fallback_soc_timestamp_entity": "input_datetime.deye_battery_soc_last_good_updated",
     "battery_power": "sensor.deye_battery_power",
     "grid_ct_power": "sensor.deye_grid_ct_power",
     "essential_power": "sensor.deye_essential_power",
@@ -229,6 +232,7 @@ NUMBER_DEFAULTS = {
     "emergency_shed_discharge_w": 4000.0,
     "battery_capacity_kwh": 30.0,
     "overnight_bedroom_taper_target_temp": 18.0,
+    "max_fallback_soc_age_minutes": 360.0,
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]

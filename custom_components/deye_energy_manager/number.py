@@ -60,6 +60,7 @@ NUMBERS = (
     DeyeNumberDescription(key="emergency_shed_discharge_w", name="Emergency shed discharge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["emergency_shed_discharge_w"]),
     DeyeNumberDescription(key="battery_capacity_kwh", name="Battery capacity", native_min_value=1, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["battery_capacity_kwh"]),
     DeyeNumberDescription(key="overnight_bedroom_taper_target_temp", name="Overnight bedroom taper target", native_min_value=5, native_max_value=30, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["overnight_bedroom_taper_target_temp"]),
+    DeyeNumberDescription(key="max_fallback_soc_age_minutes", name="Max fallback SOC age", native_min_value=0, native_step=5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["max_fallback_soc_age_minutes"]),
 )
 
 

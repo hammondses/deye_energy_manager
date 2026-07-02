@@ -41,7 +41,7 @@ BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="ev_solar_charge_allowed", name="EV solar charge allowed", value_fn=lambda d: d.ev_solar_charge_allowed),
     DeyeBinarySensorDescription(key="ev_latch_active", name="EV latch active", value_fn=lambda d: d.ev_latch_active),
     DeyeBinarySensorDescription(key="pre_peak_preserve_required", name="Pre peak preserve required", value_fn=lambda d: d.pre_peak_preserve_required),
-    DeyeBinarySensorDescription(key="safe_to_discharge", name="Safe to discharge", value_fn=lambda d: d.battery_soc >= d.current_reserve_soc),
+    DeyeBinarySensorDescription(key="safe_to_discharge", name="Safe to discharge", value_fn=lambda d: d.battery_soc is not None and d.battery_soc >= d.current_reserve_soc),
     DeyeBinarySensorDescription(key="forecast_data_valid", name="Forecast data valid", value_fn=lambda d: d.forecast_data_valid),
     DeyeBinarySensorDescription(key="control_blocked", name="Control blocked", value_fn=lambda d: d.control_blocked),
 )

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
 from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import resolve_soc_value
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
@@ -842,6 +843,57 @@ def test_load_diagnostics_fail_safe_does_not_crash(monkeypatch) -> None:
 
     assert diagnostics["dining"].state == "unavailable"
     assert diagnostics["dining"].attributes["blocked_reason"] == "diagnostic_error"
+
+
+def test_soc_resolver_uses_live_numeric_soc() -> None:
+    soc, source, age = resolve_soc_value("100", 80, dt(11, 55), dt(12), 360)
+
+    assert soc == 100
+    assert source == "live"
+    assert age == 0
+
+
+def test_soc_resolver_uses_fresh_last_known_good() -> None:
+    soc, source, age = resolve_soc_value("unknown", 100, dt(11, 52), dt(12), 360)
+
+    assert soc == 100
+    assert source == "last_known_good"
+    assert age == 8
+
+
+def test_soc_resolver_rejects_stale_last_known_good() -> None:
+    soc, source, age = resolve_soc_value("unknown", 100, dt(5), dt(12), 360)
+
+    assert soc is None
+    assert source == "unavailable"
+    assert age == 420
+
+
+def test_unknown_soc_never_becomes_zero() -> None:
+    soc, source, _age = resolve_soc_value("unknown", None, None, dt(12), 360)
+
+    assert soc is None
+    assert source == "unavailable"
+
+
+def test_discharge_sheds_with_soc_unavailable() -> None:
+    decision = decide(
+        base_inputs(battery_soc=None, battery_power_w=700, any_solar_owned_heat_load_on=True),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
+    )
+
+    assert decision.thermal_should_shed
+    assert "SOC unavailable" in decision.reason
+
+
+def test_charge_rate_allows_thermal_with_soc_unavailable() -> None:
+    decision = decide(
+        base_inputs(now=dt(10), battery_soc=None, battery_power_w=-6500),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_start_min_charge_w=6000),
+    )
+
+    assert decision.thermal_allowed
+    assert decision.battery_soc is None
 
 
 def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:

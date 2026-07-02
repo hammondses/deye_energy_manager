@@ -27,6 +27,7 @@ class EnergyManagerSettings:
     forecast_full_override_enabled: bool = True
     thermal_rotation_enabled: bool = True
     auto_mode_month_fallback_enabled: bool = True
+    max_fallback_soc_age_minutes: float = 360.0
     strategy: str = "normal"
     heat_mode: str = "advisory"
     thermal_mode: str = "heating"
@@ -118,7 +119,10 @@ class EnergyManagerInputs:
     """State snapshot consumed by the decision engine."""
 
     now: datetime
-    battery_soc: float = 0.0
+    battery_soc: float | None = 0.0
+    raw_soc: str | None = None
+    soc_source: str = "live"
+    soc_age_minutes: float | None = None
     battery_power_w: float = 0.0
     essential_power_w: float = 0.0
     previous_essential_power_w: float | None = None
@@ -168,7 +172,11 @@ class EnergyManagerDecision:
     target_17_soc: float
     current_reserve_soc: float
     grid_charge_target_soc: float
-    battery_soc: float
+    battery_soc: float | None
+    raw_soc: str | None
+    resolved_soc: float | None
+    soc_source: str
+    soc_age_minutes: float | None
     battery_power_w: float
     battery_charge_w: float
     battery_discharge_w: float

@@ -234,7 +234,7 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
-    keys = ["forecast_safety_buffer_kwh", "min_soc_floor", "max_grid_charge_target_soc"]
+    keys = ["forecast_safety_buffer_kwh", "min_soc_floor", "max_grid_charge_target_soc", "max_fallback_soc_age_minutes"]
     return vol.Schema(
         {
             vol.Required("deye_control_enabled", default=defaults.get("deye_control_enabled", False)): selector.BooleanSelector(),

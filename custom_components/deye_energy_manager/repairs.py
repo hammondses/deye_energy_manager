@@ -53,11 +53,12 @@ def repair_issue_definitions(
     """Return active repair issues from plain settings and entity availability."""
 
     issues: dict[str, dict[str, str]] = {}
-    missing_deye = [
-        entity_map.get(key, "")
-        for key in ("battery_soc", "battery_power", "essential_power")
-        if entity_map.get(key) and not state_exists(entity_map[key])
+    required_deye_entities = [
+        entity_map.get("primary_soc_entity") or entity_map.get("battery_soc", ""),
+        entity_map.get("battery_power", ""),
+        entity_map.get("essential_power", ""),
     ]
+    missing_deye = [entity_id for entity_id in required_deye_entities if entity_id and not state_exists(entity_id)]
     if missing_deye:
         issues["missing_required_deye_entity"] = {
             "title": "Required Deye entity is unavailable",
