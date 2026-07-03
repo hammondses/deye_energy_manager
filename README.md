@@ -56,8 +56,31 @@ The integration now owns native thermal storage decisions and direct climate act
 - `number.deye_energy_manager_thermal_keep_running_min_charge`
 - `number.deye_energy_manager_thermal_shed_discharge`
 - `number.deye_energy_manager_thermal_emergency_shed`
+- `sensor.deye_energy_manager_thermal_policy_state`
+- `sensor.deye_energy_manager_solar_phase`
 
-Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer.
+Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer, but it is no longer treated as "heat now" during morning battery-priority periods. The policy state separates comfort, morning preheat, solar soak, normalise, shed, and emergency shed.
+
+Thermal policy states:
+
+- `battery_priority`
+- `comfort_only`
+- `morning_preheat`
+- `solar_soak_allowed`
+- `solar_soak_full_send`
+- `normalise`
+- `shed`
+- `emergency_shed`
+
+Solar phases:
+
+- `cheap_grid_night`: 21:00-06:55
+- `morning_battery_priority`: 06:55-11:30
+- `midday_balance`: 11:30-14:30
+- `afternoon_soak`: 14:30-17:00
+- `evening_preserve`: 17:00-21:00
+
+Morning low-SOC behavior is deliberately conservative. Forecast-full override may permit soak only when the battery is already above the forecast soak SOC, the phase is afternoon soak, or curtailment/tapering is likely. Strong PV forecast plus low SOC in the morning keeps the controller in `battery_priority` unless a room is genuinely below comfort/preheat limits.
 
 Actuation modes:
 
@@ -73,7 +96,36 @@ When `thermal_actuation_mode` is `direct` and direct climate control is enabled,
 - Cooling normalise: HVAC `cool`, target `cool_normal_target_temp`
 - Underfloor loads are heating-only and turn off on shed.
 
+Comfort and preheat are separate from solar soak:
+
+- Comfort heat uses `number.deye_energy_manager_heat_comfort_target_temp` and normal fan.
+- Morning preheat uses `number.deye_energy_manager_morning_preheat_target_temp` and `select.deye_energy_manager_morning_preheat_fan_mode`.
+- Solar soak uses soak targets and soak fan modes.
+- Morning preheat initially targets the configured bedroom load only.
+
 Script mode remains available as a compatibility fallback. Legacy `heat_*` entities remain as compatibility aliases, but `thermal_*` entities are preferred.
+
+## Paid-Time Grid Avoidance
+
+Paid-time reserve protection is enabled as a policy by default, while actual Deye writes still require `switch.deye_energy_manager_deye_control_enabled`.
+
+Native controls and diagnostics:
+
+- `switch.deye_energy_manager_paid_time_grid_avoidance_enabled`
+- `number.deye_energy_manager_paid_time_min_reserve_soc`
+- `number.deye_energy_manager_morning_paid_time_min_reserve_soc`
+- `number.deye_energy_manager_evening_paid_time_min_reserve_soc`
+- `number.deye_energy_manager_pre_peak_preserve_min_reserve_soc`
+- `number.deye_energy_manager_paid_grid_import_threshold_w`
+- `number.deye_energy_manager_solar_arrived_charge_threshold_w`
+- `number.deye_energy_manager_solar_arrived_pv_surplus_threshold_w`
+- `binary_sensor.deye_energy_manager_paid_grid_avoidance_required`
+- `binary_sensor.deye_energy_manager_forecast_drain_blocked`
+- `binary_sensor.deye_energy_manager_solar_arrived`
+- `sensor.deye_energy_manager_paid_time_reserve_reason`
+- `sensor.deye_energy_manager_active_reserve_target_soc`
+
+Before actual solar arrives, forecast alone cannot lower the active reserve below the paid-time floor. Once the battery is charging strongly or PV is covering the house, the active reserve target can relax back toward the forecast plan.
 
 ## EV Charging
 
@@ -105,6 +157,17 @@ The integration exposes one thermal status sensor per managed load, for example:
 
 Each status sensor includes attributes for room temperature, target, ownership, active/tapering state, cooldowns, chosen/not-chosen reasons, and last action timestamps.
 
+Managed-load status now includes a lease/owner view:
+
+- `owner`: `none`, `deye_energy_manager`, `manual`, `external`, or `unknown`
+- `lease_reason`: `solar_soak`, `morning_preheat`, `comfort_heat`, `battery_protection`, `manual_override`, or `none`
+- desired HVAC mode, temperature, and fan mode
+- normal HVAC mode, temperature, and fan mode
+- pending confirmation and manual override expiry
+- unowned shed candidate and reason
+
+The legacy ownership input booleans remain visible compatibility indicators, but they are no longer the only source of truth for diagnostics.
+
 Load diagnostic entity IDs use the managed-load `slug`, not the display name. The default slugs are `dining`, `bedroom`, `office`, `hallway`, and `underfloor`.
 
 Legacy heat controls remain as compatibility aliases during the thermal cutover. If `heat_control_enabled` is on, `thermal_control_enabled` is migrated on; `heat_mode = auto_scripts` maps to `thermal_actuation_mode = scripts`, and `heat_mode = auto_direct` maps to `thermal_actuation_mode = direct`. New installs should use the thermal controls directly.
@@ -130,7 +193,7 @@ Battery-discharge safety shedding:
 
 - `switch.deye_energy_manager_shed_unowned_managed_loads_on_battery_discharge`
 
-This is off by default. When enabled, battery discharge above the thermal shed threshold can normalise a configured managed heat pump that looks like it is still in a soak state even if its ownership boolean is off. It never acts on climate entities outside the configured managed-load list, and it does not include underfloor loads.
+This is off by default. When enabled, battery discharge above the thermal shed threshold can normalise a configured managed heat pump that looks like it is still in a soak state even if its ownership boolean is off. It never acts on climate entities outside the configured managed-load list. Each managed load has options for `allow_unowned_battery_shed` and `never_emergency_shed`; underfloor defaults to not being an unowned shed candidate.
 
 Last-known-good SOC fallback:
 

@@ -1064,3 +1064,141 @@ def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:
     assert changed
     assert options["thermal_control_enabled"]
     assert options["thermal_actuation_mode"] == "scripts"
+
+
+def test_morning_low_soc_strong_forecast_keeps_battery_priority() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(9),
+            battery_soc=54,
+            battery_power_w=-4900,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=19,
+            pv_power_now_w=7400,
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.forecast_full_override_active
+    assert not decision.thermal_allowed
+    assert decision.thermal_policy_state == "battery_priority"
+    assert "battery_priority" in decision.battery_priority_reason
+
+
+def test_morning_preheat_is_separate_from_solar_soak() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(8),
+            battery_soc=45,
+            battery_power_w=0,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=25,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bedroom heat pump",
+                    priority=1,
+                    is_on=False,
+                    current_temp=16,
+                    supports_heating=True,
+                    estimated_load_w=1800,
+                ),
+                HeatLoadState(name="Office heat pump", priority=2, current_temp=16, supports_heating=True),
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.morning_preheat_allowed
+    assert decision.thermal_action == "morning_preheat"
+    assert decision.thermal_load_to_add == "Bedroom heat pump"
+    assert decision.thermal_target_temperature == 21.0
+    assert decision.thermal_target_fan_mode == "low"
+    assert decision.thermal_lease_reason == "morning_preheat"
+
+
+def test_morning_preheat_blocked_by_soc_floor() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(8),
+            battery_soc=25,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=25,
+            heat_loads=[HeatLoadState(name="Bedroom heat pump", priority=1, current_temp=16, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert not decision.morning_preheat_allowed
+    assert "SOC 25" in decision.morning_preheat_reason
+
+
+def test_paid_grid_avoidance_raises_active_reserve_before_solar_arrives() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(7, 30),
+            battery_soc=35,
+            battery_power_w=300,
+            grid_power_w=800,
+            pv_power_now_w=100,
+            forecast_tomorrow_kwh=35,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert decision.paid_grid_avoidance_required
+    assert decision.forecast_drain_blocked
+    assert decision.active_reserve_target_soc >= 45
+    assert decision.expected_action == "paid_grid_avoidance"
+
+
+def test_paid_grid_avoidance_relaxes_after_solar_arrives() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(9),
+            battery_soc=55,
+            battery_power_w=-2500,
+            grid_power_w=0,
+            pv_power_now_w=5000,
+            forecast_tomorrow_kwh=35,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert decision.solar_arrived
+    assert not decision.paid_grid_avoidance_required
+
+
+def test_unowned_emergency_shed_candidate_ignores_never_emergency_shed_load() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_power_w=3000,
+            any_solar_owned_heat_load_on=False,
+            heat_loads=[
+                HeatLoadState(
+                    name="Dining",
+                    priority=1,
+                    is_on=True,
+                    hvac_mode="heat",
+                    target_temp=27,
+                    never_emergency_shed=True,
+                ),
+                HeatLoadState(
+                    name="Office",
+                    priority=2,
+                    is_on=True,
+                    hvac_mode="heat",
+                    target_temp=27,
+                ),
+            ],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            thermal_shed_discharge_w=500,
+            thermal_emergency_shed_w=2500,
+            shed_unowned_managed_loads_on_battery_discharge=True,
+        ),
+    )
+
+    assert decision.thermal_should_emergency_shed
+    assert decision.thermal_load_to_normalise == "Office"

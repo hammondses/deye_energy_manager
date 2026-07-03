@@ -20,6 +20,8 @@ BUTTONS = {
     "force_rotate_heat_load": "Force rotate heat load",
     "emergency_shed_all_heat_loads": "Emergency shed all heat loads",
     "clear_ev_latch": "Clear EV latch",
+    "force_ev_grid_bypass_start": "Force EV grid bypass start",
+    "force_ev_grid_bypass_restore": "Force EV grid bypass restore",
 }
 
 
@@ -36,6 +38,10 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
     async def async_press(self) -> None:
         if self._key == "clear_ev_latch":
             await self.coordinator.async_clear_ev_latch()
+        elif self._key == "force_ev_grid_bypass_start":
+            await self.coordinator.async_force_ev_grid_bypass(True)
+        elif self._key == "force_ev_grid_bypass_restore":
+            await self.coordinator.async_force_ev_grid_bypass(False)
         elif self._key == "apply_plan_now":
             await self.coordinator.async_apply_decision()
         elif self._key == "force_shed_one_heat_load":

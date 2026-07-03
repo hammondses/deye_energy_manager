@@ -94,6 +94,84 @@ def current_reserve_soc(now: datetime, tier: ForecastTier) -> float:
     return tier.peak_floor
 
 
+def solar_phase(now: datetime) -> str:
+    """Return the flexible-load phase for the day."""
+
+    if time_between(now, "21:00", "06:55"):
+        return "cheap_grid_night"
+    if time_between(now, "06:55", "11:30"):
+        return "morning_battery_priority"
+    if time_between(now, "11:30", "14:30"):
+        return "midday_balance"
+    if time_between(now, "14:30", "17:00"):
+        return "afternoon_soak"
+    return "evening_preserve"
+
+
+def paid_time_floor_soc(now: datetime, settings: EnergyManagerSettings) -> float:
+    """Return the paid-time minimum reserve floor for the current phase."""
+
+    phase = solar_phase(now)
+    if phase == "morning_battery_priority":
+        return settings.morning_paid_time_min_reserve_soc
+    if phase == "evening_preserve":
+        return settings.evening_paid_time_min_reserve_soc
+    if phase in {"midday_balance", "afternoon_soak"}:
+        return settings.paid_time_min_reserve_soc
+    return settings.min_soc_floor
+
+
+def solar_arrived(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    battery_charge_w: float,
+) -> tuple[bool, str]:
+    """Return whether real solar has arrived, not just forecast solar."""
+
+    pv_now = inputs.pv_power_now_w or 0.0
+    grid_import_w = max(inputs.grid_power_w, 0.0)
+    pv_surplus_w = pv_now - inputs.essential_power_w
+    if battery_charge_w >= settings.solar_arrived_charge_threshold_w:
+        return True, f"battery charging {battery_charge_w:.0f}W >= {settings.solar_arrived_charge_threshold_w:.0f}W"
+    if pv_surplus_w >= settings.solar_arrived_pv_surplus_threshold_w:
+        return True, f"PV surplus {pv_surplus_w:.0f}W >= {settings.solar_arrived_pv_surplus_threshold_w:.0f}W"
+    if grid_import_w <= settings.paid_grid_import_threshold_w and battery_charge_w > 0:
+        return True, f"grid import {grid_import_w:.0f}W low and battery charging"
+    return False, "PV has not arrived strongly enough"
+
+
+def paid_grid_avoidance_state(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    reserve_soc: float,
+    battery_charge_w: float,
+) -> tuple[bool, str, float, float, bool, str, bool]:
+    """Return paid-grid avoidance requirement and reserve target details."""
+
+    floor = paid_time_floor_soc(inputs.now, settings)
+    arrived, arrived_reason = solar_arrived(inputs, settings, battery_charge_w)
+    paid_import_w = max(inputs.grid_power_w, 0.0)
+    cheap_window = time_between(inputs.now, "21:00", "07:00")
+    forecast_drain_blocked = False
+    required = False
+    reason = "paid grid avoidance not required"
+    if settings.paid_time_grid_avoidance_enabled and not cheap_window:
+        near_floor = inputs.battery_soc is not None and inputs.battery_soc <= floor + 2.0
+        importing = paid_import_w >= settings.paid_grid_import_threshold_w
+        morning_before_solar = solar_phase(inputs.now) == "morning_battery_priority" and not arrived
+        forecast_drain_blocked = not arrived and (morning_before_solar or reserve_soc < floor)
+        required = near_floor and (importing or morning_before_solar)
+        if required:
+            reason = (
+                f"paid_grid_avoidance_required: SOC {inputs.battery_soc:.0f}% near floor {floor:.0f}%, paid time, "
+                f"{'solar not arrived' if not arrived else arrived_reason}"
+            ) if inputs.battery_soc is not None else "paid_grid_avoidance_required: SOC unavailable during paid time"
+        elif arrived:
+            reason = f"paid grid avoidance not required: solar arrived: {arrived_reason}"
+    target = max(reserve_soc, floor) if required or forecast_drain_blocked else reserve_soc
+    return required, reason, floor, target, arrived, arrived_reason, forecast_drain_blocked
+
+
 def hours_until_time(now: datetime, target: str) -> float:
     """Return local hours until the next occurrence of a target time."""
 
@@ -312,9 +390,43 @@ def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings
         load
         for load in loads
         if load.blocked_until is None
+        and load.owner not in {"manual", "external"}
+        and load.manual_override_until is None
         and not load.solar_owned
         and not load.is_on
         and load_needs_soak(load, settings, mode)
+    ]
+
+
+def comfort_heat_candidates(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+    """Return loads cold enough for comfort heating."""
+
+    return [
+        load
+        for load in loads
+        if load.enabled
+        and load.supports_heating
+        and load.blocked_until is None
+        and load.owner not in {"manual", "external"}
+        and load.manual_override_until is None
+        and load.current_temp is not None
+        and load.current_temp < settings.comfort_min_room_temp
+    ]
+
+
+def morning_preheat_candidates(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+    """Return bedroom loads cold enough for morning preheat."""
+
+    return [
+        load
+        for load in loads
+        if load.enabled
+        and load.supports_heating
+        and "bedroom" in f"{load.name} {load.slug or ''} {load.climate_entity or ''}".lower()
+        and load.owner not in {"manual", "external"}
+        and load.manual_override_until is None
+        and load.current_temp is not None
+        and load.current_temp < settings.morning_preheat_min_room_temp
     ]
 
 
@@ -322,7 +434,7 @@ def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mo
     """Return why an unowned configured load looks like a solar-soak load."""
 
     mode = mode or effective_thermal_mode(settings)
-    if load.solar_owned or not load.enabled or load.load_type == "underfloor" or not load_supports_mode(load, mode):
+    if load.solar_owned or not load.enabled or not load.allow_unowned_battery_shed or load.load_type == "underfloor" or not load_supports_mode(load, mode):
         return None
     soak_fan_mode, _normal_fan_mode = thermal_fan_modes(settings, mode)
     fan_high_modes = {soak_fan_mode, "high", "max", "maximum", "powerful", "turbo"}
@@ -468,6 +580,22 @@ def thermal_load_diagnostic(
         "estimated_load_w": load.estimated_load_w,
         "active_state": "active" if active else "idle",
         "owned_by_manager": load.solar_owned,
+        "owner": load.owner,
+        "lease_reason": load.lease_reason,
+        "lease_until": load.lease_until.isoformat() if load.lease_until else None,
+        "manual_override": bool(load.manual_override_until and load.manual_override_until > inputs.now),
+        "manual_override_until": load.manual_override_until.isoformat() if load.manual_override_until else None,
+        "pending_confirmation": bool(load.pending_confirmation_until and load.pending_confirmation_until > inputs.now),
+        "pending_confirmation_until": load.pending_confirmation_until.isoformat() if load.pending_confirmation_until else None,
+        "desired_hvac_mode": load.desired_hvac_mode,
+        "desired_temperature": load.desired_temperature,
+        "desired_fan_mode": load.desired_fan_mode,
+        "normal_temperature": load.normal_temperature,
+        "normal_fan_mode": load.normal_fan_mode,
+        "external_change_detected": load.external_change_detected,
+        "shed_candidate": chosen_shed,
+        "allow_unowned_battery_shed": load.allow_unowned_battery_shed,
+        "never_emergency_shed": load.never_emergency_shed,
         "unowned_shed_candidate": bool(unowned_reason),
         "unowned_shed_reason": unowned_reason,
         "needs_soak": needs,
@@ -662,6 +790,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     thermal_start_min_soc = settings.thermal_start_min_soc
     thermal_start_min_charge_w = settings.thermal_start_min_charge_w
     thermal_shed_discharge_w = settings.thermal_shed_discharge_w
+    phase = solar_phase(inputs.now)
     forecast_override = forecast_full_override_active(inputs, settings, tier)
     expected_pv_power_w = max(
         inputs.pv_power_now_w or 0.0,
@@ -671,6 +800,16 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     remaining_forecast_kwh = inputs.forecast_remaining_today_kwh
     if remaining_forecast_kwh is None:
         remaining_forecast_kwh = max((inputs.forecast_tomorrow_kwh or 0.0) / 3.0, 0.0)
+
+    (
+        paid_grid_avoidance_required,
+        paid_time_reserve_reason,
+        paid_floor,
+        active_reserve_target_soc,
+        solar_has_arrived,
+        solar_arrived_reason,
+        forecast_drain_blocked,
+    ) = paid_grid_avoidance_state(inputs, settings, reserve_soc, battery_charge_w)
 
     pre_peak_preserve_required = (
         time_between(inputs.now, "13:00", "17:00")
@@ -683,6 +822,95 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         (soc_known and soc >= tier.target_17_soc)
         or battery_charge_w >= settings.heat_add_min_charge_w
     )
+    curtailment_likely = (
+        (soc_known and soc >= settings.full_soak_min_soc)
+        or (
+            battery_charge_w <= settings.pv_load_test_max_battery_charge_w
+            and expected_pv_power_w - inputs.essential_power_w >= settings.solar_arrived_pv_surplus_threshold_w
+        )
+    )
+    passive_warming_likely = (
+        settings.passive_warming_guard_enabled
+        and bool(inputs.heat_loads)
+        and not inputs.any_solar_owned_heat_load_on
+        and phase in {"morning_battery_priority", "midday_balance"}
+        and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
+        and soc_known
+        and soc < settings.full_soak_min_soc
+        and all(
+            load.current_temp is None or load.current_temp >= settings.heat_comfort_target_temp
+            for load in inputs.heat_loads
+            if load.enabled and load.supports_heating
+        )
+    )
+    passive_warming_reason = (
+        f"passive warming likely: expected PV {expected_pv_power_w:.0f}W and rooms at/above comfort while SOC {soc:.0f}% < {settings.full_soak_min_soc:.0f}%"
+        if passive_warming_likely and soc_known
+        else "passive warming not limiting"
+    )
+
+    forecast_soak_allowed = (
+        forecast_override
+        and (
+            (soc_known and soc >= settings.forecast_soak_min_soc)
+            or phase == "afternoon_soak"
+            or curtailment_likely
+        )
+    )
+    solar_soak_allowed = (
+        not paid_grid_avoidance_required
+        and not passive_warming_likely
+        and (
+            (soc_known and soc >= thermal_start_min_soc)
+            or battery_charge_w >= thermal_start_min_charge_w
+            or forecast_soak_allowed
+        )
+    )
+    full_send_soak_allowed = (
+        not paid_grid_avoidance_required
+        and not passive_warming_likely
+        and (
+            (soc_known and soc >= settings.full_soak_min_soc)
+            or curtailment_likely
+            or (phase == "afternoon_soak" and forecast_override)
+        )
+    )
+
+    comfort_candidates = sorted(comfort_heat_candidates(inputs.heat_loads, settings), key=lambda load: load.priority)
+    comfort_heat_allowed = thermal_mode == "heating" and bool(comfort_candidates) and not paid_grid_avoidance_required
+
+    preheat_window = time_between(
+        inputs.now,
+        f"{int(settings.morning_preheat_start_hour):02d}:{int((settings.morning_preheat_start_hour % 1) * 60):02d}",
+        f"{int(settings.morning_preheat_end_hour):02d}:{int((settings.morning_preheat_end_hour % 1) * 60):02d}",
+    )
+    preheat_candidates = sorted(morning_preheat_candidates(inputs.heat_loads, settings), key=lambda load: load.priority)
+    preheat_energy_kwh = (preheat_candidates[0].estimated_load_w / 1000.0 * max(settings.morning_preheat_end_hour - settings.morning_preheat_start_hour, 1.0)) if preheat_candidates else 0.0
+    required_battery_energy_kwh = max(tier.target_17_soc - (soc or 0.0), 0.0) / 100.0 * settings.battery_capacity_kwh if soc_known else settings.battery_capacity_kwh
+    morning_preheat_allowed = (
+        settings.enabled
+        and settings.morning_preheat_enabled
+        and thermal_control_enabled
+        and preheat_window
+        and bool(preheat_candidates)
+        and soc_known
+        and soc >= settings.morning_preheat_min_soc
+        and max(inputs.grid_power_w, 0.0) <= settings.morning_preheat_max_grid_import_w
+        and remaining_forecast_kwh >= required_battery_energy_kwh + preheat_energy_kwh + settings.morning_preheat_forecast_buffer_kwh
+        and battery_discharge_w < thermal_shed_discharge_w
+    )
+    if not preheat_window:
+        morning_preheat_reason = "morning_preheat_blocked: outside preheat window"
+    elif not preheat_candidates:
+        morning_preheat_reason = "morning_preheat_blocked: bedroom already comfortable"
+    elif not soc_known or soc < settings.morning_preheat_min_soc:
+        morning_preheat_reason = f"morning_preheat_blocked: SOC {soc if soc is not None else 'unavailable'} < {settings.morning_preheat_min_soc:.0f}%"
+    elif max(inputs.grid_power_w, 0.0) > settings.morning_preheat_max_grid_import_w:
+        morning_preheat_reason = f"morning_preheat_blocked: grid import {max(inputs.grid_power_w, 0.0):.0f}W > {settings.morning_preheat_max_grid_import_w:.0f}W"
+    elif remaining_forecast_kwh < required_battery_energy_kwh + preheat_energy_kwh + settings.morning_preheat_forecast_buffer_kwh:
+        morning_preheat_reason = "morning_preheat_blocked: forecast recovery insufficient"
+    else:
+        morning_preheat_reason = f"morning_preheat_allowed: {preheat_candidates[0].name} {preheat_candidates[0].current_temp:.1f}C < {settings.morning_preheat_min_room_temp:.1f}C, SOC {soc:.0f}%, forecast recovery OK"
 
     thermal_time_allowed = time_between(inputs.now, "08:00", "17:00") or (
         tier.mode in {"excellent", "good"}
@@ -696,11 +924,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and inputs.heat_available
         and thermal_time_allowed
         and inputs.cooldown_passed
-        and (
-            (soc_known and soc >= thermal_start_min_soc)
-            or battery_charge_w >= thermal_start_min_charge_w
-            or forecast_override
-        )
+        and solar_soak_allowed
         and battery_discharge_w < thermal_shed_discharge_w
     )
 
@@ -757,6 +981,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             or battery_discharge_w >= settings.emergency_shed_discharge_w
         )
     )
+    emergency_unowned_candidates = [load for load in unowned_candidates if not load.never_emergency_shed]
     pv_load_test_recommended = (
         settings.enabled
         and settings.export_limited_mode_enabled
@@ -790,12 +1015,25 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ],
         key=lambda load: load.priority,
     )
-    thermal_load_to_shed = shed_candidates[0].name if shed_candidates else unowned_candidates[0].name if unowned_shed_allowed else None
-    thermal_load_to_add = add_candidates[0].name if add_candidates else None
+    thermal_load_to_shed = (
+        shed_candidates[0].name
+        if shed_candidates
+        else emergency_unowned_candidates[0].name
+        if thermal_should_emergency_shed and emergency_unowned_candidates
+        else unowned_candidates[0].name
+        if unowned_shed_allowed
+        else None
+    )
+    morning_preheat_load_to_add = preheat_candidates[0].name if morning_preheat_allowed else None
+    comfort_load_to_add = comfort_candidates[0].name if comfort_heat_allowed else None
+    solar_soak_load_to_add = add_candidates[0].name if add_candidates else None
+    thermal_load_to_add = morning_preheat_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
     thermal_rotation_recommended = (
         thermal_allowed
         and settings.thermal_rotation_enabled
         and inputs.heat_available
+        and bool(shed_candidates)
+        and bool(add_candidates)
         and thermal_load_to_shed is not None
         and thermal_load_to_add is not None
         and cooldown_block_reason(shed_candidates[0], settings, inputs.now, "rotate") is None
@@ -838,10 +1076,52 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_action = "shed_blocked_no_owned_loads"
     elif thermal_should_shed:
         thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
+    elif morning_preheat_allowed and thermal_load_to_add:
+        thermal_action = "morning_preheat"
+    elif comfort_heat_allowed and thermal_load_to_add:
+        thermal_action = "comfort_heat"
     elif thermal_allowed and thermal_load_to_add:
         thermal_action = "add_one"
     elif thermal_allowed:
         thermal_action = "hold"
+
+    thermal_policy_state = "battery_priority"
+    if thermal_should_emergency_shed:
+        thermal_policy_state = "emergency_shed"
+    elif thermal_should_shed:
+        thermal_policy_state = "shed"
+    elif paid_grid_avoidance_required:
+        thermal_policy_state = "battery_priority"
+    elif morning_preheat_allowed:
+        thermal_policy_state = "morning_preheat"
+    elif comfort_heat_allowed:
+        thermal_policy_state = "comfort_only"
+    elif full_send_soak_allowed and thermal_allowed:
+        thermal_policy_state = "solar_soak_full_send"
+    elif thermal_allowed:
+        thermal_policy_state = "solar_soak_allowed"
+    elif inputs.any_solar_owned_heat_load_on:
+        thermal_policy_state = "normalise"
+
+    target_temperature: float | None = None
+    target_fan_mode: str | None = None
+    target_hvac_mode: str | None = None
+    lease_reason = "none"
+    if thermal_action == "morning_preheat":
+        target_temperature = settings.morning_preheat_target_temp
+        target_fan_mode = settings.morning_preheat_fan_mode
+        target_hvac_mode = "heat"
+        lease_reason = "morning_preheat"
+    elif thermal_action == "comfort_heat":
+        target_temperature = settings.heat_comfort_target_temp
+        target_fan_mode = settings.heat_normal_fan_mode
+        target_hvac_mode = "heat"
+        lease_reason = "comfort_heat"
+    elif thermal_action == "add_one":
+        target_temperature = settings.cool_soak_target_temp if thermal_mode == "cooling" else settings.heat_soak_target_temp
+        target_fan_mode = settings.cool_soak_fan_mode if thermal_mode == "cooling" else settings.heat_soak_fan_mode
+        target_hvac_mode = "cool" if thermal_mode == "cooling" else "heat"
+        lease_reason = "solar_soak"
 
     proposed_actions: list[str] = []
     reason_parts = []
@@ -849,6 +1129,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if control_blocked:
         reason_parts.append("manager disabled")
     reason_parts.append(f"forecast {tier.mode}")
+    reason_parts.append(f"solar_phase={phase}")
+    reason_parts.append(f"thermal_policy_state={thermal_policy_state}")
     if inputs.soc_source == "live" and soc_known:
         reason_parts.append(f"SOC live: {soc:.0f}%")
     elif inputs.soc_source == "last_known_good" and soc_known:
@@ -876,6 +1158,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             reason = "thermal_allowed=false: thermal control disabled"
         elif battery_discharge_w >= thermal_shed_discharge_w:
             reason = f"thermal_allowed=false: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W"
+        elif paid_grid_avoidance_required:
+            reason = "thermal_allowed=false: paid grid avoidance required"
+        elif passive_warming_likely:
+            reason = "thermal_allowed=false: passive warming likely and battery priority active"
         elif not soc_known:
             reason = (
                 "thermal_allowed=false: "
@@ -893,6 +1179,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_reason_parts.append(reason)
     if thermal_allowed and thermal_load_to_add:
         proposed_actions.append("add_one_heat_load")
+    if morning_preheat_allowed and thermal_load_to_add:
+        proposed_actions.append("morning_preheat")
+        reason_parts.append(morning_preheat_reason)
+        thermal_reason_parts.append(morning_preheat_reason)
+    elif comfort_heat_allowed and thermal_load_to_add:
+        proposed_actions.append("comfort_heat")
+        reason_parts.append(f"comfort_only: {thermal_load_to_add} below {settings.comfort_min_room_temp:.1f}C")
+        thermal_reason_parts.append(f"comfort_only: {thermal_load_to_add} below {settings.comfort_min_room_temp:.1f}C")
     if thermal_should_shed:
         if thermal_load_to_shed:
             proposed_actions.append("shed_one_heat_load")
@@ -952,6 +1246,13 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         reason_parts.append(
             f"grid_charge_required=true: forecast {tier.mode}, SOC {soc:.0f} < target {tier.grid_charge_target_soc:.0f}, EV mode off"
         )
+    if paid_grid_avoidance_required:
+        proposed_actions.append("paid_grid_avoidance")
+        reason_parts.append(paid_time_reserve_reason)
+    if forecast_drain_blocked:
+        reason_parts.append(f"forecast drain blocked: paid-time reserve floor {paid_floor:.0f}%")
+    if passive_warming_likely:
+        reason_parts.append(passive_warming_reason)
     if ev_grid_mode_required:
         proposed_actions.append("ev_grid_mode")
         reason_parts.append("ev_grid_mode_required=true")
@@ -965,12 +1266,18 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         )
 
     expected_action = "none"
-    if ev_action != "none":
+    if thermal_action == "shed_blocked_no_owned_loads":
+        expected_action = "shed_blocked_no_owned_loads"
+    elif thermal_should_emergency_shed:
+        expected_action = f"thermal_{thermal_action}"
+    elif thermal_should_shed and thermal_action != "none":
+        expected_action = f"thermal_{thermal_action}"
+    elif ev_action != "none":
         expected_action = ev_action
+    elif paid_grid_avoidance_required:
+        expected_action = "paid_grid_avoidance"
     elif grid_charge_required:
         expected_action = "grid_charge_enable"
-    elif thermal_action == "shed_blocked_no_owned_loads":
-        expected_action = "shed_blocked_no_owned_loads"
     elif thermal_action != "none":
         expected_action = f"thermal_{thermal_action}"
 
@@ -1001,6 +1308,30 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_should_return_to_normal=thermal_should_return_to_normal,
         thermal_action=thermal_action,
         thermal_action_reason="; ".join(thermal_reason_parts),
+        thermal_policy_state=thermal_policy_state,
+        solar_phase=phase,
+        passive_warming_likely=passive_warming_likely,
+        passive_warming_reason=passive_warming_reason,
+        battery_priority_reason=paid_time_reserve_reason if paid_grid_avoidance_required else f"battery_priority: SOC {soc:.0f}% < {settings.morning_battery_priority_soc:.0f}% during {phase}; comfort only" if soc_known and phase == "morning_battery_priority" and soc < settings.morning_battery_priority_soc else "battery priority satisfied or not limiting",
+        comfort_heat_allowed=comfort_heat_allowed,
+        solar_soak_allowed=solar_soak_allowed,
+        full_send_soak_allowed=full_send_soak_allowed,
+        morning_preheat_allowed=morning_preheat_allowed,
+        morning_preheat_reason=morning_preheat_reason,
+        morning_preheat_load_to_add=morning_preheat_load_to_add,
+        paid_grid_avoidance_required=paid_grid_avoidance_required,
+        paid_time_reserve_reason=paid_time_reserve_reason,
+        paid_time_floor_soc=paid_floor,
+        active_reserve_target_soc=active_reserve_target_soc,
+        active_reserve_current_soc=reserve_soc,
+        paid_grid_import_w=max(inputs.grid_power_w, 0.0),
+        solar_arrived=solar_has_arrived,
+        solar_arrived_reason=solar_arrived_reason,
+        forecast_drain_blocked=forecast_drain_blocked,
+        thermal_target_temperature=target_temperature,
+        thermal_target_fan_mode=target_fan_mode,
+        thermal_target_hvac_mode=target_hvac_mode,
+        thermal_lease_reason=lease_reason,
         effective_thermal_mode=thermal_mode,
         auto_mode_reason=auto_reason,
         thermal_load_to_add=thermal_load_to_add,

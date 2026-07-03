@@ -28,6 +28,7 @@ FAN_MODE_DEFAULTS = {
     "heat_normal_fan_mode": "low",
     "cool_soak_fan_mode": "high",
     "cool_normal_fan_mode": "low",
+    "morning_preheat_fan_mode": "low",
 }
 
 DEFAULT_ENTITY_MAP = {
@@ -73,6 +74,8 @@ DEFAULT_HEAT_LOADS = [
         "active_power_threshold_w": 800,
         "idle_power_threshold_w": 150,
         "taper_power_threshold_w": 400,
+        "allow_unowned_battery_shed": True,
+        "never_emergency_shed": False,
     },
     {
         "slug": "underfloor",
@@ -90,6 +93,8 @@ DEFAULT_HEAT_LOADS = [
         "active_power_threshold_w": 200,
         "idle_power_threshold_w": 50,
         "taper_power_threshold_w": 100,
+        "allow_unowned_battery_shed": False,
+        "never_emergency_shed": False,
     },
     {
         "slug": "office",
@@ -107,6 +112,8 @@ DEFAULT_HEAT_LOADS = [
         "active_power_threshold_w": 800,
         "idle_power_threshold_w": 150,
         "taper_power_threshold_w": 400,
+        "allow_unowned_battery_shed": True,
+        "never_emergency_shed": False,
     },
     {
         "slug": "bedroom",
@@ -124,6 +131,8 @@ DEFAULT_HEAT_LOADS = [
         "active_power_threshold_w": 800,
         "idle_power_threshold_w": 150,
         "taper_power_threshold_w": 400,
+        "allow_unowned_battery_shed": True,
+        "never_emergency_shed": False,
     },
     {
         "slug": "hallway",
@@ -141,6 +150,8 @@ DEFAULT_HEAT_LOADS = [
         "active_power_threshold_w": 800,
         "idle_power_threshold_w": 150,
         "taper_power_threshold_w": 400,
+        "allow_unowned_battery_shed": True,
+        "never_emergency_shed": False,
     },
 ]
 
@@ -189,6 +200,9 @@ FEATURE_DEFAULTS = {
     "forecast_full_override_enabled": True,
     "thermal_rotation_enabled": True,
     "shed_unowned_managed_loads_on_battery_discharge": False,
+    "morning_preheat_enabled": True,
+    "passive_warming_guard_enabled": True,
+    "paid_time_grid_avoidance_enabled": True,
     "auto_mode_month_fallback_enabled": True,
 }
 
@@ -200,6 +214,27 @@ NUMBER_DEFAULTS = {
     "heat_normal_target_temp": 21.0,
     "cool_soak_target_temp": 18.0,
     "cool_normal_target_temp": 24.0,
+    "heat_comfort_target_temp": 21.0,
+    "cool_comfort_target_temp": 24.0,
+    "comfort_min_room_temp": 19.0,
+    "full_soak_min_soc": 90.0,
+    "forecast_soak_min_soc": 75.0,
+    "morning_battery_priority_soc": 70.0,
+    "morning_preheat_start_hour": 7.0,
+    "morning_preheat_end_hour": 9.0,
+    "morning_preheat_min_room_temp": 18.5,
+    "morning_preheat_target_temp": 21.0,
+    "morning_preheat_min_soc": 40.0,
+    "morning_preheat_max_grid_import_w": 500.0,
+    "morning_preheat_forecast_buffer_kwh": 3.0,
+    "paid_time_min_reserve_soc": 40.0,
+    "morning_paid_time_min_reserve_soc": 45.0,
+    "evening_paid_time_min_reserve_soc": 30.0,
+    "pre_peak_preserve_min_reserve_soc": 75.0,
+    "paid_grid_import_threshold_w": 500.0,
+    "paid_grid_import_grace_minutes": 2.0,
+    "solar_arrived_charge_threshold_w": 1500.0,
+    "solar_arrived_pv_surplus_threshold_w": 1000.0,
     "thermal_start_min_soc": 80.0,
     "thermal_start_min_charge_w": 6000.0,
     "thermal_keep_running_min_charge_w": 1500.0,

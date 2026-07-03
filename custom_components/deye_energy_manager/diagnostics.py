@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.4.6",
+        "version": "0.5.0",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -27,6 +27,26 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "actuation_mode": coordinator.settings.thermal_actuation_mode,
         "thermal_mode": coordinator.settings.thermal_mode,
         "forecast_mode": decision.forecast_mode if decision else None,
+        "thermal_policy_state": decision.thermal_policy_state if decision else None,
+        "solar_phase": decision.solar_phase if decision else None,
+        "paid_grid_avoidance": {
+            "required": decision.paid_grid_avoidance_required if decision else None,
+            "reason": decision.paid_time_reserve_reason if decision else None,
+            "active_reserve_target_soc": decision.active_reserve_target_soc if decision else None,
+            "paid_time_floor_soc": decision.paid_time_floor_soc if decision else None,
+            "paid_grid_import_w": decision.paid_grid_import_w if decision else None,
+            "solar_arrived": decision.solar_arrived if decision else None,
+            "solar_arrived_reason": decision.solar_arrived_reason if decision else None,
+            "forecast_drain_blocked": decision.forecast_drain_blocked if decision else None,
+        },
+        "ev": {
+            "charging_detected": decision.ev_charging_detected if decision else None,
+            "grid_bypass_required": decision.ev_grid_bypass_required if decision else None,
+            "latch_active": decision.ev_latch_active if decision else None,
+            "hold_until": decision.ev_hold_until.isoformat() if decision and decision.ev_hold_until else None,
+            "reason": decision.ev_decision_reason if decision else None,
+            "expected_action": decision.ev_expected_action if decision else None,
+        },
         "battery": {
             "soc": decision.battery_soc if decision else None,
             "raw_soc": decision.raw_soc if decision else None,

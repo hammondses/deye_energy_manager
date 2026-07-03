@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-from .const import PROG_POWER_ENTITIES
+from .const import PROG_CAPACITY_ENTITIES, PROG_POWER_ENTITIES
 
 
 async def async_update_issues(hass: HomeAssistant, coordinator) -> None:
@@ -40,6 +40,8 @@ REPAIR_ISSUE_IDS = {
     "scripts_missing",
     "ev_power_invalid",
     "ev_bypass_missing_deye_power_entities",
+    "ev_cheap_grid_bypass_disabled",
+    "paid_grid_avoidance_no_capacity_entities",
     "porsche_entity_unavailable",
 }
 
@@ -141,12 +143,19 @@ def repair_issue_definitions(
             "fix": "Update the EV power sensor mapping or clear it from the integration options.",
         }
 
+    ev_bypass_power_entities = [PROG_POWER_ENTITIES[5], PROG_POWER_ENTITIES[0], PROG_POWER_ENTITIES[1], PROG_POWER_ENTITIES[2]]
     if settings.ev_control_enabled and settings.ev_grid_bypass_enabled and any(
-        not state_exists(entity_id) for entity_id in PROG_POWER_ENTITIES[:4]
+        not state_exists(entity_id) for entity_id in ev_bypass_power_entities
     ):
         issues["ev_bypass_missing_deye_power_entities"] = {
             "title": "EV grid bypass is missing Deye programme power entities",
-            "fix": "Make sure number.deye_prog1_power through number.deye_prog4_power are available.",
+            "fix": "Make sure number.deye_prog6_power, number.deye_prog1_power, number.deye_prog2_power, and number.deye_prog3_power are available.",
+        }
+
+    if settings.ev_control_enabled and settings.ev_cheap_grid_charging_enabled and not settings.ev_grid_bypass_enabled:
+        issues["ev_cheap_grid_bypass_disabled"] = {
+            "title": "EV cheap-grid charging is enabled but EV grid bypass is disabled",
+            "fix": "Enable EV grid bypass if the integration should set Deye programme powers to 0W during cheap-grid car charging.",
         }
 
     porsche_entities = [
@@ -158,6 +167,14 @@ def repair_issue_definitions(
         issues["porsche_entity_unavailable"] = {
             "title": "Configured Porsche entities are unavailable",
             "fix": "Restore the Porsche integration entities or clear those mappings if EV detection should use load sensing only.",
+        }
+
+    if settings.paid_time_grid_avoidance_enabled and settings.deye_control_enabled and any(
+        not state_exists(entity_id) for entity_id in PROG_CAPACITY_ENTITIES
+    ):
+        issues["paid_grid_avoidance_no_capacity_entities"] = {
+            "title": "Paid grid avoidance cannot write Deye capacity entities",
+            "fix": "Restore the Deye programme capacity number entities or disable Deye control.",
         }
 
     return issues

@@ -1,5 +1,18 @@
 # Release Notes
 
+## v0.5.0
+
+- Add thermal policy states for battery priority, comfort-only heat, morning preheat, solar soak, normalise, shed, and emergency shed.
+- Add solar phase diagnostics and morning battery-priority behavior so forecast-full override no longer full-sends thermal soak at low morning SOC.
+- Add dedicated bedroom morning preheat policy with its own target, fan mode, SOC floor, grid-import guard, and forecast-recovery check.
+- Add paid-time grid avoidance policy, reserve-floor diagnostics, solar-arrived detection, and active-slot Deye reserve targeting.
+- Add lease/owner diagnostics for managed thermal loads, including manual/external override, pending confirmation, desired state, and lease reason.
+- Add per-load unowned battery-shed and never-emergency-shed options.
+- Keep battery-discharge shed/emergency decisions ahead of EV/grid/thermal discretionary actions.
+- Fix EV cheap-grid bypass program order to Prog6/Prog1/Prog2/Prog3 and add force start/restore buttons.
+- Add native entities for comfort/preheat/paid-grid tuning and expanded diagnostics.
+- Add regression tests for morning battery priority, morning preheat, paid-grid reserve behavior, and emergency candidate selection.
+
 ## v0.4.6
 
 - Fix `thermal_should_shed` so high battery discharge sets the shed-needed sensor even when no owned load is available.

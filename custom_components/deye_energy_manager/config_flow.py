@@ -97,6 +97,18 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 "thermal_rotation_enabled",
                 default=defaults.get("thermal_rotation_enabled", True),
             ): selector.BooleanSelector(),
+            vol.Required(
+                "morning_preheat_enabled",
+                default=defaults.get("morning_preheat_enabled", True),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "passive_warming_guard_enabled",
+                default=defaults.get("passive_warming_guard_enabled", True),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "paid_time_grid_avoidance_enabled",
+                default=defaults.get("paid_time_grid_avoidance_enabled", True),
+            ): selector.BooleanSelector(),
             vol.Required("strategy", default=defaults.get("strategy", DEFAULT_STRATEGY)): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=STRATEGY_OPTIONS)
             ),
@@ -124,6 +136,9 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
             ),
             vol.Required("cool_normal_fan_mode", default=defaults.get("cool_normal_fan_mode", FAN_MODE_DEFAULTS["cool_normal_fan_mode"])): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
+            ),
+            vol.Required("morning_preheat_fan_mode", default=defaults.get("morning_preheat_fan_mode", FAN_MODE_DEFAULTS["morning_preheat_fan_mode"])): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)
             ),
             **{
@@ -178,6 +193,19 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
         "overnight_bedroom_taper_target_temp",
         "auto_heating_below_temp",
         "auto_cooling_above_temp",
+        "heat_comfort_target_temp",
+        "cool_comfort_target_temp",
+        "comfort_min_room_temp",
+        "full_soak_min_soc",
+        "forecast_soak_min_soc",
+        "morning_battery_priority_soc",
+        "morning_preheat_start_hour",
+        "morning_preheat_end_hour",
+        "morning_preheat_min_room_temp",
+        "morning_preheat_target_temp",
+        "morning_preheat_min_soc",
+        "morning_preheat_max_grid_import_w",
+        "morning_preheat_forecast_buffer_kwh",
     ]
     return vol.Schema(
         {
@@ -191,11 +219,14 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("forecast_full_override_enabled", default=defaults.get("forecast_full_override_enabled", True)): selector.BooleanSelector(),
             vol.Required("thermal_rotation_enabled", default=defaults.get("thermal_rotation_enabled", True)): selector.BooleanSelector(),
             vol.Required("shed_unowned_managed_loads_on_battery_discharge", default=defaults.get("shed_unowned_managed_loads_on_battery_discharge", False)): selector.BooleanSelector(),
+            vol.Required("morning_preheat_enabled", default=defaults.get("morning_preheat_enabled", True)): selector.BooleanSelector(),
+            vol.Required("passive_warming_guard_enabled", default=defaults.get("passive_warming_guard_enabled", True)): selector.BooleanSelector(),
             vol.Required("auto_mode_month_fallback_enabled", default=defaults.get("auto_mode_month_fallback_enabled", True)): selector.BooleanSelector(),
             vol.Required("heat_soak_fan_mode", default=defaults.get("heat_soak_fan_mode", FAN_MODE_DEFAULTS["heat_soak_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("heat_normal_fan_mode", default=defaults.get("heat_normal_fan_mode", FAN_MODE_DEFAULTS["heat_normal_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("cool_soak_fan_mode", default=defaults.get("cool_soak_fan_mode", FAN_MODE_DEFAULTS["cool_soak_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("cool_normal_fan_mode", default=defaults.get("cool_normal_fan_mode", FAN_MODE_DEFAULTS["cool_normal_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
+            vol.Required("morning_preheat_fan_mode", default=defaults.get("morning_preheat_fan_mode", FAN_MODE_DEFAULTS["morning_preheat_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("pv_load_test_control_enabled", default=defaults.get("pv_load_test_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("export_limited_mode_enabled", default=defaults.get("export_limited_mode_enabled", False)): selector.BooleanSelector(),
             **{
@@ -235,11 +266,25 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
-    keys = ["forecast_safety_buffer_kwh", "min_soc_floor", "max_grid_charge_target_soc", "max_fallback_soc_age_minutes"]
+    keys = [
+        "forecast_safety_buffer_kwh",
+        "min_soc_floor",
+        "max_grid_charge_target_soc",
+        "max_fallback_soc_age_minutes",
+        "paid_time_min_reserve_soc",
+        "morning_paid_time_min_reserve_soc",
+        "evening_paid_time_min_reserve_soc",
+        "pre_peak_preserve_min_reserve_soc",
+        "paid_grid_import_threshold_w",
+        "paid_grid_import_grace_minutes",
+        "solar_arrived_charge_threshold_w",
+        "solar_arrived_pv_surplus_threshold_w",
+    ]
     return vol.Schema(
         {
             vol.Required("deye_control_enabled", default=defaults.get("deye_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("grid_charge_control_enabled", default=defaults.get("grid_charge_control_enabled", False)): selector.BooleanSelector(),
+            vol.Required("paid_time_grid_avoidance_enabled", default=defaults.get("paid_time_grid_avoidance_enabled", True)): selector.BooleanSelector(),
             **{
                 vol.Required(key, default=defaults.get(key, NUMBER_DEFAULTS[key])): selector.NumberSelector(
                     selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=1)
@@ -384,6 +429,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Required("active_power_threshold_w", default=float(load.get("active_power_threshold_w", 800))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
                     vol.Required("idle_power_threshold_w", default=float(load.get("idle_power_threshold_w", 150))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
                     vol.Required("taper_power_threshold_w", default=float(load.get("taper_power_threshold_w", 400))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
+                    vol.Required("allow_unowned_battery_shed", default=bool(load.get("allow_unowned_battery_shed", str(load.get("type", "heatpump")).lower() != "underfloor"))): selector.BooleanSelector(),
+                    vol.Required("never_emergency_shed", default=bool(load.get("never_emergency_shed", False))): selector.BooleanSelector(),
                     vol.Required("type", default=str(load.get("type", "heatpump"))): selector.SelectSelector(selector.SelectSelectorConfig(options=["heatpump", "underfloor", "other"])),
                 }
             ),

@@ -34,6 +34,7 @@ SELECTS = {
     "heat_normal_fan_mode": ("Heat normal fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["heat_normal_fan_mode"]),
     "cool_soak_fan_mode": ("Cool soak fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["cool_soak_fan_mode"]),
     "cool_normal_fan_mode": ("Cool normal fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["cool_normal_fan_mode"]),
+    "morning_preheat_fan_mode": ("Morning preheat fan mode", FAN_MODE_OPTIONS, FAN_MODE_DEFAULTS["morning_preheat_fan_mode"]),
 }
 
 

@@ -27,6 +27,9 @@ class EnergyManagerSettings:
     forecast_full_override_enabled: bool = True
     thermal_rotation_enabled: bool = True
     shed_unowned_managed_loads_on_battery_discharge: bool = False
+    morning_preheat_enabled: bool = True
+    passive_warming_guard_enabled: bool = True
+    paid_time_grid_avoidance_enabled: bool = True
     auto_mode_month_fallback_enabled: bool = True
     max_fallback_soc_age_minutes: float = 360.0
     strategy: str = "normal"
@@ -45,6 +48,28 @@ class EnergyManagerSettings:
     heat_normal_target_temp: float = 21.0
     cool_soak_target_temp: float = 18.0
     cool_normal_target_temp: float = 24.0
+    heat_comfort_target_temp: float = 21.0
+    cool_comfort_target_temp: float = 24.0
+    comfort_min_room_temp: float = 19.0
+    full_soak_min_soc: float = 90.0
+    forecast_soak_min_soc: float = 75.0
+    morning_battery_priority_soc: float = 70.0
+    morning_preheat_start_hour: float = 7.0
+    morning_preheat_end_hour: float = 9.0
+    morning_preheat_min_room_temp: float = 18.5
+    morning_preheat_target_temp: float = 21.0
+    morning_preheat_min_soc: float = 40.0
+    morning_preheat_max_grid_import_w: float = 500.0
+    morning_preheat_forecast_buffer_kwh: float = 3.0
+    morning_preheat_fan_mode: str = "low"
+    paid_time_min_reserve_soc: float = 40.0
+    morning_paid_time_min_reserve_soc: float = 45.0
+    evening_paid_time_min_reserve_soc: float = 30.0
+    pre_peak_preserve_min_reserve_soc: float = 75.0
+    paid_grid_import_threshold_w: float = 500.0
+    paid_grid_import_grace_minutes: float = 2.0
+    solar_arrived_charge_threshold_w: float = 1500.0
+    solar_arrived_pv_surplus_threshold_w: float = 1000.0
     thermal_start_min_soc: float = 80.0
     thermal_start_min_charge_w: float = 6000.0
     thermal_keep_running_min_charge_w: float = 1500.0
@@ -108,6 +133,23 @@ class HeatLoadState:
     enabled: bool = True
     supports_heating: bool = True
     supports_cooling: bool = False
+    owner: str = "none"
+    lease_reason: str = "none"
+    lease_started_at: datetime | None = None
+    lease_until: datetime | None = None
+    desired_hvac_mode: str | None = None
+    desired_temperature: float | None = None
+    desired_fan_mode: str | None = None
+    normal_hvac_mode: str | None = None
+    normal_temperature: float | None = None
+    normal_fan_mode: str | None = None
+    pending_confirmation_until: datetime | None = None
+    manual_override_until: datetime | None = None
+    last_manager_action_at: datetime | None = None
+    last_external_change_at: datetime | None = None
+    external_change_detected: bool = False
+    allow_unowned_battery_shed: bool = True
+    never_emergency_shed: bool = False
     last_added_at: datetime | None = None
     last_shed_at: datetime | None = None
     last_rotated_at: datetime | None = None
@@ -126,6 +168,7 @@ class EnergyManagerInputs:
     soc_age_minutes: float | None = None
     battery_power_w: float = 0.0
     essential_power_w: float = 0.0
+    grid_power_w: float = 0.0
     previous_essential_power_w: float | None = None
     forecast_today_kwh: float | None = None
     forecast_remaining_today_kwh: float | None = None
@@ -192,6 +235,30 @@ class EnergyManagerDecision:
     thermal_should_return_to_normal: bool
     thermal_action: str
     thermal_action_reason: str
+    thermal_policy_state: str
+    solar_phase: str
+    passive_warming_likely: bool
+    passive_warming_reason: str
+    battery_priority_reason: str
+    comfort_heat_allowed: bool
+    solar_soak_allowed: bool
+    full_send_soak_allowed: bool
+    morning_preheat_allowed: bool
+    morning_preheat_reason: str
+    morning_preheat_load_to_add: str | None
+    paid_grid_avoidance_required: bool
+    paid_time_reserve_reason: str
+    paid_time_floor_soc: float
+    active_reserve_target_soc: float
+    active_reserve_current_soc: float
+    paid_grid_import_w: float
+    solar_arrived: bool
+    solar_arrived_reason: str
+    forecast_drain_blocked: bool
+    thermal_target_temperature: float | None
+    thermal_target_fan_mode: str | None
+    thermal_target_hvac_mode: str | None
+    thermal_lease_reason: str
     effective_thermal_mode: str
     auto_mode_reason: str
     thermal_load_to_add: str | None
