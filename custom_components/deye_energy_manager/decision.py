@@ -54,6 +54,25 @@ def time_between(now: datetime, start: str, end: str) -> bool:
     return current >= start_m or current < end_m
 
 
+def time_from_hour(value: float) -> str:
+    """Return HH:MM from decimal hour, accepting 24 as midnight."""
+
+    value = value % 24.0
+    hour = int(value)
+    minute = int(round((value - hour) * 60))
+    if minute >= 60:
+        hour = (hour + 1) % 24
+        minute = 0
+    return f"{hour:02d}:{minute:02d}"
+
+
+def is_underfloor_load(load: HeatLoadState | dict[str, object]) -> bool:
+    """Return whether a load is an underfloor slab load."""
+
+    raw = load.load_type if isinstance(load, HeatLoadState) else str(load.get("type", ""))
+    return str(raw).lower() in {"underfloor", "floor_underfloor"}
+
+
 def active_slot(now: datetime) -> str:
     """Return the active Deye programme slot."""
 
@@ -180,6 +199,97 @@ def hours_until_time(now: datetime, target: str) -> float:
     if target_dt <= now:
         target_dt += timedelta(days=1)
     return (target_dt - now).total_seconds() / 3600.0
+
+
+def hours_until_solar_end(now: datetime) -> float:
+    """Return local daylight-budget hours remaining until 17:00."""
+
+    if not time_between(now, "06:55", "17:00"):
+        return 0.0
+    end = now.replace(hour=17, minute=0, second=0, microsecond=0)
+    return max((end - now).total_seconds() / 3600.0, 0.0)
+
+
+def load_energy_cost_kwh(load: HeatLoadState, settings: EnergyManagerSettings) -> float:
+    """Return minimum energy budget needed to start a discretionary load."""
+
+    return (load.estimated_load_w / 1000.0) * max(settings.min_thermal_run_minutes / 60.0, 0.25)
+
+
+def load_comfort_min_temp(load: HeatLoadState, settings: EnergyManagerSettings) -> float:
+    """Return per-load comfort minimum."""
+
+    return load.comfort_min_temp if load.comfort_min_temp is not None else settings.comfort_min_room_temp
+
+
+def load_comfort_target_temp(load: HeatLoadState | None, settings: EnergyManagerSettings) -> float:
+    """Return per-load comfort target."""
+
+    return load.comfort_target_temp if load is not None and load.comfort_target_temp is not None else settings.heat_comfort_target_temp
+
+
+def load_normal_target_temp(load: HeatLoadState, settings: EnergyManagerSettings) -> float:
+    """Return per-load normal target."""
+
+    return load.normal_target_temp if load.normal_target_temp is not None else settings.heat_normal_target_temp
+
+
+def underfloor_window_state(now: datetime, settings: EnergyManagerSettings) -> tuple[bool, bool, str]:
+    """Return active/preheat status and window name for underfloor comfort."""
+
+    morning_start = settings.underfloor_morning_start_hour
+    evening_start = settings.underfloor_evening_start_hour
+    preheat_h = settings.underfloor_preheat_minutes / 60.0
+    morning_preheat = (morning_start - preheat_h) % 24
+    evening_preheat = (evening_start - preheat_h) % 24
+    if time_between(now, time_from_hour(morning_start), time_from_hour(settings.underfloor_morning_end_hour)):
+        return True, False, "morning"
+    if time_between(now, time_from_hour(evening_start), time_from_hour(settings.underfloor_evening_end_hour)):
+        return True, False, "evening"
+    if time_between(now, time_from_hour(morning_preheat), time_from_hour(morning_start)):
+        return False, True, "morning_preheat"
+    if time_between(now, time_from_hour(evening_preheat), time_from_hour(evening_start)):
+        return False, True, "evening_preheat"
+    return False, False, "outside"
+
+
+def underfloor_comfort_decision(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    paid_grid_avoidance_required: bool,
+    discretionary_budget_kwh: float | None,
+) -> tuple[bool, str, str, str | None, str]:
+    """Return scheduled underfloor comfort decision details."""
+
+    underfloor_loads = [load for load in inputs.heat_loads if load.enabled and is_underfloor_load(load)]
+    if not underfloor_loads:
+        return False, "unavailable", "underfloor_unavailable: no configured underfloor load", None, "outside"
+    load = sorted(underfloor_loads, key=lambda item: item.priority)[0]
+    active, preheat, window = underfloor_window_state(inputs.now, settings)
+    temp = load.current_temp
+    min_temp = load.comfort_min_temp if load.comfort_min_temp is not None else settings.underfloor_comfort_min_temp
+    target_temp = load.comfort_target_temp if load.comfort_target_temp is not None else settings.underfloor_comfort_target_temp
+    if not settings.underfloor_schedule_enabled:
+        return False, "disabled", "underfloor_blocked: schedule disabled", None, window
+    if temp is None:
+        return False, "unavailable", "underfloor_blocked: floor temperature unavailable", None, window
+    if paid_grid_avoidance_required and not settings.underfloor_allow_paid_grid:
+        return False, "blocked", "underfloor_blocked: paid grid avoidance active", None, window
+    if inputs.battery_soc is None or inputs.battery_soc < settings.underfloor_min_soc:
+        return False, "blocked", f"underfloor_blocked: SOC {inputs.battery_soc if inputs.battery_soc is not None else 'unavailable'} < {settings.underfloor_min_soc:.0f}%", None, window
+    if max(inputs.grid_power_w, 0.0) > settings.underfloor_max_grid_import_w:
+        return False, "blocked", f"underfloor_blocked: grid import {max(inputs.grid_power_w, 0.0):.0f}W > {settings.underfloor_max_grid_import_w:.0f}W", None, window
+    if active:
+        if temp >= target_temp:
+            return False, "hold", f"underfloor_comfort_hold: floor {temp:.1f}C near target {target_temp:.1f}C", None, window
+        if temp < min_temp:
+            return True, "scheduled_underfloor_comfort", f"underfloor_comfort_allowed: {window} schedule active, floor {temp:.1f}C < {min_temp:.1f}C, target {target_temp:.1f}C", load.name, window
+        return False, "hold", f"underfloor_comfort_hold: floor {temp:.1f}C above minimum {min_temp:.1f}C", None, window
+    if preheat:
+        if temp < target_temp and discretionary_budget_kwh is not None and discretionary_budget_kwh >= load_energy_cost_kwh(load, settings):
+            return True, "scheduled_underfloor_comfort", f"underfloor_comfort_allowed: {window} and budget {discretionary_budget_kwh:.1f}kWh, floor {temp:.1f}C < target {target_temp:.1f}C", load.name, window
+        return False, "blocked", "underfloor_blocked: preheat window but discretionary budget insufficient", None, window
+    return False, "blocked", "underfloor_blocked: outside comfort window", None, window
 
 
 def resolve_soc_value(
@@ -316,7 +426,7 @@ def thermal_soak_action(settings: EnergyManagerSettings, load: HeatLoadState) ->
 def thermal_shed_action(settings: EnergyManagerSettings, load: HeatLoadState) -> tuple[str, float | None, str | None]:
     """Return direct climate action for shedding/normalising one load."""
 
-    if not settings.return_to_normal_on_shed_enabled or load.load_type == "underfloor":
+    if not settings.return_to_normal_on_shed_enabled or is_underfloor_load(load):
         return "off", None, None
     _soak_target, normal_target = thermal_targets(settings)
     _soak_fan_mode, normal_fan_mode = thermal_fan_modes(settings)
@@ -392,6 +502,7 @@ def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings
         if load.blocked_until is None
         and load.owner not in {"manual", "external"}
         and load.manual_override_until is None
+        and load.allow_solar_soak
         and not load.solar_owned
         and not load.is_on
         and load_needs_soak(load, settings, mode)
@@ -406,11 +517,12 @@ def comfort_heat_candidates(loads: list[HeatLoadState], settings: EnergyManagerS
         for load in loads
         if load.enabled
         and load.supports_heating
+        and not is_underfloor_load(load)
         and load.blocked_until is None
         and load.owner not in {"manual", "external"}
         and load.manual_override_until is None
         and load.current_temp is not None
-        and load.current_temp < settings.comfort_min_room_temp
+        and load.current_temp < load_comfort_min_temp(load, settings)
     ]
 
 
@@ -434,7 +546,7 @@ def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mo
     """Return why an unowned configured load looks like a solar-soak load."""
 
     mode = mode or effective_thermal_mode(settings)
-    if load.solar_owned or not load.enabled or not load.allow_unowned_battery_shed or load.load_type == "underfloor" or not load_supports_mode(load, mode):
+    if load.solar_owned or not load.enabled or not load.allow_unowned_battery_shed or is_underfloor_load(load) or not load_supports_mode(load, mode):
         return None
     soak_fan_mode, _normal_fan_mode = thermal_fan_modes(settings, mode)
     fan_high_modes = {soak_fan_mode, "high", "max", "maximum", "powerful", "turbo"}
@@ -578,6 +690,15 @@ def thermal_load_diagnostic(
         "power_sensor": load.power_sensor,
         "power_w": load.power_w,
         "estimated_load_w": load.estimated_load_w,
+        "estimated_min_run_energy_kwh": load_energy_cost_kwh(load, settings),
+        "allow_solar_soak": load.allow_solar_soak,
+        "comfort_sensor_type": load.comfort_sensor_type,
+        "comfort_min_temp": load_comfort_min_temp(load, settings),
+        "comfort_target_temp": load_comfort_target_temp(load, settings),
+        "normal_target_temp": load.normal_target_temp,
+        "underfloor_policy_state": decision.underfloor_policy_state if decision and is_underfloor_load(load) else None,
+        "underfloor_reason": decision.underfloor_reason if decision and is_underfloor_load(load) else None,
+        "underfloor_current_window": decision.underfloor_current_window if decision and is_underfloor_load(load) else None,
         "active_state": "active" if active else "idle",
         "owned_by_manager": load.solar_owned,
         "owner": load.owner,
@@ -800,6 +921,49 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     remaining_forecast_kwh = inputs.forecast_remaining_today_kwh
     if remaining_forecast_kwh is None:
         remaining_forecast_kwh = max((inputs.forecast_tomorrow_kwh or 0.0) / 3.0, 0.0)
+    base_load_w = inputs.base_load_estimate_w if inputs.base_load_estimate_w is not None else settings.base_load_estimate_w
+    solar_hours_remaining = hours_until_solar_end(inputs.now)
+    expected_house_load_kwh = base_load_w * solar_hours_remaining / 1000.0 + settings.house_load_forecast_buffer_kwh
+    battery_kwh_needed = None
+    if soc_known:
+        efficiency = max(min(settings.battery_charge_efficiency, 1.0), 0.5)
+        battery_kwh_needed = (
+            settings.battery_capacity_kwh
+            * max(settings.daily_battery_target_soc - (soc or 0.0), 0.0)
+            / 100.0
+            / efficiency
+        )
+    committed_flexible_kwh = sum(
+        load_energy_cost_kwh(load, settings)
+        for load in inputs.heat_loads
+        if load.solar_owned or load.lease_reason in {"solar_soak", "morning_preheat", "comfort_heat"}
+    )
+    safety_buffer_kwh = settings.forecast_safety_buffer_kwh + settings.solar_soak_required_battery_margin_kwh
+    if settings.paid_time_grid_avoidance_enabled:
+        safety_buffer_kwh += settings.paid_grid_avoidance_buffer_kwh
+    discretionary_budget_kwh = None
+    if battery_kwh_needed is not None:
+        discretionary_budget_kwh = (
+            remaining_forecast_kwh
+            - battery_kwh_needed
+            - expected_house_load_kwh
+            - safety_buffer_kwh
+            - committed_flexible_kwh
+        )
+    battery_target_reachable = (
+        discretionary_budget_kwh is not None
+        and remaining_forecast_kwh >= battery_kwh_needed + expected_house_load_kwh + safety_buffer_kwh
+    )
+    discretionary_budget_positive = discretionary_budget_kwh is not None and discretionary_budget_kwh > 0
+    if discretionary_budget_kwh is None:
+        energy_budget_reason = "energy budget unavailable: SOC unavailable"
+    else:
+        energy_budget_reason = (
+            f"budget {discretionary_budget_kwh:.1f}kWh = forecast {remaining_forecast_kwh:.1f}kWh "
+            f"- battery need {battery_kwh_needed:.1f}kWh to {settings.daily_battery_target_soc:.0f}% "
+            f"- house load {expected_house_load_kwh:.1f}kWh - buffer {safety_buffer_kwh:.1f}kWh "
+            f"- committed flexible {committed_flexible_kwh:.1f}kWh"
+        )
 
     (
         paid_grid_avoidance_required,
@@ -810,6 +974,18 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         solar_arrived_reason,
         forecast_drain_blocked,
     ) = paid_grid_avoidance_state(inputs, settings, reserve_soc, battery_charge_w)
+    if paid_grid_avoidance_required and discretionary_budget_kwh is not None:
+        discretionary_budget_kwh = min(discretionary_budget_kwh, -settings.paid_grid_avoidance_buffer_kwh)
+        discretionary_budget_positive = False
+        battery_target_reachable = False
+        energy_budget_reason = f"budget blocked by paid grid avoidance; {energy_budget_reason}"
+    (
+        underfloor_comfort_allowed,
+        underfloor_policy_state,
+        underfloor_reason,
+        underfloor_load_to_add,
+        underfloor_current_window,
+    ) = underfloor_comfort_decision(inputs, settings, paid_grid_avoidance_required, discretionary_budget_kwh)
 
     pre_peak_preserve_required = (
         time_between(inputs.now, "13:00", "17:00")
@@ -818,10 +994,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_charge_w < settings.heat_add_min_charge_w
     )
 
-    battery_priority_satisfied = (
-        (soc_known and soc >= tier.target_17_soc)
-        or battery_charge_w >= settings.heat_add_min_charge_w
-    )
+    battery_priority_satisfied = battery_target_reachable or (soc_known and soc >= settings.daily_battery_target_soc)
     curtailment_likely = (
         (soc_known and soc >= settings.full_soak_min_soc)
         or (
@@ -849,30 +1022,24 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         else "passive warming not limiting"
     )
 
-    forecast_soak_allowed = (
-        forecast_override
-        and (
-            (soc_known and soc >= settings.forecast_soak_min_soc)
-            or phase == "afternoon_soak"
-            or curtailment_likely
-        )
-    )
+    forecast_soak_allowed = battery_target_reachable and discretionary_budget_positive
     solar_soak_allowed = (
         not paid_grid_avoidance_required
         and not passive_warming_likely
         and (
-            (soc_known and soc >= thermal_start_min_soc)
-            or battery_charge_w >= thermal_start_min_charge_w
-            or forecast_soak_allowed
+            forecast_soak_allowed
+            or curtailment_likely
         )
     )
     full_send_soak_allowed = (
         not paid_grid_avoidance_required
         and not passive_warming_likely
+        and battery_target_reachable
+        and discretionary_budget_kwh is not None
         and (
-            (soc_known and soc >= settings.full_soak_min_soc)
-            or curtailment_likely
-            or (phase == "afternoon_soak" and forecast_override)
+            discretionary_budget_kwh >= 8.0
+            or (soc_known and soc >= settings.full_soak_min_soc)
+            or (phase == "afternoon_soak" and discretionary_budget_kwh >= 3.0)
         )
     )
 
@@ -992,6 +1159,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and soc_known
         and soc >= settings.pv_load_test_min_soc
         and soc < tier.target_17_soc
+        and discretionary_budget_positive
         and battery_charge_w <= settings.pv_load_test_max_battery_charge_w
         and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
         and remaining_forecast_kwh >= settings.pv_load_test_min_remaining_forecast_kwh
@@ -1012,6 +1180,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             load
             for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode)
             if cooldown_block_reason(load, settings, inputs.now, "add") is None
+            and (
+                discretionary_budget_kwh is not None
+                and discretionary_budget_kwh >= load_energy_cost_kwh(load, settings) + settings.solar_soak_required_battery_margin_kwh
+            )
         ],
         key=lambda load: load.priority,
     )
@@ -1027,7 +1199,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     morning_preheat_load_to_add = preheat_candidates[0].name if morning_preheat_allowed else None
     comfort_load_to_add = comfort_candidates[0].name if comfort_heat_allowed else None
     solar_soak_load_to_add = add_candidates[0].name if add_candidates else None
-    thermal_load_to_add = morning_preheat_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
+    thermal_load_to_add = morning_preheat_load_to_add or underfloor_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
+    comfort_load = next((load for load in comfort_candidates if load.name == comfort_load_to_add), None)
+    underfloor_load = next((load for load in inputs.heat_loads if load.name == underfloor_load_to_add), None)
     thermal_rotation_recommended = (
         thermal_allowed
         and settings.thermal_rotation_enabled
@@ -1054,6 +1228,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ev_detected_power_w,
         ev_hold_until,
     ) = ev_decision(inputs, settings, cheap_window, battery_priority_satisfied, forecast_override)
+    if not discretionary_budget_positive and ev_solar_charge_allowed:
+        ev_solar_charge_allowed = False
+        ev_reason = f"EV solar charge blocked: {energy_budget_reason}"
+        if ev_action == "allow_solar_charge":
+            ev_action = "none"
     ev_grid_mode_required = ev_grid_bypass_required
 
     grid_charge_required = (
@@ -1078,6 +1257,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
     elif morning_preheat_allowed and thermal_load_to_add:
         thermal_action = "morning_preheat"
+    elif underfloor_comfort_allowed and thermal_load_to_add:
+        thermal_action = "underfloor_comfort"
     elif comfort_heat_allowed and thermal_load_to_add:
         thermal_action = "comfort_heat"
     elif thermal_allowed and thermal_load_to_add:
@@ -1094,6 +1275,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_policy_state = "battery_priority"
     elif morning_preheat_allowed:
         thermal_policy_state = "morning_preheat"
+    elif underfloor_comfort_allowed:
+        thermal_policy_state = "underfloor_comfort"
     elif comfort_heat_allowed:
         thermal_policy_state = "comfort_only"
     elif full_send_soak_allowed and thermal_allowed:
@@ -1112,8 +1295,17 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         target_fan_mode = settings.morning_preheat_fan_mode
         target_hvac_mode = "heat"
         lease_reason = "morning_preheat"
+    elif thermal_action == "underfloor_comfort":
+        target_temperature = min(
+            load_comfort_target_temp(underfloor_load, settings),
+            settings.underfloor_max_target_temp,
+            underfloor_load.comfort_target_temp if underfloor_load and underfloor_load.comfort_target_temp is not None else settings.underfloor_comfort_target_temp,
+        )
+        target_fan_mode = None
+        target_hvac_mode = "heat"
+        lease_reason = "scheduled_underfloor_comfort"
     elif thermal_action == "comfort_heat":
-        target_temperature = settings.heat_comfort_target_temp
+        target_temperature = load_comfort_target_temp(comfort_load, settings) if comfort_load else settings.heat_comfort_target_temp
         target_fan_mode = settings.heat_normal_fan_mode
         target_hvac_mode = "heat"
         lease_reason = "comfort_heat"
@@ -1139,16 +1331,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         reason_parts.append(f"SOC unavailable: raw {inputs.raw_soc or 'missing'} and fallback stale")
     if thermal_allowed:
         reason = "thermal_allowed=true"
-        if soc_known and soc >= thermal_start_min_soc:
-            reason += f": SOC {soc:.1f} >= thermal_start_min_soc {thermal_start_min_soc:.0f}"
-        elif forecast_override:
-            required_kwh = max(tier.target_17_soc - (soc or 0.0), 0.0) / 100.0 * settings.battery_capacity_kwh
-            reason += (
-                f": forecast_full_override active; remaining {remaining_forecast_kwh:.1f}kWh > "
-                f"required {required_kwh:.1f}kWh + buffer {settings.forecast_full_confidence_buffer_kwh:.0f}kWh"
-            )
-        else:
-            reason += f": battery charge {battery_charge_w:.0f}W >= start threshold {thermal_start_min_charge_w:.0f}W"
+        reason += f": {energy_budget_reason}"
         reason_parts.append(reason)
         thermal_reason_parts.append(reason)
     else:
@@ -1162,6 +1345,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             reason = "thermal_allowed=false: paid grid avoidance required"
         elif passive_warming_likely:
             reason = "thermal_allowed=false: passive warming likely and battery priority active"
+        elif discretionary_budget_kwh is not None and discretionary_budget_kwh <= 0:
+            reason = f"thermal_allowed=false: battery_priority: {energy_budget_reason}"
         elif not soc_known:
             reason = (
                 "thermal_allowed=false: "
@@ -1171,8 +1356,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         else:
             reason = (
                 "thermal_allowed=false: "
-                f"SOC {soc:.1f} < thermal_start_min_soc {thermal_start_min_soc:.0f}, "
-                f"charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W, "
+                f"{energy_budget_reason}; "
                 f"forecast_full_override={forecast_override}"
             )
         reason_parts.append(reason)
@@ -1183,6 +1367,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         proposed_actions.append("morning_preheat")
         reason_parts.append(morning_preheat_reason)
         thermal_reason_parts.append(morning_preheat_reason)
+    elif underfloor_comfort_allowed and thermal_load_to_add:
+        proposed_actions.append("underfloor_comfort")
+        reason_parts.append(underfloor_reason)
+        thermal_reason_parts.append(underfloor_reason)
     elif comfort_heat_allowed and thermal_load_to_add:
         proposed_actions.append("comfort_heat")
         reason_parts.append(f"comfort_only: {thermal_load_to_add} below {settings.comfort_min_room_temp:.1f}C")
@@ -1312,13 +1500,24 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         solar_phase=phase,
         passive_warming_likely=passive_warming_likely,
         passive_warming_reason=passive_warming_reason,
-        battery_priority_reason=paid_time_reserve_reason if paid_grid_avoidance_required else f"battery_priority: SOC {soc:.0f}% < {settings.morning_battery_priority_soc:.0f}% during {phase}; comfort only" if soc_known and phase == "morning_battery_priority" and soc < settings.morning_battery_priority_soc else "battery priority satisfied or not limiting",
+        battery_priority_reason=(
+            paid_time_reserve_reason
+            if paid_grid_avoidance_required
+            else f"battery_priority: {energy_budget_reason}"
+            if discretionary_budget_kwh is not None and discretionary_budget_kwh <= 0
+            else "battery target reachable today; discretionary budget available"
+        ),
         comfort_heat_allowed=comfort_heat_allowed,
         solar_soak_allowed=solar_soak_allowed,
         full_send_soak_allowed=full_send_soak_allowed,
         morning_preheat_allowed=morning_preheat_allowed,
         morning_preheat_reason=morning_preheat_reason,
         morning_preheat_load_to_add=morning_preheat_load_to_add,
+        underfloor_comfort_allowed=underfloor_comfort_allowed,
+        underfloor_policy_state=underfloor_policy_state,
+        underfloor_reason=underfloor_reason,
+        underfloor_load_to_add=underfloor_load_to_add,
+        underfloor_current_window=underfloor_current_window,
         paid_grid_avoidance_required=paid_grid_avoidance_required,
         paid_time_reserve_reason=paid_time_reserve_reason,
         paid_time_floor_soc=paid_floor,
@@ -1332,6 +1531,18 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_target_fan_mode=target_fan_mode,
         thermal_target_hvac_mode=target_hvac_mode,
         thermal_lease_reason=lease_reason,
+        daily_battery_target_soc=settings.daily_battery_target_soc,
+        remaining_solar_budget_kwh=remaining_forecast_kwh,
+        battery_kwh_needed_to_target=battery_kwh_needed,
+        expected_house_load_until_solar_end_kwh=expected_house_load_kwh,
+        safety_buffer_kwh=safety_buffer_kwh,
+        discretionary_energy_budget_kwh=discretionary_budget_kwh,
+        energy_budget_reason=energy_budget_reason,
+        discretionary_budget_positive=discretionary_budget_positive,
+        battery_target_reachable_today=battery_target_reachable,
+        base_load_estimate_w=base_load_w,
+        estimated_solar_hours_remaining=solar_hours_remaining,
+        committed_flexible_load_energy_kwh=committed_flexible_kwh,
         effective_thermal_mode=thermal_mode,
         auto_mode_reason=auto_reason,
         thermal_load_to_add=thermal_load_to_add,

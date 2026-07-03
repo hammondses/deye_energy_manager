@@ -109,6 +109,22 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 "paid_time_grid_avoidance_enabled",
                 default=defaults.get("paid_time_grid_avoidance_enabled", True),
             ): selector.BooleanSelector(),
+            vol.Required(
+                "underfloor_schedule_enabled",
+                default=defaults.get("underfloor_schedule_enabled", True),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "underfloor_require_home",
+                default=defaults.get("underfloor_require_home", True),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "underfloor_allow_paid_grid",
+                default=defaults.get("underfloor_allow_paid_grid", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "dynamic_base_load_estimate_enabled",
+                default=defaults.get("dynamic_base_load_estimate_enabled", True),
+            ): selector.BooleanSelector(),
             vol.Required("strategy", default=defaults.get("strategy", DEFAULT_STRATEGY)): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=STRATEGY_OPTIONS)
             ),
@@ -206,6 +222,17 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
         "morning_preheat_min_soc",
         "morning_preheat_max_grid_import_w",
         "morning_preheat_forecast_buffer_kwh",
+        "solar_soak_required_battery_margin_kwh",
+        "underfloor_morning_start_hour",
+        "underfloor_morning_end_hour",
+        "underfloor_evening_start_hour",
+        "underfloor_evening_end_hour",
+        "underfloor_preheat_minutes",
+        "underfloor_comfort_min_temp",
+        "underfloor_comfort_target_temp",
+        "underfloor_max_target_temp",
+        "underfloor_min_soc",
+        "underfloor_max_grid_import_w",
     ]
     return vol.Schema(
         {
@@ -221,6 +248,9 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("shed_unowned_managed_loads_on_battery_discharge", default=defaults.get("shed_unowned_managed_loads_on_battery_discharge", False)): selector.BooleanSelector(),
             vol.Required("morning_preheat_enabled", default=defaults.get("morning_preheat_enabled", True)): selector.BooleanSelector(),
             vol.Required("passive_warming_guard_enabled", default=defaults.get("passive_warming_guard_enabled", True)): selector.BooleanSelector(),
+            vol.Required("underfloor_schedule_enabled", default=defaults.get("underfloor_schedule_enabled", True)): selector.BooleanSelector(),
+            vol.Required("underfloor_require_home", default=defaults.get("underfloor_require_home", True)): selector.BooleanSelector(),
+            vol.Required("underfloor_allow_paid_grid", default=defaults.get("underfloor_allow_paid_grid", False)): selector.BooleanSelector(),
             vol.Required("auto_mode_month_fallback_enabled", default=defaults.get("auto_mode_month_fallback_enabled", True)): selector.BooleanSelector(),
             vol.Required("heat_soak_fan_mode", default=defaults.get("heat_soak_fan_mode", FAN_MODE_DEFAULTS["heat_soak_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
             vol.Required("heat_normal_fan_mode", default=defaults.get("heat_normal_fan_mode", FAN_MODE_DEFAULTS["heat_normal_fan_mode"])): selector.SelectSelector(selector.SelectSelectorConfig(options=FAN_MODE_OPTIONS)),
@@ -279,12 +309,19 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
         "paid_grid_import_grace_minutes",
         "solar_arrived_charge_threshold_w",
         "solar_arrived_pv_surplus_threshold_w",
+        "daily_battery_target_soc",
+        "battery_charge_efficiency",
+        "base_load_estimate_w",
+        "base_load_window_minutes",
+        "house_load_forecast_buffer_kwh",
+        "paid_grid_avoidance_buffer_kwh",
     ]
     return vol.Schema(
         {
             vol.Required("deye_control_enabled", default=defaults.get("deye_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("grid_charge_control_enabled", default=defaults.get("grid_charge_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("paid_time_grid_avoidance_enabled", default=defaults.get("paid_time_grid_avoidance_enabled", True)): selector.BooleanSelector(),
+            vol.Required("dynamic_base_load_estimate_enabled", default=defaults.get("dynamic_base_load_estimate_enabled", True)): selector.BooleanSelector(),
             **{
                 vol.Required(key, default=defaults.get(key, NUMBER_DEFAULTS[key])): selector.NumberSelector(
                     selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=1)
@@ -431,7 +468,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Required("taper_power_threshold_w", default=float(load.get("taper_power_threshold_w", 400))): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=50)),
                     vol.Required("allow_unowned_battery_shed", default=bool(load.get("allow_unowned_battery_shed", str(load.get("type", "heatpump")).lower() != "underfloor"))): selector.BooleanSelector(),
                     vol.Required("never_emergency_shed", default=bool(load.get("never_emergency_shed", False))): selector.BooleanSelector(),
-                    vol.Required("type", default=str(load.get("type", "heatpump"))): selector.SelectSelector(selector.SelectSelectorConfig(options=["heatpump", "underfloor", "other"])),
+                    vol.Required("comfort_sensor_type", default=str(load.get("comfort_sensor_type", "floor_slab" if str(load.get("type", "heatpump")) in {"underfloor", "floor_underfloor"} else "air"))): selector.SelectSelector(selector.SelectSelectorConfig(options=["air", "floor_slab"])),
+                    vol.Optional("comfort_min_temp", default=load.get("comfort_min_temp")): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=0.5)),
+                    vol.Optional("comfort_target_temp", default=load.get("comfort_target_temp")): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=0.5)),
+                    vol.Optional("normal_target_temp", default=load.get("normal_target_temp")): selector.NumberSelector(selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=0.5)),
+                    vol.Required("allow_solar_soak", default=bool(load.get("allow_solar_soak", str(load.get("type", "heatpump")).lower() not in {"underfloor", "floor_underfloor"}))): selector.BooleanSelector(),
+                    vol.Required("type", default=str(load.get("type", "room_heat_pump" if str(load.get("type", "heatpump")) == "heatpump" else load.get("type", "room_heat_pump")))): selector.SelectSelector(selector.SelectSelectorConfig(options=["room_heat_pump", "floor_underfloor", "other", "heatpump", "underfloor"])),
                 }
             ),
         )

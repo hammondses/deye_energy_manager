@@ -82,6 +82,43 @@ Solar phases:
 
 Morning low-SOC behavior is deliberately conservative. Forecast-full override may permit soak only when the battery is already above the forecast soak SOC, the phase is afternoon soak, or curtailment/tapering is likely. Strong PV forecast plus low SOC in the morning keeps the controller in `battery_priority` unless a room is genuinely below comfort/preheat limits.
 
+## Rolling Energy Budget
+
+Discretionary loads are driven by a rolling kWh budget, not a simple SOC threshold:
+
+```text
+remaining_solar_budget_kwh
+- battery_kwh_needed_to_target
+- expected_house_load_until_solar_end_kwh
+- safety_buffer_kwh
+- committed_flexible_load_energy_kwh
+= discretionary_energy_budget_kwh
+```
+
+Native diagnostics:
+
+- `sensor.deye_energy_manager_remaining_solar_budget`
+- `sensor.deye_energy_manager_battery_kwh_needed_to_target`
+- `sensor.deye_energy_manager_expected_house_load_until_solar_end`
+- `sensor.deye_energy_manager_discretionary_energy_budget`
+- `sensor.deye_energy_manager_energy_budget_reason`
+- `sensor.deye_energy_manager_base_load_estimate`
+- `binary_sensor.deye_energy_manager_discretionary_budget_positive`
+- `binary_sensor.deye_energy_manager_battery_target_reachable_today`
+
+Native controls:
+
+- `number.deye_energy_manager_daily_battery_target_soc`
+- `number.deye_energy_manager_battery_charge_efficiency`
+- `number.deye_energy_manager_base_load_estimate`
+- `number.deye_energy_manager_base_load_window_minutes`
+- `number.deye_energy_manager_house_load_forecast_buffer_kwh`
+- `number.deye_energy_manager_solar_soak_required_battery_margin_kwh`
+- `number.deye_energy_manager_paid_grid_avoidance_buffer_kwh`
+- `switch.deye_energy_manager_dynamic_base_load_estimate_enabled`
+
+Thermal soak, PV load testing, and EV solar-charging permission use this budget. Candidate loads are only added when the budget can cover their estimated minimum-run energy plus margin.
+
 Actuation modes:
 
 - `advisory`: decisions only, no service calls
@@ -102,6 +139,34 @@ Comfort and preheat are separate from solar soak:
 - Morning preheat uses `number.deye_energy_manager_morning_preheat_target_temp` and `select.deye_energy_manager_morning_preheat_fan_mode`.
 - Solar soak uses soak targets and soak fan modes.
 - Morning preheat initially targets the configured bedroom load only.
+
+Bathroom underfloor is separate again:
+
+- Default load type: `floor_underfloor`
+- Comfort sensor type: `floor_slab`
+- Comfort minimum: 9 C
+- Comfort/normal target: 12 C
+- Maximum target: 14 C
+- Solar soak: disabled by default
+- Cooling/fan logic: disabled
+
+Underfloor scheduled comfort controls:
+
+- `switch.deye_energy_manager_underfloor_schedule_enabled`
+- `number.deye_energy_manager_underfloor_morning_start_hour`
+- `number.deye_energy_manager_underfloor_morning_end_hour`
+- `number.deye_energy_manager_underfloor_evening_start_hour`
+- `number.deye_energy_manager_underfloor_evening_end_hour`
+- `number.deye_energy_manager_underfloor_preheat_minutes`
+- `number.deye_energy_manager_underfloor_comfort_min_temp`
+- `number.deye_energy_manager_underfloor_comfort_target_temp`
+- `number.deye_energy_manager_underfloor_max_target_temp`
+- `number.deye_energy_manager_underfloor_min_soc`
+- `number.deye_energy_manager_underfloor_max_grid_import_w`
+- `switch.deye_energy_manager_underfloor_require_home`
+- `switch.deye_energy_manager_underfloor_allow_paid_grid`
+
+Underfloor uses lease reason `scheduled_underfloor_comfort`, never heat-soak targets, and does not compare floor temperature to the global room-air comfort minimum.
 
 Script mode remains available as a compatibility fallback. Legacy `heat_*` entities remain as compatibility aliases, but `thermal_*` entities are preferred.
 

@@ -31,6 +31,10 @@ SWITCHES = {
     "morning_preheat_enabled": "Morning preheat enabled",
     "passive_warming_guard_enabled": "Passive warming guard enabled",
     "paid_time_grid_avoidance_enabled": "Paid time grid avoidance enabled",
+    "underfloor_schedule_enabled": "Underfloor schedule enabled",
+    "underfloor_require_home": "Underfloor require home",
+    "underfloor_allow_paid_grid": "Underfloor allow paid grid",
+    "dynamic_base_load_estimate_enabled": "Dynamic base load estimate enabled",
     "auto_mode_month_fallback_enabled": "Auto mode month fallback enabled",
 }
 

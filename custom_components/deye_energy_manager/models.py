@@ -30,6 +30,9 @@ class EnergyManagerSettings:
     morning_preheat_enabled: bool = True
     passive_warming_guard_enabled: bool = True
     paid_time_grid_avoidance_enabled: bool = True
+    underfloor_schedule_enabled: bool = True
+    underfloor_require_home: bool = True
+    underfloor_allow_paid_grid: bool = False
     auto_mode_month_fallback_enabled: bool = True
     max_fallback_soc_age_minutes: float = 360.0
     strategy: str = "normal"
@@ -70,6 +73,24 @@ class EnergyManagerSettings:
     paid_grid_import_grace_minutes: float = 2.0
     solar_arrived_charge_threshold_w: float = 1500.0
     solar_arrived_pv_surplus_threshold_w: float = 1000.0
+    daily_battery_target_soc: float = 100.0
+    battery_charge_efficiency: float = 0.94
+    base_load_estimate_w: float = 1200.0
+    base_load_window_minutes: float = 30.0
+    house_load_forecast_buffer_kwh: float = 1.5
+    solar_soak_required_battery_margin_kwh: float = 1.0
+    paid_grid_avoidance_buffer_kwh: float = 1.0
+    dynamic_base_load_estimate_enabled: bool = True
+    underfloor_morning_start_hour: float = 7.0
+    underfloor_morning_end_hour: float = 9.0
+    underfloor_evening_start_hour: float = 16.0
+    underfloor_evening_end_hour: float = 24.0
+    underfloor_preheat_minutes: float = 60.0
+    underfloor_comfort_min_temp: float = 9.0
+    underfloor_comfort_target_temp: float = 12.0
+    underfloor_max_target_temp: float = 14.0
+    underfloor_min_soc: float = 40.0
+    underfloor_max_grid_import_w: float = 500.0
     thermal_start_min_soc: float = 80.0
     thermal_start_min_charge_w: float = 6000.0
     thermal_keep_running_min_charge_w: float = 1500.0
@@ -150,6 +171,11 @@ class HeatLoadState:
     external_change_detected: bool = False
     allow_unowned_battery_shed: bool = True
     never_emergency_shed: bool = False
+    comfort_sensor_type: str = "air"
+    comfort_min_temp: float | None = None
+    comfort_target_temp: float | None = None
+    normal_target_temp: float | None = None
+    allow_solar_soak: bool = True
     last_added_at: datetime | None = None
     last_shed_at: datetime | None = None
     last_rotated_at: datetime | None = None
@@ -169,6 +195,7 @@ class EnergyManagerInputs:
     battery_power_w: float = 0.0
     essential_power_w: float = 0.0
     grid_power_w: float = 0.0
+    base_load_estimate_w: float | None = None
     previous_essential_power_w: float | None = None
     forecast_today_kwh: float | None = None
     forecast_remaining_today_kwh: float | None = None
@@ -246,6 +273,11 @@ class EnergyManagerDecision:
     morning_preheat_allowed: bool
     morning_preheat_reason: str
     morning_preheat_load_to_add: str | None
+    underfloor_comfort_allowed: bool
+    underfloor_policy_state: str
+    underfloor_reason: str
+    underfloor_load_to_add: str | None
+    underfloor_current_window: str
     paid_grid_avoidance_required: bool
     paid_time_reserve_reason: str
     paid_time_floor_soc: float
@@ -259,6 +291,18 @@ class EnergyManagerDecision:
     thermal_target_fan_mode: str | None
     thermal_target_hvac_mode: str | None
     thermal_lease_reason: str
+    daily_battery_target_soc: float
+    remaining_solar_budget_kwh: float
+    battery_kwh_needed_to_target: float | None
+    expected_house_load_until_solar_end_kwh: float
+    safety_buffer_kwh: float
+    discretionary_energy_budget_kwh: float | None
+    energy_budget_reason: str
+    discretionary_budget_positive: bool
+    battery_target_reachable_today: bool
+    base_load_estimate_w: float
+    estimated_solar_hours_remaining: float
+    committed_flexible_load_energy_kwh: float
     effective_thermal_mode: str
     auto_mode_reason: str
     thermal_load_to_add: str | None

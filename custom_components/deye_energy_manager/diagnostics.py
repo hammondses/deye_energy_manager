@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.5.0",
+        "version": "0.5.1",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -38,6 +38,24 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "solar_arrived": decision.solar_arrived if decision else None,
             "solar_arrived_reason": decision.solar_arrived_reason if decision else None,
             "forecast_drain_blocked": decision.forecast_drain_blocked if decision else None,
+        },
+        "energy_budget": {
+            "daily_battery_target_soc": decision.daily_battery_target_soc if decision else None,
+            "remaining_solar_budget_kwh": decision.remaining_solar_budget_kwh if decision else None,
+            "battery_kwh_needed_to_target": decision.battery_kwh_needed_to_target if decision else None,
+            "expected_house_load_until_solar_end_kwh": decision.expected_house_load_until_solar_end_kwh if decision else None,
+            "safety_buffer_kwh": decision.safety_buffer_kwh if decision else None,
+            "discretionary_energy_budget_kwh": decision.discretionary_energy_budget_kwh if decision else None,
+            "battery_target_reachable_today": decision.battery_target_reachable_today if decision else None,
+            "base_load_estimate_w": decision.base_load_estimate_w if decision else None,
+            "reason": decision.energy_budget_reason if decision else None,
+        },
+        "underfloor": {
+            "allowed": decision.underfloor_comfort_allowed if decision else None,
+            "policy_state": decision.underfloor_policy_state if decision else None,
+            "reason": decision.underfloor_reason if decision else None,
+            "window": decision.underfloor_current_window if decision else None,
+            "load_to_add": decision.underfloor_load_to_add if decision else None,
         },
         "ev": {
             "charging_detected": decision.ev_charging_detected if decision else None,

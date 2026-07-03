@@ -68,9 +68,9 @@ def test_time_slots_and_tariff_windows() -> None:
 def test_heat_allowed_rules() -> None:
     settings = EnergyManagerSettings(thermal_control_enabled=True)
     assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-300), settings).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-6500), settings).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=91, battery_power_w=0), settings).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=85, battery_power_w=-2000, forecast_tomorrow_kwh=35), settings).heat_allowed
+    assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-6500), settings).heat_allowed
+    assert decide(base_inputs(now=dt(10), battery_soc=91, battery_power_w=0, forecast_remaining_today_kwh=20), settings).heat_allowed
+    assert decide(base_inputs(now=dt(10), battery_soc=85, battery_power_w=-2000, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=20), settings).heat_allowed
 
 
 def test_heat_shed_rules() -> None:
@@ -175,7 +175,7 @@ def test_ev_bypass_suppresses_battery_grid_charge() -> None:
 
 def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     decision = decide(
-        base_inputs(now=dt(12), battery_soc=90, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=10),
+        base_inputs(now=dt(12), battery_soc=90, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=22),
         EnergyManagerSettings(
             ev_control_enabled=True,
             ev_solar_charging_enabled=True,
@@ -195,7 +195,7 @@ def test_pv_load_test_recommended_when_expected_pv_is_clipped() -> None:
             battery_soc=78,
             battery_power_w=-1200,
             forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=12,
+            forecast_remaining_today_kwh=22,
             pv_power_now_w=1500,
             pv_power_in_30_minutes_w=5200,
             any_solar_owned_heat_load_on=False,
@@ -263,9 +263,9 @@ def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> N
     decision = decide(
         base_inputs(
             now=dt(11),
-            battery_soc=82,
-            battery_power_w=-1200,
-            forecast_remaining_today_kwh=12,
+                battery_soc=82,
+                battery_power_w=-1200,
+                forecast_remaining_today_kwh=25,
             forecast_tomorrow_kwh=35,
             pv_power_in_30_minutes_w=5200,
             any_solar_owned_heat_load_on=True,
@@ -450,7 +450,7 @@ def test_thermal_start_uses_thermal_min_soc_not_target_17_soc() -> None:
 
     assert decision.target_17_soc == 90
     assert decision.thermal_allowed
-    assert "SOC 89.0 >= thermal_start_min_soc 80" in decision.thermal_action_reason
+    assert "budget" in decision.thermal_action_reason
 
 
 def test_forecast_override_allows_thermal_before_soc_threshold() -> None:
@@ -471,8 +471,9 @@ def test_forecast_override_allows_thermal_before_soc_threshold() -> None:
     )
 
     assert decision.forecast_full_override_active
-    assert decision.thermal_allowed
-    assert "forecast_full_override active" in decision.thermal_action_reason
+    assert not decision.thermal_allowed
+    assert decision.thermal_policy_state == "battery_priority"
+    assert "budget" in decision.thermal_action_reason
 
 
 def test_keep_running_threshold_avoids_shed_while_charging() -> None:
@@ -649,8 +650,9 @@ def test_cooling_rotation_uses_cool_soak_target() -> None:
     decision = decide(
         base_inputs(
             now=dt(12),
-            battery_soc=85,
-            battery_power_w=-2500,
+                battery_soc=85,
+                battery_power_w=-2500,
+                forecast_remaining_today_kwh=25,
             any_solar_owned_heat_load_on=True,
             heat_loads=[
                 HeatLoadState(
@@ -683,8 +685,9 @@ def test_power_sensor_marks_owned_load_as_tapering() -> None:
     decision = decide(
         base_inputs(
             now=dt(12),
-            battery_soc=85,
-            battery_power_w=-2500,
+                battery_soc=85,
+                battery_power_w=-2500,
+                forecast_remaining_today_kwh=25,
             any_solar_owned_heat_load_on=True,
             heat_loads=[
                 HeatLoadState(
@@ -1047,7 +1050,8 @@ def test_charge_rate_allows_thermal_with_soc_unavailable() -> None:
         EnergyManagerSettings(thermal_control_enabled=True, thermal_start_min_charge_w=6000),
     )
 
-    assert decision.thermal_allowed
+    assert not decision.thermal_allowed
+    assert decision.discretionary_energy_budget_kwh is None
     assert decision.battery_soc is None
 
 
@@ -1202,3 +1206,251 @@ def test_unowned_emergency_shed_candidate_ignores_never_emergency_shed_load() ->
 
     assert decision.thermal_should_emergency_shed
     assert decision.thermal_load_to_normalise == "Office"
+
+
+def test_energy_budget_blocks_soak_when_battery_target_not_reachable() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=80,
+            forecast_remaining_today_kwh=5,
+            forecast_tomorrow_kwh=35,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
+    )
+
+    assert decision.battery_kwh_needed_to_target and decision.battery_kwh_needed_to_target > 6
+    assert decision.discretionary_energy_budget_kwh < 0
+    assert not decision.battery_target_reachable_today
+    assert not decision.thermal_allowed
+    assert decision.thermal_policy_state == "battery_priority"
+
+
+def test_energy_budget_allows_one_load_when_surplus_is_real() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=80,
+            forecast_remaining_today_kwh=22,
+            forecast_tomorrow_kwh=35,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
+    )
+
+    assert decision.discretionary_energy_budget_kwh > 0
+    assert decision.battery_target_reachable_today
+    assert decision.thermal_allowed
+    assert decision.thermal_load_to_add == "Office"
+
+
+def test_budget_positive_but_too_small_for_candidate_load_blocks_add() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=95,
+            forecast_remaining_today_kwh=15,
+            forecast_tomorrow_kwh=35,
+            heat_loads=[HeatLoadState(name="Dining", priority=1, current_temp=23, estimated_load_w=6000)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
+    )
+
+    assert decision.discretionary_energy_budget_kwh > 0
+    assert decision.thermal_allowed
+    assert decision.thermal_load_to_add is None
+
+
+def test_underfloor_floor_slab_uses_per_load_comfort_threshold() -> None:
+    comfortable = decide(
+        base_inputs(
+            now=dt(8),
+            battery_soc=80,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=11.5,
+                    load_type="underfloor",
+                    comfort_sensor_type="floor_slab",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    normal_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+    cold = decide(
+        base_inputs(
+            now=dt(8),
+            battery_soc=80,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=7,
+                    load_type="underfloor",
+                    comfort_sensor_type="floor_slab",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    normal_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert not comfortable.comfort_heat_allowed
+    assert not cold.comfort_heat_allowed
+    assert cold.underfloor_comfort_allowed
+    assert cold.thermal_target_temperature == 12
+    assert cold.thermal_lease_reason == "scheduled_underfloor_comfort"
+
+
+def test_underfloor_evening_schedule_heats_to_12c() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=60,
+            grid_power_w=0,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    load_type="floor_underfloor",
+                    comfort_sensor_type="floor_slab",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    normal_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.underfloor_comfort_allowed
+    assert decision.thermal_action == "underfloor_comfort"
+    assert decision.thermal_target_temperature == 12
+    assert "evening schedule active" in decision.underfloor_reason
+
+
+def test_underfloor_outside_schedule_is_blocked() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=60,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert not decision.underfloor_comfort_allowed
+    assert "outside comfort window" in decision.underfloor_reason
+
+
+def test_underfloor_paid_grid_avoidance_blocks_unless_allowed() -> None:
+    base = base_inputs(
+        now=dt(18),
+        battery_soc=31,
+        grid_power_w=800,
+        battery_power_w=500,
+        forecast_remaining_today_kwh=1,
+        heat_loads=[
+            HeatLoadState(
+                name="Bathroom underfloor",
+                priority=1,
+                current_temp=8,
+                load_type="floor_underfloor",
+                comfort_min_temp=9,
+                comfort_target_temp=12,
+                allow_solar_soak=False,
+            )
+        ],
+    )
+    blocked = decide(base, EnergyManagerSettings(thermal_control_enabled=True, underfloor_min_soc=30))
+    allowed = decide(
+        base,
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            underfloor_min_soc=30,
+            underfloor_allow_paid_grid=True,
+            underfloor_max_grid_import_w=1000,
+        ),
+    )
+
+    assert blocked.paid_grid_avoidance_required
+    assert not blocked.underfloor_comfort_allowed
+    assert "paid grid avoidance active" in blocked.underfloor_reason
+    assert allowed.underfloor_comfort_allowed
+
+
+def test_underfloor_soc_floor_blocks_schedule() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=32,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, underfloor_min_soc=40),
+    )
+
+    assert not decision.underfloor_comfort_allowed
+    assert "SOC 32" in decision.underfloor_reason
+
+
+def test_underfloor_preheat_uses_budget_before_evening_window() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(15),
+            battery_soc=95,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    estimated_load_w=800,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.underfloor_comfort_allowed
+    assert decision.underfloor_current_window == "evening_preheat"
+    assert decision.thermal_target_temperature == 12

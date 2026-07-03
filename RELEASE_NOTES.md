@@ -1,5 +1,15 @@
 # Release Notes
 
+## v0.5.1
+
+- Replace blunt thermal permission gates with a rolling discretionary energy-budget calculation.
+- Add sensors for remaining solar budget, battery kWh needed to target, expected house load to solar end, discretionary energy budget, base-load estimate, and energy-budget reason.
+- Add configurable daily battery target SOC, charge efficiency, dynamic base-load estimate, house-load buffer, and discretionary-load safety margins.
+- Use the rolling kWh budget for thermal soak, EV solar charging, PV load tests, and candidate load selection.
+- Treat Bathroom underfloor as a scheduled floor-slab comfort load, not a room-air comfort load or default solar thermal battery.
+- Add underfloor schedule controls, floor comfort thresholds, 12 C target, 14 C max target, SOC/grid guards, and underfloor policy diagnostics.
+- Default Bathroom underfloor to `floor_underfloor`, `floor_slab`, comfort min 9 C, comfort target 12 C, normal target 12 C, no cooling, no fan, no solar soak, and no unowned battery shed.
+
 ## v0.5.0
 
 - Add thermal policy states for battery priority, comfort-only heat, morning preheat, solar soak, normalise, shed, and emergency shed.
