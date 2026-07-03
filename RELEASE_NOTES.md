@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.5
+
+- Add local HACS/Home Assistant brand icon at `custom_components/deye_energy_manager/brand/icon.png`.
+- Supersede `v0.5.4`, which added HACS validation but failed the brand-assets validation check.
+- Packaging-only release; no controller behavior changes.
+
 ## v0.5.4
 
 - Clean HACS metadata to current documented `hacs.json` fields.
