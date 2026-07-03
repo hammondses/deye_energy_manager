@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.4
+
+- Clean HACS metadata to current documented `hacs.json` fields.
+- Add official HACS validation workflow for integration packaging checks.
+- Document the HACS custom repository install/update path.
+- Packaging-only release; no controller behavior changes.
+
 ## v0.5.3
 
 - Fix solar-soak permission so negative discretionary budget can never report `solar_soak_allowed` or `thermal_allowed=true`.

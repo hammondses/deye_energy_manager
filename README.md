@@ -17,6 +17,13 @@ Install through HACS as a custom repository after this project is pushed to GitH
 5. Restart Home Assistant
 6. Settings -> Devices & services -> Add integration -> Deye Energy Manager
 
+HACS release notes:
+
+- Add this repository as category `Integration`, not `Dashboard`.
+- The repository uses normal HACS integration layout: `custom_components/deye_energy_manager/` plus root `hacs.json`.
+- Versioned updates are published as GitHub releases such as `v0.5.4`; HACS uses the latest release tag as the remote version.
+- If GitHub shows a newer release but HACS does not offer it, open the repository in HACS and use the 3-dot menu -> `Update information`, then `Redownload`.
+
 ## Control Gates
 
 Actual writes are guarded by explicit toggles:
