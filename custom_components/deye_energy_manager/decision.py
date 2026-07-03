@@ -219,18 +219,24 @@ def load_energy_cost_kwh(load: HeatLoadState, settings: EnergyManagerSettings) -
 def load_comfort_min_temp(load: HeatLoadState, settings: EnergyManagerSettings) -> float:
     """Return per-load comfort minimum."""
 
+    if is_underfloor_load(load):
+        return load.comfort_min_temp if load.comfort_min_temp is not None else settings.underfloor_comfort_min_temp
     return load.comfort_min_temp if load.comfort_min_temp is not None else settings.comfort_min_room_temp
 
 
 def load_comfort_target_temp(load: HeatLoadState | None, settings: EnergyManagerSettings) -> float:
     """Return per-load comfort target."""
 
+    if load is not None and is_underfloor_load(load):
+        return load.comfort_target_temp if load.comfort_target_temp is not None else settings.underfloor_comfort_target_temp
     return load.comfort_target_temp if load is not None and load.comfort_target_temp is not None else settings.heat_comfort_target_temp
 
 
 def load_normal_target_temp(load: HeatLoadState, settings: EnergyManagerSettings) -> float:
     """Return per-load normal target."""
 
+    if is_underfloor_load(load):
+        return load.normal_target_temp if load.normal_target_temp is not None else settings.underfloor_comfort_target_temp
     return load.normal_target_temp if load.normal_target_temp is not None else settings.heat_normal_target_temp
 
 
@@ -456,6 +462,8 @@ def load_is_active(load: HeatLoadState, mode: str) -> bool:
 def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> bool:
     """Return whether a thermal load is close to the soak target or tapering."""
 
+    if is_underfloor_load(load) and not load.allow_solar_soak:
+        return load.current_temp is not None and load.current_temp >= load_comfort_min_temp(load, settings)
     mode = mode or effective_thermal_mode(settings)
     soak_target, _normal_target = thermal_targets(settings, mode)
     if load.power_w is not None and load.solar_owned and load.is_on and load.power_w <= load.taper_power_threshold_w:
@@ -470,6 +478,8 @@ def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings, mode
 def load_needs_soak(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> bool:
     """Return whether a load still has useful thermal storage headroom."""
 
+    if is_underfloor_load(load) and not load.allow_solar_soak:
+        return False
     mode = mode or effective_thermal_mode(settings)
     soak_target, _normal_target = thermal_targets(settings, mode)
     if load.blocked_until is not None or not load_supports_mode(load, mode):
@@ -624,6 +634,9 @@ def thermal_load_diagnostic(
 
     mode = effective_thermal_mode(settings, inputs.now, inputs.outdoor_temperature)
     soak_target, normal_target = thermal_targets(settings, mode)
+    if is_underfloor_load(load) and not load.allow_solar_soak:
+        soak_target = load_comfort_target_temp(load, settings)
+        normal_target = load_normal_target_temp(load, settings)
     blocked_by_mode = not load_supports_mode(load, mode)
     blocked_reason = None
     blocked_by_cooldown = False
@@ -649,7 +662,7 @@ def thermal_load_diagnostic(
         state = "unsupported_mode"
     elif not load.enabled:
         state = "blocked"
-    elif load.hvac_mode is None:
+    elif load.hvac_mode is None and load.current_temp is None:
         state = "unavailable"
     elif tapering:
         state = "tapering"
@@ -1022,14 +1035,24 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         else "passive warming not limiting"
     )
 
-    forecast_soak_allowed = battery_target_reachable and discretionary_budget_positive
+    potential_soak_costs = [
+        load_energy_cost_kwh(load, settings) + settings.solar_soak_required_battery_margin_kwh
+        for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode)
+        if cooldown_block_reason(load, settings, inputs.now, "add") is None
+    ]
+    smallest_soak_load_cost_kwh = min(potential_soak_costs) if potential_soak_costs else None
+    discretionary_budget_fits_soak_load = (
+        discretionary_budget_kwh is not None
+        and discretionary_budget_kwh > 0
+        and smallest_soak_load_cost_kwh is not None
+        and discretionary_budget_kwh >= smallest_soak_load_cost_kwh
+    )
+    forecast_soak_allowed = battery_target_reachable and discretionary_budget_fits_soak_load
     solar_soak_allowed = (
         not paid_grid_avoidance_required
         and not passive_warming_likely
-        and (
-            forecast_soak_allowed
-            or curtailment_likely
-        )
+        and battery_discharge_w < thermal_shed_discharge_w
+        and forecast_soak_allowed
     )
     full_send_soak_allowed = (
         not paid_grid_avoidance_required

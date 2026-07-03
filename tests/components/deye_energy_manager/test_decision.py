@@ -69,8 +69,27 @@ def test_heat_allowed_rules() -> None:
     settings = EnergyManagerSettings(thermal_control_enabled=True)
     assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-300), settings).heat_allowed
     assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-6500), settings).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=91, battery_power_w=0, forecast_remaining_today_kwh=20), settings).heat_allowed
-    assert decide(base_inputs(now=dt(10), battery_soc=85, battery_power_w=-2000, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=20), settings).heat_allowed
+    assert decide(
+        base_inputs(
+            now=dt(10),
+            battery_soc=91,
+            battery_power_w=0,
+            forecast_remaining_today_kwh=25,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        ),
+        settings,
+    ).heat_allowed
+    assert decide(
+        base_inputs(
+            now=dt(10),
+            battery_soc=85,
+            battery_power_w=-2000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=25,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        ),
+        settings,
+    ).heat_allowed
 
 
 def test_heat_shed_rules() -> None:
@@ -444,6 +463,7 @@ def test_thermal_start_uses_thermal_min_soc_not_target_17_soc() -> None:
             battery_power_w=-2500,
             forecast_tomorrow_kwh=35,
             forecast_remaining_today_kwh=18,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
         ),
         EnergyManagerSettings(thermal_control_enabled=True, thermal_start_min_soc=80),
     )
@@ -1331,8 +1351,8 @@ def test_budget_positive_but_too_small_for_candidate_load_blocks_add() -> None:
     )
 
     assert decision.discretionary_energy_budget_kwh > 0
-    assert decision.thermal_allowed
     assert decision.thermal_load_to_add is None
+    assert not decision.thermal_allowed
 
 
 def test_underfloor_floor_slab_uses_per_load_comfort_threshold() -> None:
@@ -1527,3 +1547,106 @@ def test_underfloor_preheat_uses_budget_before_evening_window() -> None:
     assert decision.underfloor_comfort_allowed
     assert decision.underfloor_current_window == "evening_preheat"
     assert decision.thermal_target_temperature == 12
+
+
+def test_negative_budget_blocks_solar_soak_allowed() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(15),
+            battery_soc=91,
+            forecast_remaining_today_kwh=1.82,
+            forecast_tomorrow_kwh=35,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
+    )
+
+    assert decision.discretionary_energy_budget_kwh < 0
+    assert not decision.battery_target_reachable_today
+    assert not decision.solar_soak_allowed
+    assert not decision.full_send_soak_allowed
+    assert not decision.thermal_allowed
+    assert decision.thermal_policy_state == "battery_priority"
+    assert "thermal_allowed=true" not in decision.thermal_action_reason
+
+
+def test_budget_too_small_for_smallest_load_blocks_solar_soak_allowed() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=95,
+            forecast_remaining_today_kwh=15,
+            forecast_tomorrow_kwh=35,
+            heat_loads=[HeatLoadState(name="Dining", priority=1, current_temp=23, estimated_load_w=6000)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
+    )
+
+    assert decision.discretionary_energy_budget_kwh > 0
+    assert decision.thermal_load_to_add is None
+    assert not decision.solar_soak_allowed
+    assert not decision.thermal_allowed
+
+
+def test_paid_grid_avoidance_blocks_solar_soak_even_with_positive_budget() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=31,
+            grid_power_w=800,
+            forecast_remaining_today_kwh=30,
+            forecast_tomorrow_kwh=35,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.paid_grid_avoidance_required
+    assert not decision.solar_soak_allowed
+    assert not decision.thermal_allowed
+
+
+def test_battery_discharge_shed_overrides_positive_budget() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=95,
+            battery_power_w=700,
+            forecast_remaining_today_kwh=30,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
+    )
+
+    assert decision.thermal_should_shed
+    assert not decision.solar_soak_allowed
+    assert not decision.thermal_allowed
+
+
+def test_underfloor_diagnostic_uses_underfloor_thresholds_not_room_air_defaults() -> None:
+    inputs = base_inputs(
+        now=dt(15),
+        battery_soc=91,
+        forecast_remaining_today_kwh=1.82,
+        heat_loads=[
+            HeatLoadState(
+                name="Bathroom underfloor",
+                priority=1,
+                current_temp=11.5,
+                target_temp=12,
+                load_type="floor_underfloor",
+                comfort_sensor_type="floor_slab",
+                allow_solar_soak=False,
+            )
+        ],
+    )
+    settings = EnergyManagerSettings(thermal_control_enabled=True)
+    decision = decide(inputs, settings)
+    diagnostic = thermal_load_diagnostic(inputs.heat_loads[0], settings, inputs, decision)
+
+    assert diagnostic.attributes["comfort_sensor_type"] == "floor_slab"
+    assert diagnostic.attributes["comfort_min_temp"] == 9.0
+    assert diagnostic.attributes["comfort_target_temp"] == 12.0
+    assert diagnostic.attributes["normal_target_temperature"] == 12.0
+    assert diagnostic.attributes["needs_soak"] is False
+    assert diagnostic.state in {"satisfied", "idle"}

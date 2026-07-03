@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.5.3
+
+- Fix solar-soak permission so negative discretionary budget can never report `solar_soak_allowed` or `thermal_allowed=true`.
+- Require positive budget, battery target reachable, no paid-grid avoidance, no shed-level battery discharge, and enough budget for the smallest candidate load minimum run before solar soak is allowed.
+- Fix underfloor diagnostics so floor-slab loads use underfloor thresholds instead of global room-air comfort values.
+- Prevent underfloor with solar soak disabled from reporting `needs_soak` against heat-soak targets.
+- Add regression tests for negative budget, too-small positive budget, paid-grid block, discharge shed override, and underfloor diagnostic thresholds.
+
 ## v0.5.2
 
 - Add an internal persisted last-known-good SOC cache using Home Assistant storage.
