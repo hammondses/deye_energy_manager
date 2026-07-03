@@ -10,6 +10,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -25,6 +26,7 @@ from .const import (
     DEFAULT_STRATEGY,
     DEFAULT_THERMAL_ACTUATION_MODE,
     DEFAULT_THERMAL_MODE,
+    DOMAIN,
     FAN_MODE_DEFAULTS,
     FEATURE_DEFAULTS,
     NUMBER_DEFAULTS,
@@ -40,6 +42,7 @@ from .repairs import async_update_issues
 _LOGGER = logging.getLogger(__name__)
 
 UNAVAILABLE = {"unknown", "unavailable", None}
+SOC_CACHE_STORAGE_VERSION = 1
 
 
 class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision]):
@@ -58,6 +61,13 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.started_at = dt_util.utcnow()
         self.previous_essential_power_w: float | None = None
         self._base_load_samples: deque[tuple[datetime, float]] = deque(maxlen=240)
+        self._soc_store: Store[dict[str, object]] = Store(
+            hass,
+            SOC_CACHE_STORAGE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_soc_cache",
+        )
+        self._last_good_soc: float | None = None
+        self._last_good_soc_updated: datetime | None = None
         self.ev_latch_on = False
         self.ev_hold_until: datetime | None = None
         self.ev_low_since: datetime | None = None
@@ -81,6 +91,40 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             async_track_time_interval(hass, self._handle_time_interval, DEFAULT_SCAN_INTERVAL)
         )
         entry.async_on_unload(self._remove_all_listeners)
+
+    async def async_load_stored_soc(self) -> None:
+        """Load persisted last-known-good SOC before the first refresh."""
+
+        data = await self._soc_store.async_load()
+        if not data:
+            return
+        try:
+            soc = float(data.get("last_good_soc"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        updated_raw = data.get("last_good_updated")
+        updated = dt_util.parse_datetime(str(updated_raw)) if updated_raw else None
+        if updated is None:
+            return
+        if updated.tzinfo is None:
+            updated = dt_util.as_local(updated)
+        self._last_good_soc = soc
+        self._last_good_soc_updated = updated
+
+    def _set_last_good_soc(self, soc: float, updated: datetime) -> None:
+        """Update persisted last-known-good SOC cache."""
+
+        self._last_good_soc = soc
+        self._last_good_soc_updated = updated
+        self._soc_store.async_delay_save(self._soc_cache_payload, 1)
+
+    def _soc_cache_payload(self) -> dict[str, object]:
+        """Return serializable SOC cache data."""
+
+        return {
+            "last_good_soc": self._last_good_soc,
+            "last_good_updated": self._last_good_soc_updated.isoformat() if self._last_good_soc_updated else None,
+        }
 
     @property
     def entity_map(self) -> dict[str, str]:
@@ -300,20 +344,28 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return None
         return dt_util.parse_datetime(state.state)
 
-    def _resolve_soc(self, now: datetime, settings: EnergyManagerSettings) -> tuple[float | None, str | None, str, float | None]:
+    def _resolve_soc(self, now: datetime, settings: EnergyManagerSettings) -> tuple[float | None, str | None, str, float | None, float | None, datetime | None]:
         primary_entity = self.entity_map.get("primary_soc_entity") or self.entity_map.get("battery_soc")
         fallback_entity = self.entity_map.get("fallback_soc_entity")
         fallback_timestamp_entity = self.entity_map.get("fallback_soc_timestamp_entity")
         raw_soc = self._entity_state_string(primary_entity)
         live_soc = self._entity_float(primary_entity) if primary_entity else None
         if live_soc is not None:
-            return live_soc, raw_soc, "live", 0.0
+            self._set_last_good_soc(live_soc, now)
+            return live_soc, raw_soc, "live", 0.0, self._last_good_soc, self._last_good_soc_updated
 
         fallback_soc = self._entity_float(fallback_entity) if fallback_entity else None
         fallback_ts = self._entity_datetime(fallback_timestamp_entity)
         if fallback_soc is not None and fallback_ts is not None:
             if fallback_ts.tzinfo is None:
                 fallback_ts = dt_util.as_local(fallback_ts)
+        cache_soc = self._last_good_soc
+        cache_ts = self._last_good_soc_updated
+        if cache_soc is not None and cache_ts is not None:
+            cache_age_minutes = max((now - cache_ts).total_seconds() / 60.0, 0.0)
+            if cache_age_minutes <= settings.max_fallback_soc_age_minutes:
+                fallback_soc = cache_soc
+                fallback_ts = cache_ts
         resolved_soc, soc_source, soc_age_minutes = resolve_soc_value(
             raw_soc,
             fallback_soc,
@@ -321,7 +373,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             now,
             settings.max_fallback_soc_age_minutes,
         )
-        return resolved_soc, raw_soc, soc_source, soc_age_minutes
+        return resolved_soc, raw_soc, soc_source, soc_age_minutes, self._last_good_soc, self._last_good_soc_updated
 
 
     def _any_owned_heat_on(self) -> bool:
@@ -496,7 +548,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         ev_power = self._state_float("ev_power")
         settings = self.settings
         base_load_estimate = self._update_base_load_estimate(now, essential_power, settings)
-        resolved_soc, raw_soc, soc_source, soc_age_minutes = self._resolve_soc(now, settings)
+        resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
         if ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w:
             self.ev_low_since = self.ev_low_since or now
         else:
@@ -507,6 +559,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             raw_soc=raw_soc,
             soc_source=soc_source,
             soc_age_minutes=soc_age_minutes,
+            last_good_soc=last_good_soc,
+            last_good_soc_updated=last_good_updated,
             battery_power_w=self._state_float("battery_power") or 0.0,
             essential_power_w=essential_power,
             grid_power_w=self._state_float("grid_ct_power") or 0.0,

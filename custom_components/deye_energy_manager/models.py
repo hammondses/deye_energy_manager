@@ -192,6 +192,8 @@ class EnergyManagerInputs:
     raw_soc: str | None = None
     soc_source: str = "live"
     soc_age_minutes: float | None = None
+    last_good_soc: float | None = None
+    last_good_soc_updated: datetime | None = None
     battery_power_w: float = 0.0
     essential_power_w: float = 0.0
     grid_power_w: float = 0.0
@@ -248,6 +250,8 @@ class EnergyManagerDecision:
     resolved_soc: float | None
     soc_source: str
     soc_age_minutes: float | None
+    last_good_soc: float | None
+    last_good_soc_updated: datetime | None
     battery_power_w: float
     battery_charge_w: float
     battery_discharge_w: float

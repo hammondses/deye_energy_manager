@@ -124,6 +124,8 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
                 "resolved_soc": decision.resolved_soc,
                 "soc_source": decision.soc_source,
                 "soc_age_minutes": decision.soc_age_minutes,
+                "last_good_soc": decision.last_good_soc,
+                "last_good_updated": decision.last_good_soc_updated.isoformat() if decision.last_good_soc_updated else None,
             }
         return None
 

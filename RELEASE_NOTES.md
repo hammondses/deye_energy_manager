@@ -1,5 +1,14 @@
 # Release Notes
 
+## v0.5.2
+
+- Add an internal persisted last-known-good SOC cache using Home Assistant storage.
+- Load the restored SOC cache before the first coordinator refresh, so energy-budget calculations can run while Modbus SOC is still `unknown` after startup.
+- Update the SOC resolver to prefer live numeric SOC, then fresh internal restored SOC, then optional helper fallback, then unavailable.
+- Save every live numeric SOC and timestamp back to the internal cache.
+- Add last-good SOC and timestamp attributes to SOC diagnostic sensors and diagnostics downloads.
+- Add regression tests for budget calculation with restored SOC, stale fallback behavior, and underfloor policy using restored SOC.
+
 ## v0.5.1
 
 - Replace blunt thermal permission gates with a rolling discretionary energy-budget calculation.

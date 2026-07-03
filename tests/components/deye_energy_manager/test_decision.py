@@ -1019,6 +1019,49 @@ def test_soc_resolver_uses_fresh_last_known_good() -> None:
     assert age == 8
 
 
+def test_budget_calculates_with_restored_last_known_good_soc() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=88.25,
+            raw_soc="unknown",
+            soc_source="last_known_good",
+            soc_age_minutes=12,
+            last_good_soc=88.25,
+            last_good_soc_updated=dt(11, 48),
+            forecast_remaining_today_kwh=18,
+            forecast_tomorrow_kwh=35,
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.soc_source == "last_known_good"
+    assert decision.battery_kwh_needed_to_target is not None
+    assert decision.discretionary_energy_budget_kwh is not None
+    assert "SOC last-known-good: 88%, age 12m" in decision.reason
+    assert decision.last_good_soc == 88.25
+
+
+def test_stale_restored_soc_keeps_budget_unavailable() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=None,
+            raw_soc="unknown",
+            soc_source="unavailable",
+            soc_age_minutes=420,
+            last_good_soc=88.25,
+            last_good_soc_updated=dt(5),
+            forecast_remaining_today_kwh=18,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert decision.battery_kwh_needed_to_target is None
+    assert decision.discretionary_energy_budget_kwh is None
+    assert "SOC unavailable" in decision.reason
+
+
 def test_soc_resolver_rejects_stale_last_known_good() -> None:
     soc, source, age = resolve_soc_value("unknown", 100, dt(5), dt(12), 360)
 
@@ -1032,6 +1075,36 @@ def test_unknown_soc_never_becomes_zero() -> None:
 
     assert soc is None
     assert source == "unavailable"
+
+
+def test_underfloor_policy_uses_restored_soc_when_raw_soc_unknown() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=60,
+            raw_soc="unknown",
+            soc_source="last_known_good",
+            soc_age_minutes=10,
+            last_good_soc=60,
+            last_good_soc_updated=dt(17, 50),
+            forecast_remaining_today_kwh=10,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, underfloor_min_soc=40),
+    )
+
+    assert decision.underfloor_comfort_allowed
+    assert decision.thermal_target_temperature == 12
 
 
 def test_discharge_sheds_with_soc_unavailable() -> None:

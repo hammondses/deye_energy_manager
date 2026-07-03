@@ -271,6 +271,17 @@ Last-known-good SOC fallback:
 
 The integration uses live local Deye SOC when numeric. If live SOC is `unknown`/`unavailable`, it can use the local helper value while the timestamp is fresh. It does not use cloud/Solarman SOC entities by default, and it never converts unknown SOC to `0`.
 
+The primary fallback is now an internal restored cache. Every live numeric SOC is stored with a timestamp in Home Assistant storage and restored before the first coordinator refresh after restart. During Modbus startup delays, the energy budget uses this fresh restored value and reports `soc_source = last_known_good` instead of making budget sensors unavailable. The optional helper entities remain supported as a secondary fallback.
+
+SOC diagnostic attributes include:
+
+- `raw_soc`
+- `resolved_soc`
+- `soc_source`
+- `soc_age_minutes`
+- `last_good_soc`
+- `last_good_updated`
+
 Home Assistant may prefix these entities with the config entry name, for example `sensor.garage_deye_energy_manager_soc_source`. The `input_number` and `input_datetime` fallback helpers are external Home Assistant helpers; the integration reads them but does not create them automatically.
 
 Optional helper example:
