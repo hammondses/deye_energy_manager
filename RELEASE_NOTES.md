@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.12
+
+- Fix coordinator startup after v0.5.11 by importing the shared `time_between` helper used by EV/base-load detection.
+
 ## v0.5.11
 
 - Persist thermal runtime state across Home Assistant restarts, including manual override cooldowns, pending confirmation windows, lease state, and last add/shed/rotation timestamps.

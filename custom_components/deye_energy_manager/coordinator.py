@@ -34,7 +34,7 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import decide, forecast_tier, resolve_soc_value, slot_capacity_targets, thermal_load_diagnostics
+from .decision import decide, forecast_tier, resolve_soc_value, slot_capacity_targets, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
