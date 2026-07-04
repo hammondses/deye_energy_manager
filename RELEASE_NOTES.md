@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.14
+
+- Add the root repository license required by HACS validation.
+- Supersede `v0.5.13`; controller behavior is unchanged from that release.
+
 ## v0.5.13
 
 - Add a single Deye program-write planner so cheap-grid, paid-grid avoidance, EV bypass, thermal policy, and restore paths no longer write conflicting inverter settings independently.
