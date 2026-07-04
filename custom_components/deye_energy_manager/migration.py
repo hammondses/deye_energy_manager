@@ -40,12 +40,23 @@ def migrate_options(options: dict[str, object], data: dict[str, object] | None =
 
     heat_mode = str(migrated_options.get("heat_mode", DEFAULT_HEAT_MODE))
     thermal_actuation_mode = str(migrated_options.get("thermal_actuation_mode", DEFAULT_THERMAL_ACTUATION_MODE))
-    if thermal_actuation_mode == DEFAULT_THERMAL_ACTUATION_MODE:
+    if thermal_actuation_mode == "scripts":
+        migrated_options["thermal_actuation_mode"] = (
+            "direct" if bool(migrated_options.get("direct_climate_control_enabled", False)) else DEFAULT_THERMAL_ACTUATION_MODE
+        )
+        changed = True
+    elif thermal_actuation_mode == DEFAULT_THERMAL_ACTUATION_MODE:
         if heat_mode == "auto_scripts":
-            migrated_options["thermal_actuation_mode"] = "scripts"
+            migrated_options["thermal_actuation_mode"] = (
+                "direct" if bool(migrated_options.get("direct_climate_control_enabled", False)) else DEFAULT_THERMAL_ACTUATION_MODE
+            )
             changed = True
         elif heat_mode == "auto_direct":
             migrated_options["thermal_actuation_mode"] = "direct"
             changed = True
+
+    if heat_mode == "auto_scripts":
+        migrated_options["heat_mode"] = "auto_direct" if bool(migrated_options.get("direct_climate_control_enabled", False)) else "advisory"
+        changed = True
 
     return migrated_options, changed

@@ -52,7 +52,8 @@ class DeyeOptionSelect(DeyeEnergyManagerEntity, SelectEntity):
 
     @property
     def current_option(self) -> str:
-        return str(self.coordinator.entry.options.get(self._key, self._default))
+        option = str(self.coordinator.entry.options.get(self._key, self._default))
+        return option if option in self.options else self._default
 
     async def async_select_option(self, option: str) -> None:
         if option not in self.options:

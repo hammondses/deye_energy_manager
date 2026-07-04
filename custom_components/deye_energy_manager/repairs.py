@@ -37,7 +37,7 @@ REPAIR_ISSUE_IDS = {
     "power_sensor_invalid",
     "direct_no_climates",
     "thermal_enabled_mode_off",
-    "scripts_missing",
+    "scripts_retired",
     "ev_power_invalid",
     "ev_bypass_missing_deye_power_entities",
     "ev_cheap_grid_bypass_disabled",
@@ -128,13 +128,10 @@ def repair_issue_definitions(
             "fix": "Set thermal mode to heating, cooling, or auto, or disable thermal control.",
         }
 
-    if settings.thermal_actuation_mode == "scripts" and (
-        not state_exists("script.deye_energy_manager_add_one_heat_load")
-        or not state_exists("script.deye_energy_manager_shed_one_heat_load")
-    ):
-        issues["scripts_missing"] = {
-            "title": "Thermal script mode is missing required scripts",
-            "fix": "Create script.deye_energy_manager_add_one_heat_load and script.deye_energy_manager_shed_one_heat_load, or switch thermal actuation mode to advisory/direct.",
+    if settings.thermal_actuation_mode == "scripts":
+        issues["scripts_retired"] = {
+            "title": "Thermal script actuation has been retired",
+            "fix": "Switch thermal actuation mode to direct with direct climate control enabled, or use advisory mode.",
         }
 
     if entity_map.get("ev_power") and not state_exists(entity_map["ev_power"]):

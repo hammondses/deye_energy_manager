@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .decision import slugify
@@ -36,6 +37,17 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="soc_age_minutes", name="SOC age minutes", value_fn=lambda d: d.soc_age_minutes),
     DeyeSensorDescription(key="grid_charge_target_soc", name="Grid charge target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.grid_charge_target_soc),
     DeyeSensorDescription(key="morning_target_soc", name="Morning target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.morning_target_soc),
+    DeyeSensorDescription(key="morning_start_soc_target", name="Morning start SOC target", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.morning_start_soc_target),
+    DeyeSensorDescription(key="evening_peak_soc_target", name="Evening peak SOC target", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.evening_peak_soc_target),
+    DeyeSensorDescription(key="projected_4pm_soc", name="Projected 4pm SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.projected_4pm_soc),
+    DeyeSensorDescription(key="required_4pm_energy_kwh", name="Required 4pm energy", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.required_4pm_energy_kwh),
+    DeyeSensorDescription(key="night_grid_topup_kwh_required", name="Night grid topup kWh required", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.night_grid_topup_kwh_required),
+    DeyeSensorDescription(key="energy_plan_reason", name="Energy plan reason", value_fn=lambda d: d.energy_plan_reason),
+    DeyeSensorDescription(key="desired_deye_plan", name="Desired Deye plan", value_fn=lambda d: d.expected_action),
+    DeyeSensorDescription(key="applied_deye_plan", name="Applied Deye plan", value_fn=lambda d: d.expected_action),
+    DeyeSensorDescription(key="deye_write_reason", name="Deye write reason", value_fn=lambda d: d.reason),
+    DeyeSensorDescription(key="deye_write_suppressed_reason", name="Deye write suppressed reason", value_fn=lambda d: d.reason),
+    DeyeSensorDescription(key="deye_write_count_last_hour", name="Deye write count last hour", value_fn=lambda d: 0),
     DeyeSensorDescription(key="cheap_grid_preserve_target_soc", name="Cheap grid preserve target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cheap_grid_preserve_target_soc),
     DeyeSensorDescription(key="cheap_grid_mode", name="Cheap grid mode", value_fn=lambda d: d.cheap_grid_mode),
     DeyeSensorDescription(key="cheap_grid_reason", name="Cheap grid reason", value_fn=lambda d: d.cheap_grid_reason),
@@ -113,6 +125,17 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
             return None
         if self.entity_description.key == "last_control_action":
             return self.coordinator.last_control_action
+        if self.entity_description.key == "desired_deye_plan":
+            return self.coordinator.desired_deye_plan
+        if self.entity_description.key == "applied_deye_plan":
+            return self.coordinator.applied_deye_plan
+        if self.entity_description.key == "deye_write_reason":
+            return self.coordinator.deye_write_reason
+        if self.entity_description.key == "deye_write_suppressed_reason":
+            return self.coordinator.deye_write_suppressed_reason
+        if self.entity_description.key == "deye_write_count_last_hour":
+            self.coordinator._trim_deye_write_windows(dt_util.utcnow())
+            return len(self.coordinator._deye_write_events)
         if self.entity_description.key == "recent_proposed_actions":
             return self.coordinator.recent_proposed_actions[-1]["proposed_action"] if self.coordinator.recent_proposed_actions else "none"
         return self.entity_description.value_fn(self.coordinator.data)

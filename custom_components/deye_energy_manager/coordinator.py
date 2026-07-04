@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -15,7 +16,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CHARGE_OPTION_ALLOW_GRID,
     CHARGE_OPTION_NO_GRID,
     CONF_ENTITY_MAP,
     CONF_HEAT_LOADS,
@@ -34,9 +34,9 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import decide, forecast_tier, resolve_soc_value, slot_capacity_targets, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, decide, deye_write_thrash_detected, resolve_soc_value, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
-from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
+from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,7 +86,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_hold_until: datetime | None = None
         self.ev_low_since: datetime | None = None
         self.last_control_action = "none"
+        self._apply_lock = asyncio.Lock()
         self._last_written: dict[str, object] = {}
+        self._last_write_time: dict[str, datetime] = {}
+        self._deye_write_attempts: deque[tuple[datetime, str, object]] = deque(maxlen=200)
+        self._deye_write_events: deque[tuple[datetime, str, object]] = deque(maxlen=200)
+        self.desired_deye_plan = "none"
+        self.applied_deye_plan = "none"
+        self.deye_write_reason = "none"
+        self.deye_write_suppressed_reason = "none"
+        self.deye_write_thrash_detected = False
         self._heat_blocked_until: dict[str, datetime] = {}
         self._thermal_last_added_at: dict[str, datetime] = {}
         self._thermal_last_shed_at: dict[str, datetime] = {}
@@ -371,6 +380,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             forecast_safety_buffer_kwh=float(options["forecast_safety_buffer_kwh"]),
             min_soc_floor=float(options["min_soc_floor"]),
             max_grid_charge_target_soc=float(options["max_grid_charge_target_soc"]),
+            evening_peak_soc_target=float(options["evening_peak_soc_target"]),
+            evening_peak_heating_allowance_kwh=float(options["evening_peak_heating_allowance_kwh"]),
+            evening_peak_ev_allowance_kwh=float(options["evening_peak_ev_allowance_kwh"]),
             cheap_grid_preserve_soc=float(options["cheap_grid_preserve_soc"]),
             cheap_grid_charge_target_soc=float(options["cheap_grid_charge_target_soc"]),
             pv_load_test_min_soc=float(options["pv_load_test_min_soc"]),
@@ -388,13 +400,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def _legacy_thermal_actuation_mode(self, options: dict[str, object]) -> str:
         heat_mode = str(options.get("heat_mode", DEFAULT_HEAT_MODE))
         if heat_mode == "auto_scripts":
-            return "scripts"
+            return "direct" if bool(options.get("direct_climate_control_enabled", False)) else DEFAULT_THERMAL_ACTUATION_MODE
         if heat_mode == "auto_direct":
             return "direct"
         return DEFAULT_THERMAL_ACTUATION_MODE
 
     def _effective_thermal_actuation_mode(self, options: dict[str, object]) -> str:
         thermal_mode = str(options.get("thermal_actuation_mode", DEFAULT_THERMAL_ACTUATION_MODE))
+        if thermal_mode == "scripts":
+            return "direct" if bool(options.get("direct_climate_control_enabled", False)) else DEFAULT_THERMAL_ACTUATION_MODE
         legacy_mode = self._legacy_thermal_actuation_mode(options)
         if (
             bool(options.get("heat_control_enabled", False))
@@ -772,7 +786,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def _would_actuate(self, subsystem: str) -> bool:
         settings = self.settings
         if subsystem == "thermal":
-            return settings.thermal_control_enabled and settings.thermal_actuation_mode != "advisory"
+            return (
+                settings.thermal_control_enabled
+                and settings.thermal_actuation_mode == "direct"
+                and settings.direct_climate_control_enabled
+            )
         if subsystem == "ev":
             return settings.ev_control_enabled and settings.ev_grid_bypass_enabled
         return False
@@ -784,6 +802,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 return "thermal control disabled"
             if settings.thermal_actuation_mode == "advisory":
                 return "advisory mode"
+            if settings.thermal_actuation_mode == "scripts":
+                return "thermal script actuation retired"
             if settings.thermal_actuation_mode == "direct" and not settings.direct_climate_control_enabled:
                 return "direct climate control disabled"
         if subsystem == "ev" and not settings.ev_control_enabled:
@@ -839,14 +859,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             options["heat_control_enabled"] = bool(value)
         elif key == "heat_mode":
             if value == "auto_scripts":
-                options["thermal_actuation_mode"] = "scripts"
+                options["thermal_actuation_mode"] = "direct" if bool(options.get("direct_climate_control_enabled", False)) else "advisory"
+                options["heat_mode"] = "auto_direct" if bool(options.get("direct_climate_control_enabled", False)) else "advisory"
             elif value == "auto_direct":
                 options["thermal_actuation_mode"] = "direct"
             elif value == "advisory":
                 options["thermal_actuation_mode"] = "advisory"
         elif key == "thermal_actuation_mode":
             if value == "scripts":
-                options["heat_mode"] = "auto_scripts"
+                options["thermal_actuation_mode"] = "direct" if bool(options.get("direct_climate_control_enabled", False)) else "advisory"
+                options["heat_mode"] = "auto_direct" if bool(options.get("direct_climate_control_enabled", False)) else "advisory"
             elif value == "direct":
                 options["heat_mode"] = "auto_direct"
             elif value == "advisory":
@@ -870,7 +892,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
         self.ev_latch_on = required
         self.ev_hold_until = dt_util.now() + timedelta(minutes=self.settings.ev_fallback_hold_minutes) if required else None
-        await self._apply_ev_mode(required)
+        async with self._apply_lock:
+            await self._apply_deye_plan(self._manual_ev_power_plan(required), force=True, override_gates=True)
         await self.async_request_refresh()
 
     async def async_restore_deye_normal(self) -> None:
@@ -878,41 +901,39 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
         self.ev_latch_on = False
         self.ev_hold_until = None
-        for entity_id in (PROG_POWER_ENTITIES[5], PROG_POWER_ENTITIES[0], PROG_POWER_ENTITIES[1], PROG_POWER_ENTITIES[2]):
-            await self._call_number_set(entity_id, self.settings.ev_restore_program_power_w)
-        for entity_id in (PROG_CHARGE_SELECT_ENTITIES[5], PROG_CHARGE_SELECT_ENTITIES[0], PROG_CHARGE_SELECT_ENTITIES[1], PROG_CHARGE_SELECT_ENTITIES[2]):
-            await self._call_select_option(entity_id, CHARGE_OPTION_NO_GRID)
-        self.last_control_action = "restored Deye normal: Prog6/1/2/3 powers restored, grid charge disabled"
+        async with self._apply_lock:
+            await self._apply_deye_plan(self._manual_restore_deye_plan(), force=True, override_gates=True)
         await self.async_request_refresh()
 
     async def async_apply_decision(self, decision: EnergyManagerDecision | None = None) -> None:
         """Apply safe, gated actuator writes."""
 
-        decision = decision or self.data
-        if decision is None or decision.control_blocked:
-            return
-        if dt_util.utcnow() - self.started_at < timedelta(seconds=60):
-            return
-        settings = self.settings
-        if settings.deye_control_enabled:
-            await self._apply_deye_capacity_targets(decision)
-        if settings.ev_control_enabled:
-            await self._apply_ev_mode(decision.ev_grid_bypass_required)
-        if settings.grid_charge_control_enabled:
-            await self._apply_grid_charge(decision)
-        if settings.heat_control_enabled or settings.thermal_control_enabled:
-            await self._apply_heat(decision)
+        async with self._apply_lock:
+            decision = decision or self.data
+            if decision is None or decision.control_blocked:
+                return
+            if dt_util.utcnow() - self.started_at < timedelta(seconds=60):
+                return
+            settings = self.settings
+            if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
+                await self._apply_deye_plan(build_deye_plan(decision, settings))
+            if settings.heat_control_enabled or settings.thermal_control_enabled:
+                await self._apply_heat(decision)
 
-    async def _call_number_set(self, entity_id: str, value: float) -> None:
+    async def _call_number_set(self, entity_id: str, value: float, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
-            return
+            self.deye_write_suppressed_reason = f"{entity_id} unavailable"
+            return False
         try:
             if abs(float(state.state) - value) < 0.01:
                 self._last_written[entity_id] = value
-                return
+                self.deye_write_suppressed_reason = f"{entity_id} already {value:.0f}"
+                return False
         except (TypeError, ValueError):
             pass
+        if not force and self._suppress_deye_write(entity_id, value, emergency=emergency):
+            return False
         await self.hass.services.async_call(
             "number",
             "set_value",
@@ -920,14 +941,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             blocking=False,
         )
         self._last_written[entity_id] = value
+        self._record_deye_write(entity_id, value, reason)
+        return True
 
-    async def _call_select_option(self, entity_id: str, option: str) -> None:
+    async def _call_select_option(self, entity_id: str, option: str, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
-            return
+            self.deye_write_suppressed_reason = f"{entity_id} unavailable"
+            return False
         if state.state == option:
             self._last_written[entity_id] = option
-            return
+            self.deye_write_suppressed_reason = f"{entity_id} already {option}"
+            return False
+        if not force and self._suppress_deye_write(entity_id, option, emergency=emergency):
+            return False
         await self.hass.services.async_call(
             "select",
             "select_option",
@@ -935,14 +962,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             blocking=False,
         )
         self._last_written[entity_id] = option
+        self._record_deye_write(entity_id, option, reason)
+        return True
 
-    async def _call_switch(self, entity_id: str, on: bool) -> None:
+    async def _call_switch(self, entity_id: str, on: bool, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
-            return
+            self.deye_write_suppressed_reason = f"{entity_id} unavailable"
+            return False
         if state.state == ("on" if on else "off"):
             self._last_written[entity_id] = on
-            return
+            self.deye_write_suppressed_reason = f"{entity_id} already {'on' if on else 'off'}"
+            return False
+        if not force and self._suppress_deye_write(entity_id, on, emergency=emergency):
+            return False
         await self.hass.services.async_call(
             "switch",
             "turn_on" if on else "turn_off",
@@ -950,53 +983,63 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             blocking=False,
         )
         self._last_written[entity_id] = on
+        self._record_deye_write(entity_id, on, reason)
+        return True
 
-    async def _apply_deye_capacity_targets(self, decision: EnergyManagerDecision) -> None:
-        tier = forecast_tier(decision.forecast_tomorrow_kwh, self.settings)
-        targets = slot_capacity_targets(tier)
-        slot_to_entity = {
-            "Prog1": PROG_CAPACITY_ENTITIES[0],
-            "Prog2": PROG_CAPACITY_ENTITIES[1],
-            "Prog3": PROG_CAPACITY_ENTITIES[2],
-            "Prog4": PROG_CAPACITY_ENTITIES[3],
-            "Prog5": PROG_CAPACITY_ENTITIES[4],
-            "Prog6": PROG_CAPACITY_ENTITIES[5],
-        }
-        for slot, value in targets.items():
-            cheap_slots = {"Prog6", "Prog1", "Prog2"}
-            if decision.tariff_window == "cheap_grid" and decision.cheap_grid_preserve_required and (
-                slot in cheap_slots or slot == decision.active_slot
-            ):
-                value = max(value, decision.morning_target_soc)
-            elif slot == decision.active_slot:
-                value = max(value, decision.active_reserve_target_soc)
-            await self._call_number_set(slot_to_entity[slot], value)
-        if decision.grid_charge_required:
-            self.last_control_action = f"raised {decision.active_slot} reserve to {decision.grid_charge_target_soc:.0f}% for cheap-grid charge"
-        elif decision.cheap_grid_preserve_required:
-            self.last_control_action = f"raised {decision.active_slot} reserve to {decision.cheap_grid_preserve_target_soc:.0f}% for cheap-grid preserve"
-        elif decision.paid_grid_avoidance_required:
-            self.last_control_action = f"set {decision.active_slot} reserve to {decision.active_reserve_target_soc:.0f}% for paid grid avoidance"
-        else:
-            self.last_control_action = "updated Deye reserve floors"
+    def _suppress_deye_write(self, entity_id: str, desired: object, *, emergency: bool) -> bool:
+        now = dt_util.utcnow()
+        self._deye_write_attempts.append((now, entity_id, desired))
+        self._trim_deye_write_windows(now)
+        if self._entity_thrash_detected(entity_id, now):
+            self.deye_write_thrash_detected = True
+            self.deye_write_suppressed_reason = f"thrash protection: {entity_id} changed/attempted more than 6 times in 10 minutes"
+            return not emergency
+        last = self._last_write_time.get(entity_id)
+        if not emergency and last is not None and now - last < timedelta(seconds=90):
+            self.deye_write_suppressed_reason = f"cooldown: {entity_id} written {(now - last).total_seconds():.0f}s ago"
+            return True
+        return False
 
-    async def _apply_ev_mode(self, required: bool) -> None:
-        ev_bypass_entities = [PROG_POWER_ENTITIES[5], PROG_POWER_ENTITIES[0], PROG_POWER_ENTITIES[1], PROG_POWER_ENTITIES[2]]
-        for entity_id in ev_bypass_entities:
-            await self._call_number_set(entity_id, 0.0 if required else self.settings.ev_restore_program_power_w)
-        self.last_control_action = "EV grid bypass start: Deye programme powers -> 0" if required else "EV grid bypass restore: Deye programme powers restored"
+    def _record_deye_write(self, entity_id: str, value: object, reason: str) -> None:
+        now = dt_util.utcnow()
+        self._last_write_time[entity_id] = now
+        self._deye_write_events.append((now, entity_id, value))
+        self._trim_deye_write_windows(now)
+        self.deye_write_reason = reason or f"{entity_id} -> {value}"
+        self.deye_write_suppressed_reason = "none"
 
-    async def _apply_grid_charge(self, decision: EnergyManagerDecision) -> None:
-        switch_id = self.entity_map.get("grid_charge_switch", "switch.deye_grid_charge_enabled")
-        await self._call_switch(switch_id, decision.grid_charge_required)
-        slot_to_charge = {
-            "Prog1": PROG_CHARGE_SELECT_ENTITIES[0],
-            "Prog2": PROG_CHARGE_SELECT_ENTITIES[1],
-            "Prog3": PROG_CHARGE_SELECT_ENTITIES[2],
-            "Prog4": PROG_CHARGE_SELECT_ENTITIES[3],
-            "Prog5": PROG_CHARGE_SELECT_ENTITIES[4],
-            "Prog6": PROG_CHARGE_SELECT_ENTITIES[5],
-        }
+    def _trim_deye_write_windows(self, now: datetime) -> None:
+        cutoff_hour = now - timedelta(hours=1)
+        while self._deye_write_events and self._deye_write_events[0][0] < cutoff_hour:
+            self._deye_write_events.popleft()
+        cutoff_thrash = now - timedelta(minutes=10)
+        while self._deye_write_attempts and self._deye_write_attempts[0][0] < cutoff_thrash:
+            self._deye_write_attempts.popleft()
+        self.deye_write_thrash_detected = any(self._entity_thrash_detected(entity, now) for _ts, entity, _value in self._deye_write_attempts)
+
+    def _entity_thrash_detected(self, entity_id: str, now: datetime) -> bool:
+        return deye_write_thrash_detected(list(self._deye_write_attempts), entity_id, now)
+
+    def _manual_ev_power_plan(self, required: bool) -> DeyePlan:
+        slots = {"Prog6", "Prog1", "Prog2", "Prog3"}
+        value = 0.0 if required else self.settings.ev_restore_program_power_w
+        return DeyePlan(
+            mode="manual_ev_grid_bypass_start" if required else "manual_ev_grid_bypass_restore",
+            reason="manual EV grid bypass start" if required else "manual EV grid bypass restore",
+            power_targets={slot: value for slot in slots},
+        )
+
+    def _manual_restore_deye_plan(self) -> DeyePlan:
+        slots = ("Prog6", "Prog1", "Prog2", "Prog3")
+        return DeyePlan(
+            mode="manual_restore_deye_normal",
+            reason="manual restore: clear grid charge selects and restore programme powers",
+            charge_modes={slot: CHARGE_OPTION_NO_GRID for slot in slots},
+            power_targets={slot: self.settings.ev_restore_program_power_w for slot in slots},
+            grid_charge_enabled=False,
+        )
+
+    async def _apply_deye_plan(self, plan: DeyePlan, *, force: bool = False, override_gates: bool = False) -> None:
         slot_to_capacity = {
             "Prog1": PROG_CAPACITY_ENTITIES[0],
             "Prog2": PROG_CAPACITY_ENTITIES[1],
@@ -1005,30 +1048,68 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "Prog5": PROG_CAPACITY_ENTITIES[4],
             "Prog6": PROG_CAPACITY_ENTITIES[5],
         }
-        active_charge_entity = slot_to_charge.get(decision.active_slot)
-        active_capacity_entity = slot_to_capacity.get(decision.active_slot)
-        cheap_charge_entities = [
-            PROG_CHARGE_SELECT_ENTITIES[5],
-            PROG_CHARGE_SELECT_ENTITIES[0],
-            PROG_CHARGE_SELECT_ENTITIES[1],
-            PROG_CHARGE_SELECT_ENTITIES[2],
-        ]
-        if decision.grid_charge_required:
-            if active_charge_entity:
-                await self._call_select_option(active_charge_entity, CHARGE_OPTION_ALLOW_GRID)
-            if active_capacity_entity:
-                await self._call_number_set(active_capacity_entity, decision.grid_charge_target_soc)
-            for entity_id in PROG_POWER_ENTITIES:
-                await self._call_number_set(entity_id, self.settings.ev_restore_program_power_w)
-            self.last_control_action = f"cheap-grid charge: {decision.active_slot} -> Allow Grid, reserve {decision.grid_charge_target_soc:.0f}%"
-        else:
-            for entity_id in cheap_charge_entities:
-                await self._call_select_option(entity_id, CHARGE_OPTION_NO_GRID)
-            if decision.cheap_grid_preserve_required and active_capacity_entity:
-                await self._call_number_set(active_capacity_entity, decision.cheap_grid_preserve_target_soc)
-                self.last_control_action = f"cheap-grid preserve: Prog6/1/2/3 -> No Grid or Gen, reserve {decision.cheap_grid_preserve_target_soc:.0f}%"
-            else:
-                self.last_control_action = "updated grid charge state"
+        slot_to_charge = {
+            "Prog1": PROG_CHARGE_SELECT_ENTITIES[0],
+            "Prog2": PROG_CHARGE_SELECT_ENTITIES[1],
+            "Prog3": PROG_CHARGE_SELECT_ENTITIES[2],
+            "Prog4": PROG_CHARGE_SELECT_ENTITIES[3],
+            "Prog5": PROG_CHARGE_SELECT_ENTITIES[4],
+            "Prog6": PROG_CHARGE_SELECT_ENTITIES[5],
+        }
+        slot_to_power = {
+            "Prog1": PROG_POWER_ENTITIES[0],
+            "Prog2": PROG_POWER_ENTITIES[1],
+            "Prog3": PROG_POWER_ENTITIES[2],
+            "Prog4": PROG_POWER_ENTITIES[3],
+            "Prog5": PROG_POWER_ENTITIES[4],
+            "Prog6": PROG_POWER_ENTITIES[5],
+        }
+        self.desired_deye_plan = self._format_deye_plan(plan)
+        writes = 0
+        if self.settings.deye_control_enabled or override_gates:
+            for slot, value in plan.capacity_targets.items():
+                if await self._call_number_set(slot_to_capacity[slot], value, reason=plan.reason, emergency=plan.emergency, force=force):
+                    writes += 1
+        if self.settings.grid_charge_control_enabled or override_gates:
+            switch_id = self.entity_map.get("grid_charge_switch", "switch.deye_grid_charge_enabled")
+            if plan.grid_charge_enabled is not None and await self._call_switch(switch_id, plan.grid_charge_enabled, reason=plan.reason, emergency=plan.emergency, force=force):
+                writes += 1
+            for slot, option in plan.charge_modes.items():
+                if await self._call_select_option(slot_to_charge[slot], option, reason=plan.reason, emergency=plan.emergency, force=force):
+                    writes += 1
+        if self.settings.ev_control_enabled or override_gates:
+            for slot, value in plan.power_targets.items():
+                if await self._call_number_set(slot_to_power[slot], value, reason=plan.reason, emergency=plan.emergency, force=force):
+                    writes += 1
+        self.applied_deye_plan = self.desired_deye_plan if writes else "no writes: desired state already applied or suppressed"
+        self.last_control_action = f"Deye plan {plan.mode}: {plan.reason}" if writes else self.last_control_action
+
+    def _format_deye_plan(self, plan: DeyePlan) -> str:
+        capacities = ",".join(f"{slot}={value:.0f}" for slot, value in sorted(plan.capacity_targets.items()))
+        charges = ",".join(f"{slot}={value}" for slot, value in sorted(plan.charge_modes.items()))
+        powers = ",".join(f"{slot}={value:.0f}" for slot, value in sorted(plan.power_targets.items()))
+        grid = "on" if plan.grid_charge_enabled else "off" if plan.grid_charge_enabled is not None else "unchanged"
+        return f"{plan.mode}; grid={grid}; cap[{capacities}]; charge[{charges}]; power[{powers}]"
+
+    async def async_force_shed_one_heat_load(self) -> None:
+        await self._direct_shed_one_heat_load()
+
+    async def async_force_add_one_heat_load(self) -> None:
+        await self._direct_add_one_heat_load()
+
+    async def async_force_test_one_pv_load(self) -> None:
+        await self._direct_add_one_heat_load()
+
+    async def async_force_rotate_heat_load(self) -> None:
+        decision = self.data if isinstance(self.data, EnergyManagerDecision) else None
+        if decision is None:
+            await self._direct_shed_one_heat_load()
+            await self._direct_add_one_heat_load()
+            return
+        await self._direct_rotate_heat_load(decision)
+
+    async def async_force_emergency_shed_all_heat_loads(self) -> None:
+        await self._direct_shed_all_heat_loads("manual emergency shed all", include_unowned=True)
 
     async def _apply_heat(self, decision: EnergyManagerDecision) -> None:
         mode = self.settings.thermal_actuation_mode
@@ -1040,9 +1121,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_shed_all_heat_loads("emergency battery discharge", include_unowned=True)
                 if decision.thermal_load_to_shed and self.settings.shed_unowned_managed_loads_on_battery_discharge:
                     await self._direct_shed_one_heat_load(decision.thermal_load_to_shed)
-            elif mode == "scripts":
-                await self.hass.services.async_call("script", "deye_energy_manager_emergency_shed_all_heat_loads", {}, blocking=False)
-                self.last_control_action = "requested thermal emergency shed all script"
+            else:
+                self.last_control_action = "thermal emergency shed blocked: direct climate control disabled"
             return
         if mode == "direct":
             if not self.settings.direct_climate_control_enabled:
@@ -1059,25 +1139,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             elif decision.thermal_action in {"morning_preheat", "underfloor_comfort", "comfort_heat"} or decision.thermal_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
                 await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
             return
-        if mode != "scripts":
-            return
-        if decision.bedroom_heat_taper_recommended:
-            await self.hass.services.async_call("script", "deye_energy_manager_taper_bedroom_heat", {}, blocking=False)
-            self.last_control_action = "requested thermal bedroom taper script"
-        if decision.overnight_protection_required:
-            await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
-            self.last_control_action = "requested overnight protection heat shed script"
-            return
-        if decision.thermal_should_shed:
-            await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
-            self.last_control_action = "requested thermal shed script"
-        elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
-            await self.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
-            await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
-            self.last_control_action = "requested thermal rotation scripts"
-        elif decision.thermal_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
-            await self.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
-            self.last_control_action = "requested PV load test script" if decision.pv_load_test_recommended else "requested thermal add script"
+        self.last_control_action = f"thermal actuation mode {mode} has no runtime actuator"
 
     def _thermal_mode(self) -> str:
         return "heating" if self.settings.thermal_mode == "auto" else self.settings.thermal_mode

@@ -136,7 +136,10 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("strategy", default=defaults.get("strategy", DEFAULT_STRATEGY)): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=STRATEGY_OPTIONS)
             ),
-            vol.Required("heat_mode", default=defaults.get("heat_mode", DEFAULT_HEAT_MODE)): selector.SelectSelector(
+            vol.Required(
+                "heat_mode",
+                default=defaults.get("heat_mode") if defaults.get("heat_mode") in HEAT_MODE_OPTIONS else DEFAULT_HEAT_MODE,
+            ): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=HEAT_MODE_OPTIONS)
             ),
             vol.Required("thermal_mode", default=defaults.get("thermal_mode", DEFAULT_THERMAL_MODE)): selector.SelectSelector(
@@ -144,7 +147,11 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
             vol.Required(
                 "thermal_actuation_mode",
-                default=defaults.get("thermal_actuation_mode", DEFAULT_THERMAL_ACTUATION_MODE),
+                default=(
+                    defaults.get("thermal_actuation_mode")
+                    if defaults.get("thermal_actuation_mode") in THERMAL_ACTUATION_MODE_OPTIONS
+                    else DEFAULT_THERMAL_ACTUATION_MODE
+                ),
             ): selector.SelectSelector(selector.SelectSelectorConfig(options=THERMAL_ACTUATION_MODE_OPTIONS)),
             vol.Required(
                 "flexible_load_priority",
@@ -247,7 +254,14 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("thermal_mode", default=defaults.get("thermal_mode", DEFAULT_THERMAL_MODE)): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=THERMAL_MODE_OPTIONS)
             ),
-            vol.Required("thermal_actuation_mode", default=defaults.get("thermal_actuation_mode", DEFAULT_THERMAL_ACTUATION_MODE)): selector.SelectSelector(
+            vol.Required(
+                "thermal_actuation_mode",
+                default=(
+                    defaults.get("thermal_actuation_mode")
+                    if defaults.get("thermal_actuation_mode") in THERMAL_ACTUATION_MODE_OPTIONS
+                    else DEFAULT_THERMAL_ACTUATION_MODE
+                ),
+            ): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=THERMAL_ACTUATION_MODE_OPTIONS)
             ),
             vol.Required("return_to_normal_on_shed_enabled", default=defaults.get("return_to_normal_on_shed_enabled", True)): selector.BooleanSelector(),
@@ -308,6 +322,9 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
         "forecast_safety_buffer_kwh",
         "min_soc_floor",
         "max_grid_charge_target_soc",
+        "evening_peak_soc_target",
+        "evening_peak_heating_allowance_kwh",
+        "evening_peak_ev_allowance_kwh",
         "cheap_grid_preserve_soc",
         "cheap_grid_charge_target_soc",
         "max_fallback_soc_age_minutes",

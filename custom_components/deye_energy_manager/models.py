@@ -116,6 +116,9 @@ class EnergyManagerSettings:
     forecast_safety_buffer_kwh: float = 2.0
     min_soc_floor: float = 12.0
     max_grid_charge_target_soc: float = 80.0
+    evening_peak_soc_target: float = 65.0
+    evening_peak_heating_allowance_kwh: float = 4.0
+    evening_peak_ev_allowance_kwh: float = 0.0
     cheap_grid_preserve_soc: float = 30.0
     cheap_grid_charge_target_soc: float = 60.0
     pv_load_test_min_soc: float = 70.0
@@ -240,6 +243,19 @@ class ForecastTier:
     grid_charge_target_soc: float
 
 
+@dataclass(frozen=True, slots=True)
+class DeyePlan:
+    """Single arbiter output for Deye programme writes."""
+
+    mode: str
+    reason: str
+    capacity_targets: dict[str, float] = field(default_factory=dict)
+    charge_modes: dict[str, str] = field(default_factory=dict)
+    power_targets: dict[str, float] = field(default_factory=dict)
+    grid_charge_enabled: bool | None = None
+    emergency: bool = False
+
+
 @dataclass(slots=True)
 class EnergyManagerDecision:
     """Decision output published by entities and consumed by controls."""
@@ -330,6 +346,12 @@ class EnergyManagerDecision:
     overnight_protection_required: bool
     bedroom_heat_taper_recommended: bool
     projected_soc_08: float | None
+    morning_start_soc_target: float
+    evening_peak_soc_target: float
+    projected_4pm_soc: float | None
+    required_4pm_energy_kwh: float
+    night_grid_topup_kwh_required: float | None
+    energy_plan_reason: str
     grid_charge_required: bool
     cheap_grid_preserve_required: bool
     cheap_grid_topup_required: bool

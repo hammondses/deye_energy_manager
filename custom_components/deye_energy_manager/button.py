@@ -53,40 +53,43 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
         elif self._key == "restore_deye_normal":
             await self.coordinator.async_restore_deye_normal()
         elif self._key == "force_shed_one_heat_load":
-            if not self._thermal_script_force_allowed():
-                await self._blocked("force thermal script blocked: thermal script mode not enabled")
+            if not self._thermal_direct_force_allowed():
+                await self._blocked("force thermal shed blocked: direct climate control disabled")
                 return
-            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
+            await self.coordinator.async_force_shed_one_heat_load()
         elif self._key == "force_add_one_heat_load":
-            if not self._thermal_script_force_allowed():
-                await self._blocked("force thermal script blocked: thermal script mode not enabled")
+            if not self._thermal_direct_force_allowed():
+                await self._blocked("force thermal add blocked: direct climate control disabled")
                 return
-            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
+            await self.coordinator.async_force_add_one_heat_load()
         elif self._key == "force_test_one_pv_load":
-            if not (self.coordinator.settings.pv_load_test_control_enabled and self._thermal_script_force_allowed()):
-                await self._blocked("force PV load test blocked: PV load test/script mode not enabled")
+            if not (self.coordinator.settings.pv_load_test_control_enabled and self._thermal_direct_force_allowed()):
+                await self._blocked("force PV load test blocked: PV load test/direct climate control disabled")
                 return
-            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
+            await self.coordinator.async_force_test_one_pv_load()
         elif self._key == "force_rotate_heat_load":
-            if not self._thermal_script_force_allowed():
-                await self._blocked("force thermal script blocked: thermal script mode not enabled")
+            if not self._thermal_direct_force_allowed():
+                await self._blocked("force thermal rotate blocked: direct climate control disabled")
                 return
-            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
-            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
+            await self.coordinator.async_force_rotate_heat_load()
         elif self._key == "emergency_shed_all_heat_loads":
-            if not self._thermal_script_force_allowed():
-                await self._blocked("force thermal emergency script blocked: thermal script mode not enabled")
+            if not self._thermal_direct_force_allowed():
+                await self._blocked("force thermal emergency shed blocked: direct climate control disabled")
                 return
-            await self.coordinator.hass.services.async_call("script", "deye_energy_manager_emergency_shed_all_heat_loads", {}, blocking=False)
+            await self.coordinator.async_force_emergency_shed_all_heat_loads()
         else:
             await self.coordinator.async_request_refresh()
 
     def _ev_force_allowed(self) -> bool:
         return self.coordinator.settings.ev_control_enabled and self.coordinator.settings.ev_grid_bypass_enabled
 
-    def _thermal_script_force_allowed(self) -> bool:
+    def _thermal_direct_force_allowed(self) -> bool:
         settings = self.coordinator.settings
-        return settings.thermal_control_enabled and settings.thermal_actuation_mode == "scripts"
+        return (
+            settings.thermal_control_enabled
+            and settings.thermal_actuation_mode == "direct"
+            and settings.direct_climate_control_enabled
+        )
 
     async def _blocked(self, reason: str) -> None:
         self.coordinator.last_control_action = reason

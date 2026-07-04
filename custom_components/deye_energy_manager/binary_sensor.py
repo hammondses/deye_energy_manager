@@ -57,6 +57,7 @@ BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="safe_to_discharge", name="Safe to discharge", value_fn=lambda d: d.battery_soc is not None and d.battery_soc >= d.current_reserve_soc),
     DeyeBinarySensorDescription(key="forecast_data_valid", name="Forecast data valid", value_fn=lambda d: d.forecast_data_valid),
     DeyeBinarySensorDescription(key="control_blocked", name="Control blocked", value_fn=lambda d: d.control_blocked),
+    DeyeBinarySensorDescription(key="deye_write_thrash_detected", name="Deye write thrash detected", value_fn=lambda d: False),
 )
 
 
@@ -76,4 +77,6 @@ class DeyeBinarySensor(DeyeEnergyManagerEntity, BinarySensorEntity):
     def is_on(self) -> bool | None:
         if self.coordinator.data is None:
             return None
+        if self.entity_description.key == "deye_write_thrash_detected":
+            return self.coordinator.deye_write_thrash_detected
         return self.entity_description.value_fn(self.coordinator.data)

@@ -18,7 +18,7 @@ CONF_HEAT_LOADS = "heat_loads"
 
 THERMAL_MODE_OPTIONS = ["heating", "cooling", "auto", "off"]
 DEFAULT_THERMAL_MODE = "heating"
-THERMAL_ACTUATION_MODE_OPTIONS = ["advisory", "scripts", "direct"]
+THERMAL_ACTUATION_MODE_OPTIONS = ["advisory", "direct"]
 DEFAULT_THERMAL_ACTUATION_MODE = "advisory"
 FLEXIBLE_LOAD_PRIORITY_OPTIONS = ["battery_first", "thermal_before_ev", "ev_before_thermal", "export_before_loads"]
 DEFAULT_FLEXIBLE_LOAD_PRIORITY = "battery_first"
@@ -296,6 +296,9 @@ NUMBER_DEFAULTS = {
     "forecast_safety_buffer_kwh": 2.0,
     "min_soc_floor": 12.0,
     "max_grid_charge_target_soc": 80.0,
+    "evening_peak_soc_target": 65.0,
+    "evening_peak_heating_allowance_kwh": 4.0,
+    "evening_peak_ev_allowance_kwh": 0.0,
     "cheap_grid_preserve_soc": 30.0,
     "cheap_grid_charge_target_soc": 60.0,
     "pv_load_test_min_soc": 70.0,
@@ -314,7 +317,7 @@ NUMBER_DEFAULTS = {
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]
 DEFAULT_STRATEGY = "normal"
 
-HEAT_MODE_OPTIONS = ["off", "advisory", "auto_scripts", "auto_direct"]
+HEAT_MODE_OPTIONS = ["off", "advisory", "auto_direct"]
 DEFAULT_HEAT_MODE = "advisory"
 
 CHARGE_OPTION_NO_GRID = "No Grid or Gen"

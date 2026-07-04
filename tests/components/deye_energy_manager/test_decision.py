@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
-from custom_components.deye_energy_manager.decision import active_slot, decide, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, decide, deye_write_thrash_detected, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
@@ -157,6 +157,15 @@ def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
     assert decision.grid_charge_target_soc < 60
     assert decision.expected_action == "cheap_grid_top_up_to_morning_target"
 
+    plan = build_deye_plan(decision, settings)
+    assert plan.mode == "top_up_to_morning_target"
+    assert plan.charge_modes["Prog6"] == "Allow Grid"
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog1"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog2"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog3"] < 60
+    assert plan.grid_charge_enabled is True
+
 
 def test_cheap_grid_default_settings_do_not_target_sixty_for_medium_forecast() -> None:
     decision = decide(
@@ -167,6 +176,46 @@ def test_cheap_grid_default_settings_do_not_target_sixty_for_medium_forecast() -
     assert decision.cheap_grid_mode == "top_up_to_morning_target"
     assert 30 <= decision.morning_target_soc <= 35
     assert decision.grid_charge_target_soc < 60
+    assert decision.morning_start_soc_target == decision.morning_target_soc
+    assert decision.evening_peak_soc_target >= 60
+    assert decision.projected_4pm_soc >= decision.evening_peak_soc_target
+    assert "4pm target" in decision.energy_plan_reason
+
+
+def test_cheap_grid_high_soc_drains_to_morning_start_not_grid_charge() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+    )
+
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=80), settings)
+
+    assert 30 <= decision.morning_start_soc_target <= 35
+    assert decision.cheap_grid_mode == "preserve"
+    assert not decision.grid_charge_required
+    assert decision.night_grid_topup_kwh_required == 0
+    assert "7am target" in decision.energy_plan_reason
+
+
+def test_cheap_grid_low_soc_tops_up_only_to_derived_morning_start() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+        evening_peak_soc_target=75,
+        max_grid_charge_target_soc=80,
+    )
+
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=12, battery_soc=20), settings)
+
+    assert decision.cheap_grid_mode == "top_up_to_morning_target"
+    assert decision.grid_charge_required
+    assert 40 <= decision.morning_start_soc_target <= 50
+    assert decision.grid_charge_target_soc == decision.morning_start_soc_target
+    assert decision.grid_charge_target_soc < decision.evening_peak_soc_target
 
 
 def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
@@ -184,6 +233,15 @@ def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
     assert not decision.grid_charge_required
     assert decision.cheap_grid_mode == "preserve"
     assert decision.cheap_grid_preserve_target_soc == decision.morning_target_soc
+
+    plan = build_deye_plan(decision, settings)
+    assert plan.mode == "preserve"
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog1"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog2"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog3"] < 60
+    assert plan.grid_charge_enabled is False
 
 
 def test_cheap_grid_budget_uses_morning_target_not_daily_full_target() -> None:
@@ -219,7 +277,7 @@ def test_cheap_grid_dreadful_forecast_allows_heavy_charge() -> None:
 
     assert decision.grid_charge_required
     assert decision.cheap_grid_mode == "heavy_grid_charge"
-    assert 50 <= decision.grid_charge_target_soc <= 60
+    assert 60 <= decision.grid_charge_target_soc <= 80
 
 
 def test_cheap_grid_excellent_forecast_uses_lower_morning_target() -> None:
@@ -246,12 +304,56 @@ def test_cheap_grid_exits_at_7am() -> None:
         cheap_grid_preserve_soc=30,
     )
 
-    decision = decide(base_inputs(now=dt(7), forecast_tomorrow_kwh=5, battery_soc=23), settings)
+    decision = decide(base_inputs(now=dt(7), forecast_tomorrow_kwh=23, battery_soc=60), settings)
 
     assert decision.tariff_window != "cheap_grid"
     assert decision.cheap_grid_mode == "off"
     assert not decision.cheap_grid_preserve_required
     assert not decision.grid_charge_required
+
+    plan = build_deye_plan(decision, settings)
+    assert decision.active_slot == "Prog3"
+    assert plan.charge_modes["Prog3"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog3"] == decision.active_reserve_target_soc
+    assert plan.capacity_targets["Prog3"] < 60
+    assert plan.grid_charge_enabled is False
+
+
+def test_thermal_shed_during_cheap_grid_does_not_change_deye_plan() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        thermal_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+    )
+    base = base_inputs(
+        now=dt(4, 15),
+        forecast_tomorrow_kwh=23,
+        battery_soc=35,
+        battery_power_w=900,
+        any_solar_owned_heat_load_on=True,
+    )
+
+    decision = decide(base, settings)
+    assert decision.thermal_should_shed
+    assert decision.cheap_grid_mode == "preserve"
+
+    plan = build_deye_plan(decision, settings)
+    assert plan.mode == "preserve"
+    assert plan.charge_modes["Prog2"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog2"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog3"] < 60
+
+
+def test_deye_write_thrash_detector_flags_repeated_alternation() -> None:
+    now = dt(4, 20)
+    attempts = [
+        (now - timedelta(minutes=9, seconds=-index), "number.deye_prog6_capacity", value)
+        for index, value in enumerate([55, 75, 55, 75, 55, 75, 55])
+    ]
+
+    assert deye_write_thrash_detected(attempts, "number.deye_prog6_capacity", now)
 
 
 def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
@@ -1118,7 +1220,7 @@ def test_repair_issue_for_missing_climate() -> None:
     assert "climate_entity_unavailable" in issues
 
 
-def test_repair_issue_for_missing_script_in_scripts_mode() -> None:
+def test_repair_issue_for_retired_script_mode() -> None:
     issues = repair_issue_definitions(
         EnergyManagerSettings(thermal_actuation_mode="scripts"),
         {},
@@ -1126,7 +1228,7 @@ def test_repair_issue_for_missing_script_in_scripts_mode() -> None:
         lambda _entity_id: False,
     )
 
-    assert "scripts_missing" in issues
+    assert "scripts_retired" in issues
 
 
 def test_repair_issue_for_invalid_ev_power_sensor() -> None:
@@ -1369,7 +1471,7 @@ def test_charge_rate_allows_thermal_with_soc_unavailable() -> None:
     assert decision.battery_soc is None
 
 
-def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:
+def test_legacy_heat_script_options_map_to_advisory_settings() -> None:
     options, changed = migrate_options(
         {
             "heat_control_enabled": True,
@@ -1381,7 +1483,8 @@ def test_legacy_heat_script_options_map_to_thermal_script_settings() -> None:
 
     assert changed
     assert options["thermal_control_enabled"]
-    assert options["thermal_actuation_mode"] == "scripts"
+    assert options["heat_mode"] == "advisory"
+    assert options["thermal_actuation_mode"] == "advisory"
 
 
 def test_morning_low_soc_strong_forecast_keeps_battery_priority() -> None:

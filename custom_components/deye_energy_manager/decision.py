@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 
-from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState, ThermalLoadDiagnostic
+from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState, ThermalLoadDiagnostic
 
 FORECAST_TIERS = [
     (32.0, ForecastTier("excellent", 35.0, 20.0, 75.0, 15.0, 90.0, 0.0)),
@@ -192,23 +192,96 @@ def cheap_grid_morning_target_soc(
 ) -> float:
     """Return the 7am bridge target used for cheap-grid preserve/top-up."""
 
-    if tier.mode in {"excellent", "good"}:
-        forecast_target = 25.0
-    elif tier.mode == "medium":
-        forecast_target = 35.0
-    elif tier.mode == "poor":
-        forecast_target = 45.0
-    elif tier.mode == "dreadful":
-        forecast_target = 55.0
-    else:
-        forecast_target = 60.0
+    return evening_energy_plan(inputs, settings, tier)[0]
 
-    bridge_hours = 2.5
-    bridge_kwh = settings.base_load_estimate_w * bridge_hours / 1000.0 + min(settings.forecast_safety_buffer_kwh, 2.0)
-    bridge_target = settings.min_soc_floor + bridge_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
+
+def solar_forecast_until_4pm_kwh(inputs: EnergyManagerInputs) -> float:
+    """Return a rough solar-energy estimate available before 16:00."""
+
+    now = inputs.now
+    if time_between(now, "21:00", "07:00"):
+        return max((inputs.forecast_tomorrow_kwh or 0.0) * 0.8, 0.0)
+    if not time_between(now, "07:00", "16:00"):
+        return 0.0
+    remaining_to_17 = hours_until_solar_end(now)
+    if remaining_to_17 <= 0:
+        return 0.0
+    end_4pm = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    hours_to_4pm = max((end_4pm - now).total_seconds() / 3600.0, 0.0)
+    return max((inputs.forecast_remaining_today_kwh or 0.0) * min(hours_to_4pm / remaining_to_17, 1.0), 0.0)
+
+
+def evening_energy_plan(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    tier: ForecastTier,
+) -> tuple[float, float, float | None, float, float | None, str]:
+    """Return 7am and 4pm SOC planning targets and diagnostics."""
+
+    base_load_w = inputs.base_load_estimate_w if inputs.base_load_estimate_w is not None else settings.base_load_estimate_w
+    evening_house_kwh = base_load_w * 5.0 / 1000.0
+    required_4pm_energy_kwh = (
+        evening_house_kwh
+        + settings.evening_peak_heating_allowance_kwh
+        + settings.evening_peak_ev_allowance_kwh
+        + settings.forecast_safety_buffer_kwh
+        + settings.min_soc_floor / 100.0 * settings.battery_capacity_kwh
+    )
+    tier_floor = {
+        "excellent": 50.0,
+        "good": 55.0,
+        "medium": 60.0,
+        "poor": 70.0,
+        "dreadful": 75.0,
+        "brutal": 80.0,
+    }.get(tier.mode, settings.evening_peak_soc_target)
+    required_soc = settings.min_soc_floor + required_4pm_energy_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
+    evening_peak_soc_target = min(
+        max(settings.evening_peak_soc_target, tier_floor, required_soc),
+        settings.max_grid_charge_target_soc,
+    )
+    solar_until_4pm_kwh = solar_forecast_until_4pm_kwh(inputs)
+    now = inputs.now
+    if time_between(now, "21:00", "07:00"):
+        daytime_hours = 9.0
+    elif time_between(now, "07:00", "16:00"):
+        end_4pm = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        daytime_hours = max((end_4pm - now).total_seconds() / 3600.0, 0.0)
+    else:
+        daytime_hours = 0.0
+    daytime_load_kwh = base_load_w * daytime_hours / 1000.0 + settings.house_load_forecast_buffer_kwh
+    committed_flexible_kwh = sum(
+        load_energy_cost_kwh(load, settings)
+        for load in inputs.heat_loads
+        if load.solar_owned or load.lease_reason in {"solar_soak", "morning_preheat", "comfort_heat"}
+    )
+    net_solar_surplus_kwh = solar_until_4pm_kwh - committed_flexible_kwh
+    morning_start_soc_target = evening_peak_soc_target - net_solar_surplus_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
     strategy_adjustment = {"aggressive": -5.0, "normal": 0.0, "conservative": 5.0}.get(settings.strategy, 0.0)
-    morning_target = max(settings.min_soc_floor, forecast_target, bridge_target, settings.cheap_grid_preserve_soc) + strategy_adjustment
-    return min(morning_target, settings.max_grid_charge_target_soc)
+    morning_start_soc_target = min(
+        max(settings.min_soc_floor, settings.cheap_grid_preserve_soc, morning_start_soc_target + strategy_adjustment),
+        settings.max_grid_charge_target_soc,
+    )
+    projected_4pm_soc = min(
+        morning_start_soc_target + net_solar_surplus_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0,
+        100.0,
+    )
+    if inputs.battery_soc is None:
+        night_topup_kwh = None
+    else:
+        night_topup_kwh = max(morning_start_soc_target - inputs.battery_soc, 0.0) / 100.0 * settings.battery_capacity_kwh
+    reason = (
+        f"7am target {morning_start_soc_target:.0f}% because projected solar surplus {net_solar_surplus_kwh:.1f}kWh "
+        f"should reach 4pm target {evening_peak_soc_target:.0f}%; "
+        f"required 4pm energy {required_4pm_energy_kwh:.1f}kWh; "
+        f"daytime base load allowance {daytime_load_kwh:.1f}kWh; night top-up {night_topup_kwh:.1f}kWh"
+        if night_topup_kwh is not None
+        else (
+            f"7am target {morning_start_soc_target:.0f}% because projected solar surplus {net_solar_surplus_kwh:.1f}kWh "
+            f"should reach 4pm target {evening_peak_soc_target:.0f}%; daytime base load allowance {daytime_load_kwh:.1f}kWh; SOC unavailable"
+        )
+    )
+    return morning_start_soc_target, evening_peak_soc_target, projected_4pm_soc, required_4pm_energy_kwh, night_topup_kwh, reason
 
 
 def cheap_grid_state(
@@ -1040,10 +1113,18 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     base_load_w = inputs.base_load_estimate_w if inputs.base_load_estimate_w is not None else settings.base_load_estimate_w
     solar_hours_remaining = hours_until_solar_end(inputs.now)
     expected_house_load_kwh = base_load_w * solar_hours_remaining / 1000.0 + settings.house_load_forecast_buffer_kwh
+    (
+        morning_start_soc_target,
+        evening_peak_soc_target,
+        projected_4pm_soc,
+        required_4pm_energy_kwh,
+        night_grid_topup_kwh_required,
+        energy_plan_reason,
+    ) = evening_energy_plan(inputs, settings, tier)
     energy_budget_target_soc = settings.daily_battery_target_soc
     energy_budget_target_name = "daily target"
     if cheap_window:
-        energy_budget_target_soc = cheap_grid_morning_target_soc(inputs, settings, tier)
+        energy_budget_target_soc = morning_start_soc_target
         energy_budget_target_name = "7am target"
     battery_kwh_needed = None
     if soc_known:
@@ -1083,7 +1164,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             f"budget {discretionary_budget_kwh:.1f}kWh = forecast {remaining_forecast_kwh:.1f}kWh "
             f"- battery need {battery_kwh_needed:.1f}kWh to {energy_budget_target_name} {energy_budget_target_soc:.0f}% "
             f"- house load {expected_house_load_kwh:.1f}kWh - buffer {safety_buffer_kwh:.1f}kWh "
-            f"- committed flexible {committed_flexible_kwh:.1f}kWh"
+            f"- committed flexible {committed_flexible_kwh:.1f}kWh; {energy_plan_reason}"
         )
 
     (
@@ -1740,11 +1821,17 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         overnight_protection_required=overnight_protection_required,
         bedroom_heat_taper_recommended=bedroom_heat_taper_recommended,
         projected_soc_08=projected_soc,
+        morning_start_soc_target=morning_start_soc_target,
+        evening_peak_soc_target=evening_peak_soc_target,
+        projected_4pm_soc=projected_4pm_soc,
+        required_4pm_energy_kwh=required_4pm_energy_kwh,
+        night_grid_topup_kwh_required=night_grid_topup_kwh_required,
+        energy_plan_reason=energy_plan_reason,
         grid_charge_required=grid_charge_required,
         cheap_grid_preserve_required=cheap_grid_preserve_required,
         cheap_grid_topup_required=cheap_grid_charge_required,
         cheap_grid_preserve_target_soc=cheap_grid_preserve_target_soc,
-        morning_target_soc=cheap_grid_preserve_target_soc,
+        morning_target_soc=morning_start_soc_target,
         cheap_grid_mode=cheap_grid_mode,
         cheap_grid_reason=cheap_grid_reason,
         ev_grid_mode_required=ev_grid_mode_required,
@@ -1780,3 +1867,77 @@ def slot_capacity_targets(tier: ForecastTier) -> dict[str, float]:
         "Prog4": tier.pre_peak_floor,
         "Prog5": tier.peak_floor,
     }
+
+
+def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSettings) -> DeyePlan:
+    """Return the single desired Deye programme plan for this cycle."""
+
+    tier = forecast_tier(decision.forecast_tomorrow_kwh, settings)
+    capacities = slot_capacity_targets(tier)
+    charges = {
+        "Prog1": "No Grid or Gen",
+        "Prog2": "No Grid or Gen",
+        "Prog3": "No Grid or Gen",
+        "Prog4": "No Grid or Gen",
+        "Prog5": "No Grid or Gen",
+        "Prog6": "No Grid or Gen",
+    }
+    powers: dict[str, float] = {}
+    mode = "normal_restore"
+    reason = f"normal restore: forecast {decision.forecast_mode}; active {decision.active_slot}"
+    grid_charge_enabled = False
+
+    if decision.paid_grid_avoidance_required or decision.forecast_drain_blocked:
+        capacities[decision.active_slot] = decision.active_reserve_target_soc
+        mode = "paid_grid_avoidance"
+        reason = decision.paid_time_reserve_reason
+
+    cheap_slots = {"Prog6", "Prog1", "Prog2"}
+    if decision.tariff_window == "cheap_grid":
+        if decision.grid_charge_required:
+            for slot in cheap_slots:
+                capacities[slot] = decision.grid_charge_target_soc
+            charges[decision.active_slot] = "Allow Grid"
+            mode = decision.cheap_grid_mode
+            reason = decision.cheap_grid_reason
+            grid_charge_enabled = True
+        elif decision.cheap_grid_preserve_required:
+            for slot in cheap_slots:
+                capacities[slot] = decision.cheap_grid_preserve_target_soc
+            mode = "preserve"
+            reason = decision.cheap_grid_reason
+
+    if settings.ev_control_enabled:
+        ev_slots = {"Prog6", "Prog1", "Prog2", "Prog3"}
+        value = 0.0 if decision.ev_grid_bypass_required else settings.ev_restore_program_power_w
+        powers = {slot: value for slot in ev_slots}
+        if decision.ev_grid_bypass_required:
+            mode = "ev_grid_bypass"
+            reason = decision.ev_decision_reason
+
+    if decision.thermal_should_emergency_shed:
+        reason = f"{reason}; emergency thermal shed active, Deye plan unchanged except selected safety floors"
+
+    return DeyePlan(
+        mode=mode,
+        reason=reason,
+        capacity_targets=capacities,
+        charge_modes=charges,
+        power_targets=powers,
+        grid_charge_enabled=grid_charge_enabled,
+        emergency=decision.thermal_should_emergency_shed,
+    )
+
+
+def deye_write_thrash_detected(
+    attempts: list[tuple[datetime, str, object]] | tuple[tuple[datetime, str, object], ...],
+    entity_id: str,
+    now: datetime,
+) -> bool:
+    """Return whether an entity has alternating Deye write attempts in 10 minutes."""
+
+    cutoff = now - timedelta(minutes=10)
+    values = [value for ts, entity, value in attempts if entity == entity_id and ts >= cutoff]
+    if len(values) <= 6:
+        return False
+    return len({str(value) for value in values}) > 1
