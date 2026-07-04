@@ -50,6 +50,14 @@ def _options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults.get("grid_charge_control_enabled", False),
             ): selector.BooleanSelector(),
             vol.Required(
+                "cheap_grid_preserve_enabled",
+                default=defaults.get("cheap_grid_preserve_enabled", FEATURE_DEFAULTS["cheap_grid_preserve_enabled"]),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "cheap_grid_charge_enabled",
+                default=defaults.get("cheap_grid_charge_enabled", FEATURE_DEFAULTS["cheap_grid_charge_enabled"]),
+            ): selector.BooleanSelector(),
+            vol.Required(
                 "ev_control_enabled",
                 default=defaults.get("ev_control_enabled", False),
             ): selector.BooleanSelector(),
@@ -300,6 +308,8 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
         "forecast_safety_buffer_kwh",
         "min_soc_floor",
         "max_grid_charge_target_soc",
+        "cheap_grid_preserve_soc",
+        "cheap_grid_charge_target_soc",
         "max_fallback_soc_age_minutes",
         "paid_time_min_reserve_soc",
         "morning_paid_time_min_reserve_soc",
@@ -320,6 +330,8 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
         {
             vol.Required("deye_control_enabled", default=defaults.get("deye_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("grid_charge_control_enabled", default=defaults.get("grid_charge_control_enabled", False)): selector.BooleanSelector(),
+            vol.Required("cheap_grid_preserve_enabled", default=defaults.get("cheap_grid_preserve_enabled", FEATURE_DEFAULTS["cheap_grid_preserve_enabled"])): selector.BooleanSelector(),
+            vol.Required("cheap_grid_charge_enabled", default=defaults.get("cheap_grid_charge_enabled", FEATURE_DEFAULTS["cheap_grid_charge_enabled"])): selector.BooleanSelector(),
             vol.Required("paid_time_grid_avoidance_enabled", default=defaults.get("paid_time_grid_avoidance_enabled", True)): selector.BooleanSelector(),
             vol.Required("dynamic_base_load_estimate_enabled", default=defaults.get("dynamic_base_load_estimate_enabled", True)): selector.BooleanSelector(),
             **{

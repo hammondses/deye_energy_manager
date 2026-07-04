@@ -15,6 +15,8 @@ SWITCHES = {
     "advisory_enabled": "Advisory enabled",
     "deye_control_enabled": "Deye control enabled",
     "grid_charge_control_enabled": "Grid charge control enabled",
+    "cheap_grid_preserve_enabled": "Cheap grid preserve enabled",
+    "cheap_grid_charge_enabled": "Cheap grid charge enabled",
     "ev_control_enabled": "EV control enabled",
     "ev_grid_bypass_enabled": "EV grid bypass enabled",
     "ev_solar_charging_enabled": "EV solar charging enabled",

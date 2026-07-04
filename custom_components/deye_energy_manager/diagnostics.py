@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.5.5",
+        "version": "0.5.6",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -49,6 +49,14 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "battery_target_reachable_today": decision.battery_target_reachable_today if decision else None,
             "base_load_estimate_w": decision.base_load_estimate_w if decision else None,
             "reason": decision.energy_budget_reason if decision else None,
+        },
+        "cheap_grid": {
+            "mode": decision.cheap_grid_mode if decision else None,
+            "preserve_required": decision.cheap_grid_preserve_required if decision else None,
+            "preserve_target_soc": decision.cheap_grid_preserve_target_soc if decision else None,
+            "grid_charge_required": decision.grid_charge_required if decision else None,
+            "grid_charge_target_soc": decision.grid_charge_target_soc if decision else None,
+            "reason": decision.cheap_grid_reason if decision else None,
         },
         "underfloor": {
             "allowed": decision.underfloor_comfort_allowed if decision else None,

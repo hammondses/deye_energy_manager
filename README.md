@@ -21,7 +21,7 @@ HACS release notes:
 
 - Add this repository as category `Integration`, not `Dashboard`.
 - The repository uses normal HACS integration layout: `custom_components/deye_energy_manager/` plus root `hacs.json`.
-- Versioned updates are published as GitHub releases such as `v0.5.5`; HACS uses the latest release tag as the remote version.
+- Versioned updates are published as GitHub releases such as `v0.5.6`; HACS uses the latest release tag as the remote version.
 - If GitHub shows a newer release but HACS does not offer it, open the repository in HACS and use the 3-dot menu -> `Update information`, then `Redownload`.
 
 ## Control Gates
@@ -37,6 +37,31 @@ Actual writes are guarded by explicit toggles:
 - `switch.deye_energy_manager_pv_load_test_control_enabled`
 
 Leave these off until advisory sensors match the current automations.
+
+## Cheap Grid
+
+Cheap grid is split into two separate policies:
+
+- Preserve battery: raise the active Deye programme capacity/reserve and leave the charge source as `No Grid or Gen`, so the inverter stops draining below the reserve and the house uses grid during 21:00-07:00.
+- Charge battery: raise the active programme capacity/reserve and set the active programme charge source to `Allow Grid`.
+
+Native controls:
+
+- `switch.deye_energy_manager_cheap_grid_preserve_enabled`
+- `switch.deye_energy_manager_cheap_grid_charge_enabled`
+- `number.deye_energy_manager_cheap_grid_preserve_soc`
+- `number.deye_energy_manager_cheap_grid_charge_target_soc`
+- `number.deye_energy_manager_maximum_grid_charge_target_soc`
+
+Diagnostics:
+
+- `binary_sensor.deye_energy_manager_cheap_grid_preserve_required`
+- `sensor.deye_energy_manager_cheap_grid_preserve_target_soc`
+- `sensor.deye_energy_manager_cheap_grid_mode`
+- `sensor.deye_energy_manager_cheap_grid_reason`
+- `binary_sensor.deye_energy_manager_grid_charge_required`
+
+`grid_charge_required` means active battery charging. `cheap_grid_preserve_required` means reserve-only battery preservation.
 
 Options are split into sections in the integration UI:
 

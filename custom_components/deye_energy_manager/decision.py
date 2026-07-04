@@ -191,6 +191,80 @@ def paid_grid_avoidance_state(
     return required, reason, floor, target, arrived, arrived_reason, forecast_drain_blocked
 
 
+def cheap_grid_state(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    tier: ForecastTier,
+    reserve_soc: float,
+    ev_grid_bypass_required: bool,
+) -> tuple[bool, float, bool, float, str, str]:
+    """Return cheap-grid preserve/charge requirements.
+
+    Preserve is reserve-floor control only: it raises the active programme
+    capacity while leaving the programme charge source as No Grid or Gen.
+    Charge is active battery charging: it raises capacity and allows grid.
+    """
+
+    if not time_between(inputs.now, "21:00", "07:00"):
+        return False, reserve_soc, False, tier.grid_charge_target_soc, "off", "cheap grid inactive"
+    if not settings.enabled:
+        return False, reserve_soc, False, tier.grid_charge_target_soc, "disabled", "manager disabled"
+
+    soc = inputs.battery_soc
+    preserve_target = max(
+        reserve_soc,
+        settings.min_soc_floor,
+        settings.cheap_grid_preserve_soc,
+        tier.overnight_floor,
+    )
+    preserve_target = min(preserve_target, settings.max_grid_charge_target_soc)
+    charge_target = min(
+        max(settings.cheap_grid_charge_target_soc, preserve_target, tier.grid_charge_target_soc),
+        settings.max_grid_charge_target_soc,
+    )
+    preserve_required = (
+        settings.cheap_grid_preserve_enabled
+        and soc is not None
+        and soc < preserve_target - 0.5
+    )
+    charge_required = (
+        settings.cheap_grid_charge_enabled
+        and soc is not None
+        and soc < charge_target - 1.0
+        and not ev_grid_bypass_required
+    )
+
+    if ev_grid_bypass_required:
+        mode = "ev_bypass"
+        reason = (
+            "cheap_grid_mode=ev_bypass: EV cheap-grid bypass active; "
+            f"preserve target {preserve_target:.0f}% still applies to reserve capacity"
+        )
+    elif charge_required:
+        mode = "charge"
+        reason = (
+            f"cheap_grid_charge_required: SOC {soc:.0f}% < target {charge_target:.0f}%, "
+            f"cheap period active, charging allowed until {settings.max_grid_charge_target_soc:.0f}% cap"
+        )
+    elif preserve_required:
+        mode = "preserve"
+        reason = (
+            f"cheap_grid_preserve_required: cheap period active, SOC {soc:.0f}%, "
+            f"tomorrow forecast {inputs.forecast_tomorrow_kwh if inputs.forecast_tomorrow_kwh is not None else 0.0:.0f}kWh, "
+            f"preserve target {preserve_target:.0f}%; raising {active_slot(inputs.now)} reserve to avoid battery drain"
+        )
+    elif not settings.cheap_grid_preserve_enabled and not settings.cheap_grid_charge_enabled:
+        mode = "disabled"
+        reason = "cheap_grid disabled: preserve and charge switches off"
+    else:
+        mode = "off"
+        if soc is None:
+            reason = "cheap_grid idle: SOC unavailable"
+        else:
+            reason = f"cheap_grid idle: SOC {soc:.0f}% >= preserve target {preserve_target:.0f}%"
+    return preserve_required, preserve_target, charge_required, charge_target, mode, reason
+
+
 def hours_until_time(now: datetime, target: str) -> float:
     """Return local hours until the next occurrence of a target time."""
 
@@ -1258,15 +1332,28 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             ev_action = "none"
     ev_grid_mode_required = ev_grid_bypass_required
 
+    (
+        cheap_grid_preserve_required,
+        cheap_grid_preserve_target_soc,
+        cheap_grid_charge_required,
+        cheap_grid_charge_target_soc,
+        cheap_grid_mode,
+        cheap_grid_reason,
+    ) = cheap_grid_state(inputs, settings, tier, reserve_soc, ev_grid_bypass_required)
+
+    if cheap_grid_preserve_required or cheap_grid_charge_required or ev_grid_bypass_required:
+        active_reserve_target_soc = max(
+            active_reserve_target_soc,
+            cheap_grid_charge_target_soc if cheap_grid_charge_required else cheap_grid_preserve_target_soc,
+        )
+
     grid_charge_required = (
         settings.enabled
         and settings.grid_charge_control_enabled
-        and time_between(inputs.now, "03:00", "07:00")
-        and tier.grid_charge_target_soc > 0
-        and soc_known
-        and soc < tier.grid_charge_target_soc - 1.0
+        and cheap_grid_charge_required
         and not (ev_grid_bypass_required or inputs.ev_latch_on)
     )
+    effective_grid_charge_target_soc = cheap_grid_charge_target_soc if grid_charge_required else tier.grid_charge_target_soc
 
     thermal_action = "none"
     shed_blocked_no_loads = thermal_should_shed and not inputs.any_solar_owned_heat_load_on and thermal_load_to_shed is None
@@ -1455,8 +1542,13 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if grid_charge_required:
         proposed_actions.append("enable_grid_charge")
         reason_parts.append(
-            f"grid_charge_required=true: forecast {tier.mode}, SOC {soc:.0f} < target {tier.grid_charge_target_soc:.0f}, EV mode off"
+            f"grid_charge_required=true: {cheap_grid_reason}"
         )
+    elif cheap_grid_preserve_required:
+        proposed_actions.append("cheap_grid_preserve")
+        reason_parts.append(cheap_grid_reason)
+    elif cheap_window and cheap_grid_mode in {"off", "disabled", "ev_bypass"}:
+        reason_parts.append(cheap_grid_reason)
     if paid_grid_avoidance_required:
         proposed_actions.append("paid_grid_avoidance")
         reason_parts.append(paid_time_reserve_reason)
@@ -1485,10 +1577,12 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         expected_action = f"thermal_{thermal_action}"
     elif ev_action != "none":
         expected_action = ev_action
+    elif grid_charge_required:
+        expected_action = "cheap_grid_charge"
+    elif cheap_grid_preserve_required:
+        expected_action = "cheap_grid_preserve"
     elif paid_grid_avoidance_required:
         expected_action = "paid_grid_avoidance"
-    elif grid_charge_required:
-        expected_action = "grid_charge_enable"
     elif thermal_action != "none":
         expected_action = f"thermal_{thermal_action}"
 
@@ -1499,7 +1593,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         tariff_window=tariff_window(inputs.now),
         target_17_soc=tier.target_17_soc,
         current_reserve_soc=reserve_soc,
-        grid_charge_target_soc=tier.grid_charge_target_soc,
+        grid_charge_target_soc=effective_grid_charge_target_soc,
         battery_soc=inputs.battery_soc,
         raw_soc=inputs.raw_soc,
         resolved_soc=inputs.battery_soc,
@@ -1584,6 +1678,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         bedroom_heat_taper_recommended=bedroom_heat_taper_recommended,
         projected_soc_08=projected_soc,
         grid_charge_required=grid_charge_required,
+        cheap_grid_preserve_required=cheap_grid_preserve_required,
+        cheap_grid_preserve_target_soc=cheap_grid_preserve_target_soc,
+        cheap_grid_mode=cheap_grid_mode,
+        cheap_grid_reason=cheap_grid_reason,
         ev_grid_mode_required=ev_grid_mode_required,
         ev_charging_detected=ev_charging_detected,
         ev_grid_bypass_required=ev_grid_bypass_required,

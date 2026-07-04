@@ -1,5 +1,15 @@
 # Release Notes
 
+## v0.5.6
+
+- Split cheap-grid reserve preservation from active grid charging.
+- Add native cheap-grid preserve/charge toggles and target SOC numbers.
+- Add cheap-grid preserve required, preserve target, mode, and reason diagnostics.
+- Treat the whole 21:00-07:00 off-peak window as eligible for cheap-grid preservation/charging policy.
+- Write active Deye programme capacity/selects for the current slot instead of hard-coding only early programmes.
+- Keep EV cheap-grid bypass separate from preserve/charge and retain reserve protection while EV bypass is active.
+- Add regression tests for preserve-only, charge, high-SOC idle, and EV-bypass coexistence.
+
 ## v0.5.5
 
 - Add local HACS/Home Assistant brand icon at `custom_components/deye_energy_manager/brand/icon.png`.

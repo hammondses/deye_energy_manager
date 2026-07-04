@@ -14,6 +14,8 @@ class EnergyManagerSettings:
     advisory_enabled: bool = True
     deye_control_enabled: bool = False
     grid_charge_control_enabled: bool = False
+    cheap_grid_preserve_enabled: bool = True
+    cheap_grid_charge_enabled: bool = True
     ev_control_enabled: bool = False
     ev_grid_bypass_enabled: bool = False
     ev_solar_charging_enabled: bool = False
@@ -114,6 +116,8 @@ class EnergyManagerSettings:
     forecast_safety_buffer_kwh: float = 2.0
     min_soc_floor: float = 12.0
     max_grid_charge_target_soc: float = 80.0
+    cheap_grid_preserve_soc: float = 50.0
+    cheap_grid_charge_target_soc: float = 60.0
     pv_load_test_min_soc: float = 70.0
     pv_load_test_min_expected_power_w: float = 4000.0
     pv_load_test_max_battery_charge_w: float = 2500.0
@@ -323,6 +327,10 @@ class EnergyManagerDecision:
     bedroom_heat_taper_recommended: bool
     projected_soc_08: float | None
     grid_charge_required: bool
+    cheap_grid_preserve_required: bool
+    cheap_grid_preserve_target_soc: float
+    cheap_grid_mode: str
+    cheap_grid_reason: str
     ev_grid_mode_required: bool
     ev_charging_detected: bool
     ev_grid_bypass_required: bool

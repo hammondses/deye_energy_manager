@@ -158,6 +158,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             advisory_enabled=bool(options["advisory_enabled"]),
             deye_control_enabled=bool(options["deye_control_enabled"]),
             grid_charge_control_enabled=bool(options["grid_charge_control_enabled"]),
+            cheap_grid_preserve_enabled=bool(options["cheap_grid_preserve_enabled"]),
+            cheap_grid_charge_enabled=bool(options["cheap_grid_charge_enabled"]),
             ev_control_enabled=bool(options["ev_control_enabled"]),
             ev_grid_bypass_enabled=bool(options["ev_grid_bypass_enabled"]),
             ev_solar_charging_enabled=bool(options["ev_solar_charging_enabled"]),
@@ -258,6 +260,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             forecast_safety_buffer_kwh=float(options["forecast_safety_buffer_kwh"]),
             min_soc_floor=float(options["min_soc_floor"]),
             max_grid_charge_target_soc=float(options["max_grid_charge_target_soc"]),
+            cheap_grid_preserve_soc=float(options["cheap_grid_preserve_soc"]),
+            cheap_grid_charge_target_soc=float(options["cheap_grid_charge_target_soc"]),
             pv_load_test_min_soc=float(options["pv_load_test_min_soc"]),
             pv_load_test_min_expected_power_w=float(options["pv_load_test_min_expected_power_w"]),
             pv_load_test_max_battery_charge_w=float(options["pv_load_test_max_battery_charge_w"]),
@@ -765,11 +769,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if slot == decision.active_slot:
                 value = max(value, decision.active_reserve_target_soc)
             await self._call_number_set(slot_to_entity[slot], value)
-        self.last_control_action = (
-            f"raised {decision.active_slot} reserve to {decision.active_reserve_target_soc:.0f}% for paid grid avoidance"
-            if decision.paid_grid_avoidance_required
-            else "updated Deye reserve floors"
-        )
+        if decision.grid_charge_required:
+            self.last_control_action = f"raised {decision.active_slot} reserve to {decision.grid_charge_target_soc:.0f}% for cheap-grid charge"
+        elif decision.cheap_grid_preserve_required:
+            self.last_control_action = f"raised {decision.active_slot} reserve to {decision.cheap_grid_preserve_target_soc:.0f}% for cheap-grid preserve"
+        elif decision.paid_grid_avoidance_required:
+            self.last_control_action = f"raised {decision.active_slot} reserve to {decision.active_reserve_target_soc:.0f}% for paid grid avoidance"
+        else:
+            self.last_control_action = "updated Deye reserve floors"
 
     async def _apply_ev_mode(self, required: bool) -> None:
         ev_bypass_entities = [PROG_POWER_ENTITIES[5], PROG_POWER_ENTITIES[0], PROG_POWER_ENTITIES[1], PROG_POWER_ENTITIES[2]]
@@ -780,17 +787,40 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     async def _apply_grid_charge(self, decision: EnergyManagerDecision) -> None:
         switch_id = self.entity_map.get("grid_charge_switch", "switch.deye_grid_charge_enabled")
         await self._call_switch(switch_id, decision.grid_charge_required)
+        slot_to_charge = {
+            "Prog1": PROG_CHARGE_SELECT_ENTITIES[0],
+            "Prog2": PROG_CHARGE_SELECT_ENTITIES[1],
+            "Prog3": PROG_CHARGE_SELECT_ENTITIES[2],
+            "Prog4": PROG_CHARGE_SELECT_ENTITIES[3],
+            "Prog5": PROG_CHARGE_SELECT_ENTITIES[4],
+            "Prog6": PROG_CHARGE_SELECT_ENTITIES[5],
+        }
+        slot_to_capacity = {
+            "Prog1": PROG_CAPACITY_ENTITIES[0],
+            "Prog2": PROG_CAPACITY_ENTITIES[1],
+            "Prog3": PROG_CAPACITY_ENTITIES[2],
+            "Prog4": PROG_CAPACITY_ENTITIES[3],
+            "Prog5": PROG_CAPACITY_ENTITIES[4],
+            "Prog6": PROG_CAPACITY_ENTITIES[5],
+        }
+        active_charge_entity = slot_to_charge.get(decision.active_slot)
+        active_capacity_entity = slot_to_capacity.get(decision.active_slot)
         if decision.grid_charge_required:
-            for entity_id in PROG_CHARGE_SELECT_ENTITIES[:2]:
-                await self._call_select_option(entity_id, CHARGE_OPTION_ALLOW_GRID)
-            for entity_id in PROG_CAPACITY_ENTITIES[:2]:
-                await self._call_number_set(entity_id, decision.grid_charge_target_soc)
-            for entity_id in PROG_POWER_ENTITIES[:2]:
-                await self._call_number_set(entity_id, 12000.0)
+            if active_charge_entity:
+                await self._call_select_option(active_charge_entity, CHARGE_OPTION_ALLOW_GRID)
+            if active_capacity_entity:
+                await self._call_number_set(active_capacity_entity, decision.grid_charge_target_soc)
+            for entity_id in PROG_POWER_ENTITIES:
+                await self._call_number_set(entity_id, self.settings.ev_restore_program_power_w)
+            self.last_control_action = f"cheap-grid charge: {decision.active_slot} -> Allow Grid, reserve {decision.grid_charge_target_soc:.0f}%"
         else:
-            for entity_id in PROG_CHARGE_SELECT_ENTITIES[:2]:
-                await self._call_select_option(entity_id, CHARGE_OPTION_NO_GRID)
-        self.last_control_action = "updated grid charge state"
+            if active_charge_entity:
+                await self._call_select_option(active_charge_entity, CHARGE_OPTION_NO_GRID)
+            if decision.cheap_grid_preserve_required and active_capacity_entity:
+                await self._call_number_set(active_capacity_entity, decision.cheap_grid_preserve_target_soc)
+                self.last_control_action = f"cheap-grid preserve: {decision.active_slot} -> No Grid or Gen, reserve {decision.cheap_grid_preserve_target_soc:.0f}%"
+            else:
+                self.last_control_action = "updated grid charge state"
 
     async def _apply_heat(self, decision: EnergyManagerDecision) -> None:
         mode = self.settings.thermal_actuation_mode
