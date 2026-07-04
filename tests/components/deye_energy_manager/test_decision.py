@@ -645,6 +645,34 @@ def test_controls_block_when_manager_disabled() -> None:
     decision = decide(base_inputs(), EnergyManagerSettings(enabled=False))
     assert decision.control_blocked
     assert not decision.heat_allowed
+    assert decision.thermal_action == "none"
+
+
+def test_thermal_control_disabled_blocks_comfort_and_underfloor_actions() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=80,
+            grid_power_w=0,
+            heat_loads=[
+                HeatLoadState(name="Bedroom", priority=1, current_temp=16, supports_heating=True),
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=2,
+                    current_temp=7,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    supports_heating=True,
+                ),
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=False, underfloor_schedule_enabled=True),
+    )
+
+    assert not decision.comfort_heat_allowed
+    assert not decision.underfloor_comfort_allowed
+    assert decision.thermal_action == "none"
 
 
 def test_thermal_start_uses_thermal_min_soc_not_target_17_soc() -> None:
@@ -853,7 +881,8 @@ def test_high_discharge_sets_shed_and_emergency_without_owned_loads() -> None:
 
     assert decision.thermal_should_shed
     assert decision.thermal_should_emergency_shed
-    assert decision.expected_action == "shed_blocked_no_owned_loads"
+    assert decision.thermal_action == "emergency_shed_all"
+    assert decision.expected_action == "thermal_emergency_shed_all"
     assert "thermal_should_shed=true: battery discharging 4204W >= shed threshold 500W" in decision.reason
     assert "battery charge 0W, forecast_full_override" not in decision.reason
 
@@ -1548,6 +1577,53 @@ def test_energy_budget_allows_one_load_when_surplus_is_real() -> None:
     assert decision.battery_target_reachable_today
     assert decision.thermal_allowed
     assert decision.thermal_load_to_add == "Office"
+
+
+def test_positive_budget_still_requires_thermal_start_gate() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=50,
+            battery_power_w=0,
+            forecast_remaining_today_kwh=30,
+            forecast_tomorrow_kwh=20,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            daily_battery_target_soc=80,
+            thermal_start_min_soc=80,
+            thermal_start_min_charge_w=6000,
+        ),
+    )
+
+    assert decision.discretionary_energy_budget_kwh is not None
+    assert decision.discretionary_energy_budget_kwh > 0
+    assert not decision.thermal_allowed
+    assert decision.thermal_action == "none"
+    assert "thermal_start_min_soc" in decision.thermal_action_reason
+
+
+def test_charge_rate_can_satisfy_thermal_start_gate_when_budget_fits() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=50,
+            battery_power_w=-7000,
+            forecast_remaining_today_kwh=30,
+            forecast_tomorrow_kwh=20,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            daily_battery_target_soc=80,
+            thermal_start_min_soc=80,
+            thermal_start_min_charge_w=6000,
+        ),
+    )
+
+    assert decision.thermal_allowed
+    assert decision.thermal_action == "add_one"
 
 
 def test_budget_positive_but_too_small_for_candidate_load_blocks_add() -> None:

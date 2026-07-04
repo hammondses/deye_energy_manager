@@ -400,6 +400,34 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         ev_power = self._state_float("ev_power")
         if ev_power is not None and ev_power >= settings.ev_active_load_threshold_w:
             discretionary_w += ev_power
+        essential_jump_w = (
+            essential_power_w - self.previous_essential_power_w
+            if self.previous_essential_power_w is not None
+            else None
+        )
+        inferred_ev_without_power_sensor = (
+            ev_power is None
+            and (
+                self.ev_latch_on
+                or (
+                    time_between(now, "21:00", "07:00")
+                    and (
+                        essential_power_w > 6500.0
+                        or (essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w)
+                    )
+                )
+            )
+        )
+        if inferred_ev_without_power_sensor:
+            cutoff = now - timedelta(minutes=settings.base_load_window_minutes)
+            while self._base_load_samples and self._base_load_samples[0][0] < cutoff:
+                self._base_load_samples.popleft()
+            if not settings.dynamic_base_load_estimate_enabled or not self._base_load_samples:
+                return settings.base_load_estimate_w
+            return max(
+                sum(value for _sample_time, value in self._base_load_samples) / len(self._base_load_samples),
+                100.0,
+            )
         sample_w = max(essential_power_w - discretionary_w, 0.0)
         self._base_load_samples.append((now, sample_w))
         cutoff = now - timedelta(minutes=settings.base_load_window_minutes)
@@ -694,6 +722,18 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         await self._apply_ev_mode(required)
         await self.async_request_refresh()
 
+    async def async_restore_deye_normal(self) -> None:
+        """Restore Deye programme powers and cheap-grid charge selects to safe defaults."""
+
+        self.ev_latch_on = False
+        self.ev_hold_until = None
+        for entity_id in (PROG_POWER_ENTITIES[5], PROG_POWER_ENTITIES[0], PROG_POWER_ENTITIES[1], PROG_POWER_ENTITIES[2]):
+            await self._call_number_set(entity_id, self.settings.ev_restore_program_power_w)
+        for entity_id in (PROG_CHARGE_SELECT_ENTITIES[5], PROG_CHARGE_SELECT_ENTITIES[0], PROG_CHARGE_SELECT_ENTITIES[1], PROG_CHARGE_SELECT_ENTITIES[2]):
+            await self._call_select_option(entity_id, CHARGE_OPTION_NO_GRID)
+        self.last_control_action = "restored Deye normal: Prog6/1/2/3 powers restored, grid charge disabled"
+        await self.async_request_refresh()
+
     async def async_apply_decision(self, decision: EnergyManagerDecision | None = None) -> None:
         """Apply safe, gated actuator writes."""
 
@@ -713,11 +753,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self._apply_heat(decision)
 
     async def _call_number_set(self, entity_id: str, value: float) -> None:
-        if self._last_written.get(entity_id) == value:
-            return
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
             return
+        try:
+            if abs(float(state.state) - value) < 0.01:
+                self._last_written[entity_id] = value
+                return
+        except (TypeError, ValueError):
+            pass
         await self.hass.services.async_call(
             "number",
             "set_value",
@@ -727,10 +771,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._last_written[entity_id] = value
 
     async def _call_select_option(self, entity_id: str, option: str) -> None:
-        if self._last_written.get(entity_id) == option:
-            return
         state = self.hass.states.get(entity_id)
-        if state is None or state.state in UNAVAILABLE or state.state == option:
+        if state is None or state.state in UNAVAILABLE:
+            return
+        if state.state == option:
+            self._last_written[entity_id] = option
             return
         await self.hass.services.async_call(
             "select",
@@ -741,10 +786,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._last_written[entity_id] = option
 
     async def _call_switch(self, entity_id: str, on: bool) -> None:
-        if self._last_written.get(entity_id) == on:
-            return
         state = self.hass.states.get(entity_id)
-        if state is None or state.state in UNAVAILABLE or state.state == ("on" if on else "off"):
+        if state is None or state.state in UNAVAILABLE:
+            return
+        if state.state == ("on" if on else "off"):
+            self._last_written[entity_id] = on
             return
         await self.hass.services.async_call(
             "switch",
@@ -779,7 +825,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         elif decision.cheap_grid_preserve_required:
             self.last_control_action = f"raised {decision.active_slot} reserve to {decision.cheap_grid_preserve_target_soc:.0f}% for cheap-grid preserve"
         elif decision.paid_grid_avoidance_required:
-            self.last_control_action = f"raised {decision.active_slot} reserve to {decision.active_reserve_target_soc:.0f}% for paid grid avoidance"
+            self.last_control_action = f"set {decision.active_slot} reserve to {decision.active_reserve_target_soc:.0f}% for paid grid avoidance"
         else:
             self.last_control_action = "updated Deye reserve floors"
 
@@ -909,7 +955,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return "climate does not expose fan_modes"
         if fan_mode not in supported:
             return f"fan mode {fan_mode} not in supported fan_modes"
-        if state.attributes.get("fan_mode") == fan_mode or self._last_written.get(f"{entity_id}:fan_mode") == fan_mode:
+        if state.attributes.get("fan_mode") == fan_mode:
+            self._last_written[f"{entity_id}:fan_mode"] = fan_mode
             return None
         await self.hass.services.async_call(
             "climate",

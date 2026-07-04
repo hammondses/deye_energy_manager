@@ -89,6 +89,14 @@
             "title": "{title}",
             "description": "{fix}"
         },
+        "ev_cheap_grid_bypass_disabled": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
+        "paid_grid_avoidance_no_capacity_entities": {
+            "title": "{title}",
+            "description": "{fix}"
+        },
         "porsche_entity_unavailable": {
             "title": "{title}",
             "description": "{fix}"

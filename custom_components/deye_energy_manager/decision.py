@@ -1105,12 +1105,20 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         underfloor_load_to_add,
         underfloor_current_window,
     ) = underfloor_comfort_decision(inputs, settings, paid_grid_avoidance_required, discretionary_budget_kwh)
+    if not settings.enabled or not thermal_control_enabled or thermal_mode == "off":
+        underfloor_comfort_allowed = False
+        if thermal_mode == "off":
+            underfloor_reason = "underfloor_blocked: thermal mode off"
+        elif not thermal_control_enabled:
+            underfloor_reason = "underfloor_blocked: thermal control disabled"
+        else:
+            underfloor_reason = "underfloor_blocked: manager disabled"
 
     pre_peak_preserve_required = (
         time_between(inputs.now, "13:00", "17:00")
         and soc_known
         and soc < tier.target_17_soc
-        and battery_charge_w < settings.heat_add_min_charge_w
+        and battery_charge_w < thermal_start_min_charge_w
     )
 
     battery_priority_satisfied = battery_target_reachable or (soc_known and soc >= energy_budget_target_soc)
@@ -1173,7 +1181,13 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
 
     comfort_candidates = sorted(comfort_heat_candidates(inputs.heat_loads, settings), key=lambda load: load.priority)
-    comfort_heat_allowed = thermal_mode == "heating" and bool(comfort_candidates) and not paid_grid_avoidance_required
+    comfort_heat_allowed = (
+        settings.enabled
+        and thermal_control_enabled
+        and thermal_mode == "heating"
+        and bool(comfort_candidates)
+        and not paid_grid_avoidance_required
+    )
 
     preheat_window = time_between(
         inputs.now,
@@ -1213,6 +1227,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and time_between(inputs.now, "07:00", "17:00")
         and (forecast_override or expected_pv_power_w >= settings.thermal_keep_running_min_charge_w)
     )
+    thermal_start_gate = (
+        (soc_known and soc >= thermal_start_min_soc)
+        or battery_charge_w >= thermal_start_min_charge_w
+        or forecast_override
+    )
     thermal_allowed = (
         settings.enabled
         and thermal_control_enabled
@@ -1221,6 +1240,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and thermal_time_allowed
         and inputs.cooldown_passed
         and solar_soak_allowed
+        and thermal_start_gate
         and battery_discharge_w < thermal_shed_discharge_w
     )
 
@@ -1389,7 +1409,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     thermal_action = "none"
     shed_blocked_no_loads = thermal_should_shed and not inputs.any_solar_owned_heat_load_on and thermal_load_to_shed is None
-    if thermal_should_emergency_shed and not shed_blocked_no_loads:
+    if thermal_should_emergency_shed:
         thermal_action = "emergency_shed_all"
     elif thermal_rotation_recommended:
         thermal_action = "rotate"
@@ -1495,6 +1515,13 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
                 f"SOC unavailable, charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W, "
                 f"forecast_full_override={forecast_override}"
             )
+        elif not thermal_start_gate:
+            reason = (
+                "thermal_allowed=false: "
+                f"SOC {soc:.0f}% < thermal_start_min_soc {thermal_start_min_soc:.0f}, "
+                f"charge {battery_charge_w:.0f}W < thermal_start_min_charge {thermal_start_min_charge_w:.0f}, "
+                f"forecast_full_override={forecast_override}"
+            )
         else:
             reason = (
                 "thermal_allowed=false: "
@@ -1597,7 +1624,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if pre_peak_preserve_required:
         reason_parts.append(
             f"pre_peak_preserve_required=true: SOC {soc:.0f} < target_17 {tier.target_17_soc:.0f} "
-            f"and charge {battery_charge_w:.0f}W < {settings.heat_add_min_charge_w:.0f}W"
+            f"and charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W"
         )
 
     expected_action = "none"

@@ -1,5 +1,16 @@
 # Release Notes
 
+## v0.5.10
+
+- Fix HA sensor metadata warnings by removing `energy` device class from forecast/budget estimate sensors that are measurements, not total meters.
+- Make actuator write helpers compare live HA state before trusting cached writes, so external changes or failed writes can be corrected on the next cycle.
+- Prevent inferred EV charging from contaminating the dynamic base-load estimate when no dedicated EV power sensor is configured.
+- Gate comfort heat and scheduled underfloor actions behind manager/thermal control.
+- Keep emergency shed-all as the explicit action when emergency discharge thresholds are crossed, even if ownership flags are stale.
+- Use the thermal start charge threshold for pre-peak preserve reasoning instead of the legacy heat threshold.
+- Implement the `restore_deye_normal` button for Prog6/1/2/3 EV-bypass restore and No Grid charge reset.
+- Add missing Repairs translation entries and regression coverage for the fixed safety paths.
+
 ## v0.5.9
 
 - Make the rolling energy budget target phase-aware: cheap-grid night now budgets to the 7am morning target instead of the daily/full battery target.

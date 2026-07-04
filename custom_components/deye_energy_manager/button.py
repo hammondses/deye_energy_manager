@@ -44,6 +44,8 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
             await self.coordinator.async_force_ev_grid_bypass(False)
         elif self._key == "apply_plan_now":
             await self.coordinator.async_apply_decision()
+        elif self._key == "restore_deye_normal":
+            await self.coordinator.async_restore_deye_normal()
         elif self._key == "force_shed_one_heat_load":
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
         elif self._key == "force_add_one_heat_load":
