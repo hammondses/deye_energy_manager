@@ -1,5 +1,14 @@
 # Release Notes
 
+## v0.5.13
+
+- Add a single Deye program-write planner so cheap-grid, paid-grid avoidance, EV bypass, thermal policy, and restore paths no longer write conflicting inverter settings independently.
+- Add Deye write de-duplication, per-entity cooldowns, write diagnostics, and thrash protection for repeated program capacity/select changes.
+- Rework cheap-grid planning around separate 7am `morning_start_soc_target` and 4pm `evening_peak_soc_target`, with projected 4pm SOC and reason diagnostics.
+- Prevent cheap-grid preserve from leaking stale high targets into Prog3 after the cheap period exits.
+- Retire thermal script actuation from runtime paths; thermal force buttons now require direct climate control.
+- Add regression coverage for cheap-grid top-up/preserve/exit behavior, thermal shed stability during cheap grid, and write thrash detection.
+
 ## v0.5.12
 
 - Fix coordinator startup after v0.5.11 by importing the shared `time_between` helper used by EV/base-load detection.
