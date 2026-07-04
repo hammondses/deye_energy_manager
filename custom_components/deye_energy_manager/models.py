@@ -116,7 +116,7 @@ class EnergyManagerSettings:
     forecast_safety_buffer_kwh: float = 2.0
     min_soc_floor: float = 12.0
     max_grid_charge_target_soc: float = 80.0
-    cheap_grid_preserve_soc: float = 50.0
+    cheap_grid_preserve_soc: float = 30.0
     cheap_grid_charge_target_soc: float = 60.0
     pv_load_test_min_soc: float = 70.0
     pv_load_test_min_expected_power_w: float = 4000.0

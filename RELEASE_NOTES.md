@@ -1,5 +1,14 @@
 # Release Notes
 
+## v0.5.8
+
+- Fix default cheap-grid preserve SOC mismatch so all settings paths use 30%, not 50%.
+- In cheap-grid preserve mode, explicitly reset Prog6/Prog1/Prog2/Prog3 charge selects to `No Grid or Gen` to clear stale `Allow Grid` state from older releases.
+- Keep reserve preservation capacity-only; active battery charging remains limited to `grid_charge_required`.
+- During paid-rate periods, lower active reserve to the emergency SOC floor instead of preserving battery and forcing paid import.
+- Let EV cheap-grid bypass suppress battery top-up while active, then allow battery top-up to resume immediately after the EV stop condition clears the latch.
+- Add regression coverage proving default medium-forecast cheap-grid behavior does not target 60%, EV bypass suppresses top-up, and paid-grid avoidance uses the battery down to floor.
+
 ## v0.5.7
 
 - Change cheap-grid policy to calculate a 7am morning target SOC instead of using a generic high overnight charge target.

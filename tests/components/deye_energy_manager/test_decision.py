@@ -158,6 +158,17 @@ def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
     assert decision.expected_action == "cheap_grid_top_up_to_morning_target"
 
 
+def test_cheap_grid_default_settings_do_not_target_sixty_for_medium_forecast() -> None:
+    decision = decide(
+        base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=23),
+        EnergyManagerSettings(grid_charge_control_enabled=True),
+    )
+
+    assert decision.cheap_grid_mode == "top_up_to_morning_target"
+    assert 30 <= decision.morning_target_soc <= 35
+    assert decision.grid_charge_target_soc < 60
+
+
 def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,
@@ -245,6 +256,34 @@ def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
     assert decision.cheap_grid_preserve_required
     assert not decision.grid_charge_required
     assert decision.active_reserve_target_soc >= decision.morning_target_soc
+
+
+def test_ev_bypass_suspends_battery_grid_topup_until_ev_stops() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        cheap_grid_preserve_soc=30,
+    )
+
+    with_ev = decide(
+        base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=23, essential_power_w=7200, previous_essential_power_w=1000),
+        settings,
+    )
+    after_ev = decide(
+        base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=23, essential_power_w=1000, previous_essential_power_w=7200, ev_latch_on=True),
+        settings,
+    )
+
+    assert with_ev.ev_grid_bypass_required
+    assert with_ev.cheap_grid_mode == "ev_bypass"
+    assert not with_ev.grid_charge_required
+    assert with_ev.active_reserve_target_soc >= with_ev.morning_target_soc
+    assert not after_ev.ev_grid_bypass_required
+    assert after_ev.cheap_grid_mode == "top_up_to_morning_target"
+    assert after_ev.grid_charge_required
 
 
 def test_ev_start_and_stop_rules() -> None:
@@ -1363,7 +1402,7 @@ def test_morning_preheat_blocked_by_soc_floor() -> None:
     assert "SOC 25" in decision.morning_preheat_reason
 
 
-def test_paid_grid_avoidance_raises_active_reserve_before_solar_arrives() -> None:
+def test_paid_grid_avoidance_lowers_active_reserve_to_use_battery() -> None:
     decision = decide(
         base_inputs(
             now=dt(7, 30),
@@ -1378,8 +1417,28 @@ def test_paid_grid_avoidance_raises_active_reserve_before_solar_arrives() -> Non
 
     assert decision.paid_grid_avoidance_required
     assert decision.forecast_drain_blocked
-    assert decision.active_reserve_target_soc >= 45
+    assert decision.paid_time_floor_soc == 12
+    assert decision.active_reserve_target_soc == 12
     assert decision.expected_action == "paid_grid_avoidance"
+    assert "lowering active reserve" in decision.paid_time_reserve_reason
+
+
+def test_paid_grid_avoidance_does_not_preserve_when_soc_near_floor() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=12.5,
+            battery_power_w=0,
+            grid_power_w=800,
+            pv_power_now_w=0,
+            forecast_tomorrow_kwh=35,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert not decision.paid_grid_avoidance_required
+    assert decision.active_reserve_target_soc == 12
+    assert "unavoidable" in decision.paid_time_reserve_reason
 
 
 def test_paid_grid_avoidance_relaxes_after_solar_arrives() -> None:

@@ -810,6 +810,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         }
         active_charge_entity = slot_to_charge.get(decision.active_slot)
         active_capacity_entity = slot_to_capacity.get(decision.active_slot)
+        cheap_charge_entities = [
+            PROG_CHARGE_SELECT_ENTITIES[5],
+            PROG_CHARGE_SELECT_ENTITIES[0],
+            PROG_CHARGE_SELECT_ENTITIES[1],
+            PROG_CHARGE_SELECT_ENTITIES[2],
+        ]
         if decision.grid_charge_required:
             if active_charge_entity:
                 await self._call_select_option(active_charge_entity, CHARGE_OPTION_ALLOW_GRID)
@@ -819,11 +825,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._call_number_set(entity_id, self.settings.ev_restore_program_power_w)
             self.last_control_action = f"cheap-grid charge: {decision.active_slot} -> Allow Grid, reserve {decision.grid_charge_target_soc:.0f}%"
         else:
-            if active_charge_entity:
-                await self._call_select_option(active_charge_entity, CHARGE_OPTION_NO_GRID)
+            for entity_id in cheap_charge_entities:
+                await self._call_select_option(entity_id, CHARGE_OPTION_NO_GRID)
             if decision.cheap_grid_preserve_required and active_capacity_entity:
                 await self._call_number_set(active_capacity_entity, decision.cheap_grid_preserve_target_soc)
-                self.last_control_action = f"cheap-grid preserve: {decision.active_slot} -> No Grid or Gen, reserve {decision.cheap_grid_preserve_target_soc:.0f}%"
+                self.last_control_action = f"cheap-grid preserve: Prog6/1/2/3 -> No Grid or Gen, reserve {decision.cheap_grid_preserve_target_soc:.0f}%"
             else:
                 self.last_control_action = "updated grid charge state"
 

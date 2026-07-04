@@ -130,13 +130,6 @@ def solar_phase(now: datetime) -> str:
 def paid_time_floor_soc(now: datetime, settings: EnergyManagerSettings) -> float:
     """Return the paid-time minimum reserve floor for the current phase."""
 
-    phase = solar_phase(now)
-    if phase == "morning_battery_priority":
-        return settings.morning_paid_time_min_reserve_soc
-    if phase == "evening_preserve":
-        return settings.evening_paid_time_min_reserve_soc
-    if phase in {"midday_balance", "afternoon_soak"}:
-        return settings.paid_time_min_reserve_soc
     return settings.min_soc_floor
 
 
@@ -175,19 +168,20 @@ def paid_grid_avoidance_state(
     required = False
     reason = "paid grid avoidance not required"
     if settings.paid_time_grid_avoidance_enabled and not cheap_window:
-        near_floor = inputs.battery_soc is not None and inputs.battery_soc <= floor + 2.0
         importing = paid_import_w >= settings.paid_grid_import_threshold_w
-        morning_before_solar = solar_phase(inputs.now) == "morning_battery_priority" and not arrived
-        forecast_drain_blocked = not arrived and (morning_before_solar or reserve_soc < floor)
-        required = near_floor and (importing or morning_before_solar)
+        soc_above_floor = inputs.battery_soc is not None and inputs.battery_soc > floor + 2.0
+        forecast_drain_blocked = reserve_soc > floor
+        required = importing and soc_above_floor
         if required:
             reason = (
-                f"paid_grid_avoidance_required: SOC {inputs.battery_soc:.0f}% near floor {floor:.0f}%, paid time, "
-                f"{'solar not arrived' if not arrived else arrived_reason}"
+                f"paid_grid_avoidance_required: paid import {paid_import_w:.0f}W while SOC {inputs.battery_soc:.0f}% > floor {floor:.0f}%; "
+                "lowering active reserve so battery serves paid load"
             ) if inputs.battery_soc is not None else "paid_grid_avoidance_required: SOC unavailable during paid time"
+        elif inputs.battery_soc is not None and inputs.battery_soc <= floor + 2.0 and importing:
+            reason = f"paid grid import unavoidable: SOC {inputs.battery_soc:.0f}% near floor {floor:.0f}%"
         elif arrived:
             reason = f"paid grid avoidance not required: solar arrived: {arrived_reason}"
-    target = max(reserve_soc, floor) if required or forecast_drain_blocked else reserve_soc
+    target = floor if required or forecast_drain_blocked else reserve_soc
     return required, reason, floor, target, arrived, arrived_reason, forecast_drain_blocked
 
 
@@ -1374,7 +1368,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         settings.enabled
         and settings.grid_charge_control_enabled
         and cheap_grid_charge_required
-        and not (ev_grid_bypass_required or inputs.ev_latch_on)
+        and not (ev_grid_bypass_required or ev_latch_active)
     )
     effective_grid_charge_target_soc = cheap_grid_charge_target_soc if grid_charge_required else tier.grid_charge_target_soc
 
