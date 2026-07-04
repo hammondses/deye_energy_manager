@@ -766,7 +766,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "Prog6": PROG_CAPACITY_ENTITIES[5],
         }
         for slot, value in targets.items():
-            if slot == decision.active_slot:
+            cheap_slots = {"Prog6", "Prog1", "Prog2"}
+            if decision.tariff_window == "cheap_grid" and decision.cheap_grid_preserve_required and (
+                slot in cheap_slots or slot == decision.active_slot
+            ):
+                value = max(value, decision.morning_target_soc)
+            elif slot == decision.active_slot:
                 value = max(value, decision.active_reserve_target_soc)
             await self._call_number_set(slot_to_entity[slot], value)
         if decision.grid_charge_required:

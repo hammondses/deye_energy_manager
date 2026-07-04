@@ -197,7 +197,7 @@ def cheap_grid_state(
     tier: ForecastTier,
     reserve_soc: float,
     ev_grid_bypass_required: bool,
-) -> tuple[bool, float, bool, float, str, str]:
+) -> tuple[bool, bool, float, float, str, str]:
     """Return cheap-grid preserve/charge requirements.
 
     Preserve is reserve-floor control only: it raises the active programme
@@ -206,33 +206,50 @@ def cheap_grid_state(
     """
 
     if not time_between(inputs.now, "21:00", "07:00"):
-        return False, reserve_soc, False, tier.grid_charge_target_soc, "off", "cheap grid inactive"
+        return False, False, reserve_soc, tier.grid_charge_target_soc, "off", "cheap grid inactive"
     if not settings.enabled:
-        return False, reserve_soc, False, tier.grid_charge_target_soc, "disabled", "manager disabled"
+        return False, False, reserve_soc, tier.grid_charge_target_soc, "disabled", "manager disabled"
 
     soc = inputs.battery_soc
-    preserve_target = max(
-        reserve_soc,
-        settings.min_soc_floor,
-        settings.cheap_grid_preserve_soc,
-        tier.overnight_floor,
-    )
-    preserve_target = min(preserve_target, settings.max_grid_charge_target_soc)
-    charge_target = min(
-        max(settings.cheap_grid_charge_target_soc, preserve_target, tier.grid_charge_target_soc),
-        settings.max_grid_charge_target_soc,
-    )
-    preserve_required = (
-        settings.cheap_grid_preserve_enabled
-        and soc is not None
-        and soc < preserve_target - 0.5
-    )
-    charge_required = (
+    forecast = inputs.forecast_tomorrow_kwh if inputs.forecast_tomorrow_kwh is not None else 0.0
+    if tier.mode in {"excellent", "good"}:
+        forecast_target = 25.0
+    elif tier.mode == "medium":
+        forecast_target = 35.0
+    elif tier.mode == "poor":
+        forecast_target = 45.0
+    elif tier.mode == "dreadful":
+        forecast_target = 55.0
+    else:
+        forecast_target = 60.0
+
+    bridge_hours = 2.5
+    bridge_kwh = settings.base_load_estimate_w * bridge_hours / 1000.0 + min(settings.forecast_safety_buffer_kwh, 2.0)
+    bridge_target = settings.min_soc_floor + bridge_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
+    strategy_adjustment = {"aggressive": -5.0, "normal": 0.0, "conservative": 5.0}.get(settings.strategy, 0.0)
+    morning_target = max(settings.min_soc_floor, forecast_target, bridge_target, settings.cheap_grid_preserve_soc) + strategy_adjustment
+    heavy_target = min(max(settings.cheap_grid_charge_target_soc, morning_target), settings.max_grid_charge_target_soc)
+    heavy_required = (
         settings.cheap_grid_charge_enabled
         and soc is not None
-        and soc < charge_target - 1.0
+        and soc < heavy_target - 1.0
+        and (
+            tier.mode in {"dreadful", "brutal"}
+            or settings.strategy == "conservative"
+        )
         and not ev_grid_bypass_required
     )
+    morning_target = min(morning_target, settings.max_grid_charge_target_soc)
+    topup_required = (
+        settings.cheap_grid_charge_enabled
+        and soc is not None
+        and soc < morning_target - 1.0
+        and not heavy_required
+        and not ev_grid_bypass_required
+    )
+    charge_target = heavy_target if heavy_required else morning_target
+    preserve_required = settings.cheap_grid_preserve_enabled
+    preserve_target = morning_target
 
     if ev_grid_bypass_required:
         mode = "ev_bypass"
@@ -240,18 +257,24 @@ def cheap_grid_state(
             "cheap_grid_mode=ev_bypass: EV cheap-grid bypass active; "
             f"preserve target {preserve_target:.0f}% still applies to reserve capacity"
         )
-    elif charge_required:
-        mode = "charge"
+    elif heavy_required:
+        mode = "heavy_grid_charge"
         reason = (
-            f"cheap_grid_charge_required: SOC {soc:.0f}% < target {charge_target:.0f}%, "
-            f"cheap period active, charging allowed until {settings.max_grid_charge_target_soc:.0f}% cap"
+            f"cheap_grid_heavy_charge: SOC {soc:.0f}% below heavy target {charge_target:.0f}%; "
+            f"forecast {forecast:.0f}kWh/{tier.mode}, strategy {settings.strategy}"
+        )
+    elif topup_required:
+        mode = "top_up_to_morning_target"
+        reason = (
+            f"cheap_grid_topup: SOC {soc:.0f}% below 7am target {morning_target:.0f}%; "
+            "charging only to morning target"
         )
     elif preserve_required:
         mode = "preserve"
+        soc_text = f"SOC {soc:.0f}% at/above target" if soc is not None and soc >= morning_target - 1.0 else "SOC unavailable or below target"
         reason = (
-            f"cheap_grid_preserve_required: cheap period active, SOC {soc:.0f}%, "
-            f"tomorrow forecast {inputs.forecast_tomorrow_kwh if inputs.forecast_tomorrow_kwh is not None else 0.0:.0f}kWh, "
-            f"preserve target {preserve_target:.0f}%; raising {active_slot(inputs.now)} reserve to avoid battery drain"
+            f"cheap_grid_preserve: {soc_text}; 7am target {morning_target:.0f}%; "
+            "using grid for house load, not charging battery"
         )
     elif not settings.cheap_grid_preserve_enabled and not settings.cheap_grid_charge_enabled:
         mode = "disabled"
@@ -262,7 +285,7 @@ def cheap_grid_state(
             reason = "cheap_grid idle: SOC unavailable"
         else:
             reason = f"cheap_grid idle: SOC {soc:.0f}% >= preserve target {preserve_target:.0f}%"
-    return preserve_required, preserve_target, charge_required, charge_target, mode, reason
+    return preserve_required, topup_required or heavy_required, preserve_target, charge_target, mode, reason
 
 
 def hours_until_time(now: datetime, target: str) -> float:
@@ -1334,8 +1357,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     (
         cheap_grid_preserve_required,
-        cheap_grid_preserve_target_soc,
         cheap_grid_charge_required,
+        cheap_grid_preserve_target_soc,
         cheap_grid_charge_target_soc,
         cheap_grid_mode,
         cheap_grid_reason,
@@ -1578,7 +1601,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     elif ev_action != "none":
         expected_action = ev_action
     elif grid_charge_required:
-        expected_action = "cheap_grid_charge"
+        expected_action = f"cheap_grid_{cheap_grid_mode}"
     elif cheap_grid_preserve_required:
         expected_action = "cheap_grid_preserve"
     elif paid_grid_avoidance_required:
@@ -1679,7 +1702,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         projected_soc_08=projected_soc,
         grid_charge_required=grid_charge_required,
         cheap_grid_preserve_required=cheap_grid_preserve_required,
+        cheap_grid_topup_required=cheap_grid_charge_required,
         cheap_grid_preserve_target_soc=cheap_grid_preserve_target_soc,
+        morning_target_soc=cheap_grid_preserve_target_soc,
         cheap_grid_mode=cheap_grid_mode,
         cheap_grid_reason=cheap_grid_reason,
         ev_grid_mode_required=ev_grid_mode_required,

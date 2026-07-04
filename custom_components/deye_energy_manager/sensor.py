@@ -35,6 +35,7 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="soc_source", name="SOC source", value_fn=lambda d: d.soc_source),
     DeyeSensorDescription(key="soc_age_minutes", name="SOC age minutes", value_fn=lambda d: d.soc_age_minutes),
     DeyeSensorDescription(key="grid_charge_target_soc", name="Grid charge target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.grid_charge_target_soc),
+    DeyeSensorDescription(key="morning_target_soc", name="Morning target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.morning_target_soc),
     DeyeSensorDescription(key="cheap_grid_preserve_target_soc", name="Cheap grid preserve target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cheap_grid_preserve_target_soc),
     DeyeSensorDescription(key="cheap_grid_mode", name="Cheap grid mode", value_fn=lambda d: d.cheap_grid_mode),
     DeyeSensorDescription(key="cheap_grid_reason", name="Cheap grid reason", value_fn=lambda d: d.cheap_grid_reason),

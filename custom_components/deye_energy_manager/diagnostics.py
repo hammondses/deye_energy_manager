@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.5.6",
+        "version": "0.5.7",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -53,6 +53,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "cheap_grid": {
             "mode": decision.cheap_grid_mode if decision else None,
             "preserve_required": decision.cheap_grid_preserve_required if decision else None,
+            "topup_required": decision.cheap_grid_topup_required if decision else None,
+            "morning_target_soc": decision.morning_target_soc if decision else None,
             "preserve_target_soc": decision.cheap_grid_preserve_target_soc if decision else None,
             "grid_charge_required": decision.grid_charge_required if decision else None,
             "grid_charge_target_soc": decision.grid_charge_target_soc if decision else None,

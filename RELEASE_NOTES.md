@@ -1,5 +1,16 @@
 # Release Notes
 
+## v0.5.7
+
+- Change cheap-grid policy to calculate a 7am morning target SOC instead of using a generic high overnight charge target.
+- Prefer reserve-only preserve mode so overnight house load uses cheap grid directly instead of charging and later discharging the battery.
+- Add `morning_target_soc` and `cheap_grid_topup_required` diagnostics.
+- Use `top_up_to_morning_target` mode for modest cheap-grid charging only until the morning bridge target is reached.
+- Reserve `heavy_grid_charge` mode for dreadful/brutal forecasts or conservative strategy.
+- Lower default cheap-grid preserve SOC from 50% to 30%.
+- Apply morning preserve target to current and upcoming cheap-period Deye programme reserves.
+- Add regression tests for medium/good/dreadful forecast targets, preserve-at-target behavior, EV bypass coexistence, and 7am exit.
+
 ## v0.5.6
 
 - Split cheap-grid reserve preservation from active grid charging.

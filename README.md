@@ -21,7 +21,7 @@ HACS release notes:
 
 - Add this repository as category `Integration`, not `Dashboard`.
 - The repository uses normal HACS integration layout: `custom_components/deye_energy_manager/` plus root `hacs.json`.
-- Versioned updates are published as GitHub releases such as `v0.5.6`; HACS uses the latest release tag as the remote version.
+- Versioned updates are published as GitHub releases such as `v0.5.7`; HACS uses the latest release tag as the remote version.
 - If GitHub shows a newer release but HACS does not offer it, open the repository in HACS and use the 3-dot menu -> `Update information`, then `Redownload`.
 
 ## Control Gates
@@ -40,10 +40,13 @@ Leave these off until advisory sensors match the current automations.
 
 ## Cheap Grid
 
-Cheap grid is split into two separate policies:
+Cheap grid is split into three separate policies:
 
 - Preserve battery: raise the active Deye programme capacity/reserve and leave the charge source as `No Grid or Gen`, so the inverter stops draining below the reserve and the house uses grid during 21:00-07:00.
-- Charge battery: raise the active programme capacity/reserve and set the active programme charge source to `Allow Grid`.
+- Top up to morning target: if SOC is below the 7am bridge target, set the active programme charge source to `Allow Grid` only until that target is reached.
+- Heavy grid charge: charge higher, normally 50-80%, only for very poor forecasts or conservative strategy.
+
+The controller prefers `grid -> house` overnight over `grid -> battery -> house`. Normal cheap-grid behaviour is reserve preservation or a small top-up, not charging the battery to a high SOC.
 
 Native controls:
 
@@ -56,12 +59,14 @@ Native controls:
 Diagnostics:
 
 - `binary_sensor.deye_energy_manager_cheap_grid_preserve_required`
+- `binary_sensor.deye_energy_manager_cheap_grid_topup_required`
+- `sensor.deye_energy_manager_morning_target_soc`
 - `sensor.deye_energy_manager_cheap_grid_preserve_target_soc`
 - `sensor.deye_energy_manager_cheap_grid_mode`
 - `sensor.deye_energy_manager_cheap_grid_reason`
 - `binary_sensor.deye_energy_manager_grid_charge_required`
 
-`grid_charge_required` means active battery charging. `cheap_grid_preserve_required` means reserve-only battery preservation.
+`grid_charge_required` means active battery charging. `cheap_grid_preserve_required` means reserve-only battery preservation. `cheap_grid_mode` is one of `off`, `preserve`, `top_up_to_morning_target`, `heavy_grid_charge`, or `disabled`.
 
 Options are split into sections in the integration UI:
 

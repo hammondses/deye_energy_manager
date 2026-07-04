@@ -102,7 +102,7 @@ def test_heat_shed_rules() -> None:
 def test_grid_charge_rules() -> None:
     settings = EnergyManagerSettings(grid_charge_control_enabled=True, cheap_grid_charge_enabled=True)
     assert decide(
-        base_inputs(now=dt(4), forecast_tomorrow_kwh=12, battery_soc=50, ev_latch_on=False),
+        base_inputs(now=dt(4), forecast_tomorrow_kwh=12, battery_soc=35, ev_latch_on=False),
         settings,
     ).grid_charge_required
     assert not decide(
@@ -117,7 +117,7 @@ def test_cheap_grid_preserve_is_separate_from_grid_charge() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,
         cheap_grid_charge_enabled=False,
-        cheap_grid_preserve_soc=55,
+        cheap_grid_preserve_soc=30,
         grid_charge_control_enabled=False,
     )
 
@@ -129,19 +129,19 @@ def test_cheap_grid_preserve_is_separate_from_grid_charge() -> None:
     assert decision.tariff_window == "cheap_grid"
     assert decision.active_slot == "Prog6"
     assert decision.cheap_grid_preserve_required
-    assert decision.cheap_grid_preserve_target_soc == 55
+    assert 30 <= decision.morning_target_soc <= 35
     assert decision.cheap_grid_mode == "preserve"
     assert not decision.grid_charge_required
-    assert decision.active_reserve_target_soc >= 55
-    assert "cheap_grid_preserve_required" in decision.cheap_grid_reason
+    assert decision.active_reserve_target_soc >= decision.morning_target_soc
+    assert "using grid for house load" in decision.cheap_grid_reason
 
 
-def test_cheap_grid_charge_uses_charge_target_and_cap() -> None:
+def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,
         cheap_grid_charge_enabled=True,
         grid_charge_control_enabled=True,
-        cheap_grid_preserve_soc=50,
+        cheap_grid_preserve_soc=30,
         cheap_grid_charge_target_soc=60,
         max_grid_charge_target_soc=80,
     )
@@ -149,27 +149,79 @@ def test_cheap_grid_charge_uses_charge_target_and_cap() -> None:
     decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=28), settings)
 
     assert decision.cheap_grid_preserve_required
+    assert decision.cheap_grid_topup_required
     assert decision.grid_charge_required
-    assert decision.cheap_grid_mode == "charge"
-    assert decision.grid_charge_target_soc == 60
-    assert decision.active_reserve_target_soc >= 60
-    assert decision.expected_action == "cheap_grid_charge"
+    assert decision.cheap_grid_mode == "top_up_to_morning_target"
+    assert 30 <= decision.morning_target_soc <= 35
+    assert decision.grid_charge_target_soc == decision.morning_target_soc
+    assert decision.grid_charge_target_soc < 60
+    assert decision.expected_action == "cheap_grid_top_up_to_morning_target"
 
 
-def test_cheap_grid_high_soc_good_forecast_does_not_charge_or_preserve() -> None:
+def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,
         cheap_grid_charge_enabled=True,
         grid_charge_control_enabled=True,
-        cheap_grid_preserve_soc=50,
+        cheap_grid_preserve_soc=30,
         cheap_grid_charge_target_soc=60,
     )
 
-    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=35, battery_soc=75), settings)
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=35), settings)
 
+    assert decision.cheap_grid_preserve_required
+    assert not decision.grid_charge_required
+    assert decision.cheap_grid_mode == "preserve"
+    assert decision.cheap_grid_preserve_target_soc == decision.morning_target_soc
+
+
+def test_cheap_grid_dreadful_forecast_allows_heavy_charge() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+        cheap_grid_charge_target_soc=60,
+        max_grid_charge_target_soc=80,
+    )
+
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=5, battery_soc=23), settings)
+
+    assert decision.grid_charge_required
+    assert decision.cheap_grid_mode == "heavy_grid_charge"
+    assert 50 <= decision.grid_charge_target_soc <= 60
+
+
+def test_cheap_grid_excellent_forecast_uses_lower_morning_target() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+        cheap_grid_charge_target_soc=60,
+    )
+
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=35, battery_soc=23), settings)
+
+    assert decision.cheap_grid_mode == "top_up_to_morning_target"
+    assert 25 <= decision.morning_target_soc <= 30
+    assert decision.grid_charge_target_soc < 60
+
+
+def test_cheap_grid_exits_at_7am() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+    )
+
+    decision = decide(base_inputs(now=dt(7), forecast_tomorrow_kwh=5, battery_soc=23), settings)
+
+    assert decision.tariff_window != "cheap_grid"
+    assert decision.cheap_grid_mode == "off"
     assert not decision.cheap_grid_preserve_required
     assert not decision.grid_charge_required
-    assert decision.cheap_grid_mode == "off"
 
 
 def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
@@ -179,7 +231,7 @@ def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
         grid_charge_control_enabled=True,
         ev_control_enabled=True,
         ev_grid_bypass_enabled=True,
-        cheap_grid_preserve_soc=55,
+        cheap_grid_preserve_soc=30,
         cheap_grid_charge_target_soc=60,
     )
 
@@ -192,7 +244,7 @@ def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
     assert decision.cheap_grid_mode == "ev_bypass"
     assert decision.cheap_grid_preserve_required
     assert not decision.grid_charge_required
-    assert decision.active_reserve_target_soc >= 55
+    assert decision.active_reserve_target_soc >= decision.morning_target_soc
 
 
 def test_ev_start_and_stop_rules() -> None:

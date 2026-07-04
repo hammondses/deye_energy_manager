@@ -328,7 +328,9 @@ class EnergyManagerDecision:
     projected_soc_08: float | None
     grid_charge_required: bool
     cheap_grid_preserve_required: bool
+    cheap_grid_topup_required: bool
     cheap_grid_preserve_target_soc: float
+    morning_target_soc: float
     cheap_grid_mode: str
     cheap_grid_reason: str
     ev_grid_mode_required: bool
