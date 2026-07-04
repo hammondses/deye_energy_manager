@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.5.11
+
+- Persist thermal runtime state across Home Assistant restarts, including manual override cooldowns, pending confirmation windows, lease state, and last add/shed/rotation timestamps.
+- Apply paid-grid import grace before paid-grid avoidance decisions so short import spikes do not immediately alter reserve policy.
+- Add optional `home_occupancy` entity mapping for underfloor scheduled comfort; if it is not configured, schedule-only mode continues to work.
+- Gate force EV and thermal script buttons behind their matching control switches/actuation modes so manual buttons do not bypass the configured write path.
+- Add regression coverage for grace-filtered paid import and underfloor occupancy behavior.
+
 ## v0.5.10
 
 - Fix HA sensor metadata warnings by removing `energy` device class from forecast/budget estimate sensors that are measurements, not total meters.

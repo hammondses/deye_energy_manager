@@ -201,6 +201,7 @@ class EnergyManagerInputs:
     battery_power_w: float = 0.0
     essential_power_w: float = 0.0
     grid_power_w: float = 0.0
+    paid_grid_import_w: float | None = None
     base_load_estimate_w: float | None = None
     previous_essential_power_w: float | None = None
     forecast_today_kwh: float | None = None
@@ -211,6 +212,7 @@ class EnergyManagerInputs:
     pv_power_in_1_hour_w: float | None = None
     outdoor_temperature: float | None = None
     indoor_average_temperature: float | None = None
+    home_occupied: bool | None = None
     any_solar_owned_heat_load_on: bool = False
     heat_loads: list[HeatLoadState] = field(default_factory=list)
     heat_available: bool = False

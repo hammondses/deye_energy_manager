@@ -43,6 +43,15 @@ _LOGGER = logging.getLogger(__name__)
 
 UNAVAILABLE = {"unknown", "unavailable", None}
 SOC_CACHE_STORAGE_VERSION = 1
+THERMAL_RUNTIME_STORAGE_VERSION = 1
+THERMAL_RUNTIME_DATETIME_FIELDS = {
+    "lease_started_at",
+    "lease_until",
+    "pending_confirmation_until",
+    "manual_override_until",
+    "last_manager_action_at",
+    "last_external_change_at",
+}
 
 
 class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision]):
@@ -66,6 +75,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             SOC_CACHE_STORAGE_VERSION,
             f"{DOMAIN}_{entry.entry_id}_soc_cache",
         )
+        self._thermal_store: Store[dict[str, object]] = Store(
+            hass,
+            THERMAL_RUNTIME_STORAGE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_thermal_runtime",
+        )
         self._last_good_soc: float | None = None
         self._last_good_soc_updated: datetime | None = None
         self.ev_latch_on = False
@@ -79,6 +93,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._thermal_last_rotated_at: dict[str, datetime] = {}
         self._thermal_last_action: dict[str, tuple[str, str]] = {}
         self._thermal_leases: dict[str, dict[str, object]] = {}
+        self._paid_grid_import_since: datetime | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
         self.load_diagnostics: dict[str, object] = {}
         self._remove_listeners: list[Callable[[], None]] = []
@@ -125,6 +140,102 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "last_good_soc": self._last_good_soc,
             "last_good_updated": self._last_good_soc_updated.isoformat() if self._last_good_soc_updated else None,
         }
+
+    async def async_load_stored_runtime(self) -> None:
+        """Load persisted thermal runtime state before the first refresh."""
+
+        data = await self._thermal_store.async_load()
+        if not data:
+            return
+        self._heat_blocked_until = self._datetime_map(data.get("heat_blocked_until"))
+        self._thermal_last_added_at = self._datetime_map(data.get("thermal_last_added_at"))
+        self._thermal_last_shed_at = self._datetime_map(data.get("thermal_last_shed_at"))
+        self._thermal_last_rotated_at = self._datetime_map(data.get("thermal_last_rotated_at"))
+        raw_actions = data.get("thermal_last_action")
+        if isinstance(raw_actions, dict):
+            self._thermal_last_action = {
+                str(name): (str(value[0]), str(value[1]))
+                for name, value in raw_actions.items()
+                if isinstance(value, (list, tuple)) and len(value) >= 2
+            }
+        raw_leases = data.get("thermal_leases")
+        if isinstance(raw_leases, dict):
+            self._thermal_leases = {
+                str(name): self._restore_lease(value)
+                for name, value in raw_leases.items()
+                if isinstance(value, dict)
+            }
+
+    def _datetime_map(self, raw: object) -> dict[str, datetime]:
+        """Return a string to datetime map from stored JSON data."""
+
+        if not isinstance(raw, dict):
+            return {}
+        restored: dict[str, datetime] = {}
+        for key, value in raw.items():
+            parsed = self._parse_stored_datetime(value)
+            if parsed is not None:
+                restored[str(key)] = parsed
+        return restored
+
+    def _restore_lease(self, raw: dict[object, object]) -> dict[str, object]:
+        """Return a restored lease dict with datetime fields parsed."""
+
+        lease: dict[str, object] = {}
+        for key, value in raw.items():
+            field = str(key)
+            if field in THERMAL_RUNTIME_DATETIME_FIELDS:
+                parsed = self._parse_stored_datetime(value)
+                if parsed is not None:
+                    lease[field] = parsed
+                elif value is None:
+                    lease[field] = None
+                continue
+            lease[field] = value
+        return lease
+
+    def _parse_stored_datetime(self, value: object) -> datetime | None:
+        """Parse a stored ISO datetime value."""
+
+        if not value:
+            return None
+        parsed = dt_util.parse_datetime(str(value))
+        if parsed is None:
+            return None
+        return dt_util.as_local(parsed) if parsed.tzinfo is None else parsed
+
+    def _runtime_payload(self) -> dict[str, object]:
+        """Return serializable thermal runtime data."""
+
+        return {
+            "heat_blocked_until": self._serialize_datetime_map(self._heat_blocked_until),
+            "thermal_last_added_at": self._serialize_datetime_map(self._thermal_last_added_at),
+            "thermal_last_shed_at": self._serialize_datetime_map(self._thermal_last_shed_at),
+            "thermal_last_rotated_at": self._serialize_datetime_map(self._thermal_last_rotated_at),
+            "thermal_last_action": {name: [action, reason] for name, (action, reason) in self._thermal_last_action.items()},
+            "thermal_leases": {name: self._serialize_lease(lease) for name, lease in self._thermal_leases.items()},
+        }
+
+    def _serialize_datetime_map(self, values: dict[str, datetime]) -> dict[str, str]:
+        """Serialize a string to datetime map."""
+
+        return {name: value.isoformat() for name, value in values.items()}
+
+    def _serialize_lease(self, lease: dict[str, object]) -> dict[str, object]:
+        """Return a JSON-safe lease mapping."""
+
+        serialized: dict[str, object] = {}
+        for key, value in lease.items():
+            if isinstance(value, datetime):
+                serialized[key] = value.isoformat()
+            else:
+                serialized[key] = value
+        return serialized
+
+    def _schedule_runtime_save(self) -> None:
+        """Persist thermal runtime state after lease/cooldown changes."""
+
+        self._thermal_store.async_delay_save(self._runtime_payload, 1)
 
     @property
     def entity_map(self) -> dict[str, str]:
@@ -488,6 +599,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             blocked_until = self._heat_blocked_until.get(name)
             if blocked_until is not None and blocked_until <= now:
                 self._heat_blocked_until.pop(name, None)
+                self._schedule_runtime_save()
                 blocked_until = None
             lease = self._thermal_leases.get(name, {})
             pending_until = lease.get("pending_confirmation_until")
@@ -495,6 +607,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if isinstance(manual_until, datetime) and manual_until <= now:
                 manual_until = None
                 lease["manual_override_until"] = None
+                self._schedule_runtime_save()
             desired_hvac = lease.get("desired_hvac_mode")
             desired_temp = lease.get("desired_temperature")
             desired_fan = lease.get("desired_fan_mode")
@@ -511,6 +624,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 lease["manual_override_until"] = now + timedelta(minutes=self.settings.manual_override_cooldown_min)
                 lease["last_external_change_at"] = now
                 manual_until = lease["manual_override_until"]
+                self._schedule_runtime_save()
             owner = str(lease.get("owner") or ("deye_energy_manager" if ownership_state is not None and ownership_state.state == "on" else "none"))
             lease_reason = str(lease.get("lease_reason") or ("solar_soak" if ownership_state is not None and ownership_state.state == "on" else "none"))
             states.append(
@@ -573,12 +687,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def _block_heat_load(self, name: str, reason: str) -> None:
         self._heat_blocked_until[name] = dt_util.now() + timedelta(minutes=self.settings.manual_override_cooldown_min)
         self.last_control_action = f"blocked heat load {name}: {reason}"
+        self._schedule_runtime_save()
 
     def _calculate(self) -> EnergyManagerDecision:
         now = dt_util.now()
         essential_power = self._state_float("essential_power") or 0.0
         ev_power = self._state_float("ev_power")
         settings = self.settings
+        grid_power_w = self._state_float("grid_ct_power") or 0.0
+        paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, settings)
         resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
         if ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w:
@@ -595,7 +712,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             last_good_soc_updated=last_good_updated,
             battery_power_w=self._state_float("battery_power") or 0.0,
             essential_power_w=essential_power,
-            grid_power_w=self._state_float("grid_ct_power") or 0.0,
+            grid_power_w=grid_power_w,
+            paid_grid_import_w=paid_grid_import_w,
             base_load_estimate_w=base_load_estimate,
             previous_essential_power_w=self.previous_essential_power_w,
             forecast_today_kwh=self._state_float("forecast_today"),
@@ -606,6 +724,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             pv_power_in_1_hour_w=self._state_float("pv_power_in_1_hour"),
             outdoor_temperature=self._state_float("outdoor_temperature"),
             indoor_average_temperature=self._state_float("indoor_average_temperature"),
+            home_occupied=self._home_occupied(),
             any_solar_owned_heat_load_on=self._any_owned_heat_on(),
             heat_loads=self._heat_load_states(),
             heat_available=bool(self.heat_loads),
@@ -677,6 +796,38 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if state is None or state.state in UNAVAILABLE:
             return None
         return str(state.state)
+
+    def _home_occupied(self) -> bool | None:
+        """Return configured home occupancy, or None when no occupancy source exists."""
+
+        entity_id = self.entity_map.get("home_occupancy")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return None
+        value = str(state.state).lower()
+        if value in {"home", "on", "occupied", "true"}:
+            return True
+        if value in {"not_home", "off", "unoccupied", "false", "away"}:
+            return False
+        return None
+
+    def _paid_grid_import_after_grace(
+        self,
+        now: datetime,
+        raw_grid_power_w: float,
+        settings: EnergyManagerSettings,
+    ) -> float:
+        """Return paid import only after the configured grace period has elapsed."""
+
+        import_w = max(raw_grid_power_w, 0.0)
+        if import_w < settings.paid_grid_import_threshold_w:
+            self._paid_grid_import_since = None
+            return 0.0
+        self._paid_grid_import_since = self._paid_grid_import_since or now
+        grace_seconds = max(settings.paid_grid_import_grace_minutes, 0.0) * 60.0
+        if (now - self._paid_grid_import_since).total_seconds() < grace_seconds:
+            return 0.0
+        return import_w
 
     async def async_set_option(self, key: str, value: object) -> None:
         """Update one config option."""
@@ -1024,6 +1175,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             fan_detail = "" if fan_mode is None else f", fan {fan_mode}" if fan_blocked_reason is None else f", fan skipped: {fan_blocked_reason}"
             self._thermal_last_action[name] = ("add", f"direct thermal {lease_reason} {hvac_mode} {target:.1f}{fan_detail}")
             self.last_control_action = f"direct added thermal load {load.get('name', climate)} at {target:.1f}C{fan_detail}"
+            self._schedule_runtime_save()
             return
 
     async def _direct_shed_one_heat_load(self, preferred_name: str | None = None, nonessential_only: bool = False) -> None:
@@ -1057,6 +1209,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 "pending_confirmation_until": dt_util.now() + timedelta(minutes=5),
             }
             self.last_control_action = f"direct normalised thermal load {load.get('name', climate)}: {action_reason}"
+            self._schedule_runtime_save()
             return
 
     async def _direct_rotate_heat_load(self, decision: EnergyManagerDecision) -> None:
@@ -1068,6 +1221,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if decision.thermal_load_to_add:
             self._thermal_last_rotated_at[decision.thermal_load_to_add] = now
         self.last_control_action = f"direct rotated thermal load {decision.thermal_load_to_shed} -> {decision.thermal_load_to_add}"
+        self._schedule_runtime_save()
 
     async def _clear_heat_ownership(self, load: dict[str, object], reason: str) -> None:
         ownership = str(load.get("ownership_entity", ""))
@@ -1098,6 +1252,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 "pending_confirmation_until": dt_util.now() + timedelta(minutes=5),
             }
         self.last_control_action = f"direct emergency shed all heat loads: {reason}"
+        self._schedule_runtime_save()
 
     async def _normalise_or_turn_off_load(self, load: dict[str, object]) -> None:
         climate = str(load.get("climate_entity", ""))
@@ -1136,4 +1291,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                     blocking=False,
                 )
                 self.last_control_action = f"direct tapered bedroom heat {load.get('name', climate)}"
+                name = str(load.get("name", climate))
+                now = dt_util.now()
+                self._thermal_last_action[name] = ("taper", self.last_control_action)
+                self._thermal_leases.setdefault(name, {})["last_manager_action_at"] = now
+                self._thermal_leases.setdefault(name, {})["pending_confirmation_until"] = now + timedelta(minutes=5)
+                self._schedule_runtime_save()
                 return

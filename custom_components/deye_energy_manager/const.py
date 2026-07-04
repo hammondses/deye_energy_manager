@@ -55,6 +55,7 @@ DEFAULT_ENTITY_MAP = {
     "ev_power": "",
     "outdoor_temperature": "",
     "indoor_average_temperature": "",
+    "home_occupancy": "",
 }
 
 DEFAULT_HEAT_LOADS = [

@@ -162,7 +162,7 @@ def paid_grid_avoidance_state(
 
     floor = paid_time_floor_soc(inputs.now, settings)
     arrived, arrived_reason = solar_arrived(inputs, settings, battery_charge_w)
-    paid_import_w = max(inputs.grid_power_w, 0.0)
+    paid_import_w = max(inputs.paid_grid_import_w if inputs.paid_grid_import_w is not None else inputs.grid_power_w, 0.0)
     cheap_window = time_between(inputs.now, "21:00", "07:00")
     forecast_drain_blocked = False
     required = False
@@ -382,6 +382,8 @@ def underfloor_comfort_decision(
         return False, "unavailable", "underfloor_blocked: floor temperature unavailable", None, window
     if paid_grid_avoidance_required and not settings.underfloor_allow_paid_grid:
         return False, "blocked", "underfloor_blocked: paid grid avoidance active", None, window
+    if settings.underfloor_require_home and inputs.home_occupied is False:
+        return False, "blocked", "underfloor_blocked: nobody home", None, window
     if inputs.battery_soc is None or inputs.battery_soc < settings.underfloor_min_soc:
         return False, "blocked", f"underfloor_blocked: SOC {inputs.battery_soc if inputs.battery_soc is not None else 'unavailable'} < {settings.underfloor_min_soc:.0f}%", None, window
     if max(inputs.grid_power_w, 0.0) > settings.underfloor_max_grid_import_w:
@@ -1701,7 +1703,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         paid_time_floor_soc=paid_floor,
         active_reserve_target_soc=active_reserve_target_soc,
         active_reserve_current_soc=reserve_soc,
-        paid_grid_import_w=max(inputs.grid_power_w, 0.0),
+        paid_grid_import_w=max(inputs.paid_grid_import_w if inputs.paid_grid_import_w is not None else inputs.grid_power_w, 0.0),
         solar_arrived=solar_has_arrived,
         solar_arrived_reason=solar_arrived_reason,
         forecast_drain_blocked=forecast_drain_blocked,

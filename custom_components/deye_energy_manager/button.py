@@ -39,23 +39,55 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
         if self._key == "clear_ev_latch":
             await self.coordinator.async_clear_ev_latch()
         elif self._key == "force_ev_grid_bypass_start":
+            if not self._ev_force_allowed():
+                await self._blocked("force EV bypass blocked: EV control/grid bypass disabled")
+                return
             await self.coordinator.async_force_ev_grid_bypass(True)
         elif self._key == "force_ev_grid_bypass_restore":
+            if not self.coordinator.settings.ev_control_enabled:
+                await self._blocked("force EV restore blocked: EV control disabled")
+                return
             await self.coordinator.async_force_ev_grid_bypass(False)
         elif self._key == "apply_plan_now":
             await self.coordinator.async_apply_decision()
         elif self._key == "restore_deye_normal":
             await self.coordinator.async_restore_deye_normal()
         elif self._key == "force_shed_one_heat_load":
+            if not self._thermal_script_force_allowed():
+                await self._blocked("force thermal script blocked: thermal script mode not enabled")
+                return
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
         elif self._key == "force_add_one_heat_load":
+            if not self._thermal_script_force_allowed():
+                await self._blocked("force thermal script blocked: thermal script mode not enabled")
+                return
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
         elif self._key == "force_test_one_pv_load":
+            if not (self.coordinator.settings.pv_load_test_control_enabled and self._thermal_script_force_allowed()):
+                await self._blocked("force PV load test blocked: PV load test/script mode not enabled")
+                return
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
         elif self._key == "force_rotate_heat_load":
+            if not self._thermal_script_force_allowed():
+                await self._blocked("force thermal script blocked: thermal script mode not enabled")
+                return
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_shed_one_heat_load", {}, blocking=False)
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_add_one_heat_load", {}, blocking=False)
         elif self._key == "emergency_shed_all_heat_loads":
+            if not self._thermal_script_force_allowed():
+                await self._blocked("force thermal emergency script blocked: thermal script mode not enabled")
+                return
             await self.coordinator.hass.services.async_call("script", "deye_energy_manager_emergency_shed_all_heat_loads", {}, blocking=False)
         else:
             await self.coordinator.async_request_refresh()
+
+    def _ev_force_allowed(self) -> bool:
+        return self.coordinator.settings.ev_control_enabled and self.coordinator.settings.ev_grid_bypass_enabled
+
+    def _thermal_script_force_allowed(self) -> bool:
+        settings = self.coordinator.settings
+        return settings.thermal_control_enabled and settings.thermal_actuation_mode == "scripts"
+
+    async def _blocked(self, reason: str) -> None:
+        self.coordinator.last_control_action = reason
+        await self.coordinator.async_request_refresh()

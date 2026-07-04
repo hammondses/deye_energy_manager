@@ -1471,6 +1471,42 @@ def test_paid_grid_avoidance_lowers_active_reserve_to_use_battery() -> None:
     assert "lowering active reserve" in decision.paid_time_reserve_reason
 
 
+def test_paid_grid_avoidance_uses_grace_filtered_import() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(7, 30),
+            battery_soc=35,
+            battery_power_w=300,
+            grid_power_w=800,
+            paid_grid_import_w=0,
+            pv_power_now_w=100,
+            forecast_tomorrow_kwh=35,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert not decision.paid_grid_avoidance_required
+    assert decision.paid_grid_import_w == 0
+
+
+def test_paid_grid_avoidance_triggers_after_import_grace() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(7, 30),
+            battery_soc=35,
+            battery_power_w=300,
+            grid_power_w=800,
+            paid_grid_import_w=800,
+            pv_power_now_w=100,
+            forecast_tomorrow_kwh=35,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert decision.paid_grid_avoidance_required
+    assert decision.paid_grid_import_w == 800
+
+
 def test_paid_grid_avoidance_does_not_preserve_when_soc_near_floor() -> None:
     decision = decide(
         base_inputs(
@@ -1783,6 +1819,59 @@ def test_underfloor_paid_grid_avoidance_blocks_unless_allowed() -> None:
     assert not blocked.underfloor_comfort_allowed
     assert "paid grid avoidance active" in blocked.underfloor_reason
     assert allowed.underfloor_comfort_allowed
+
+
+def test_underfloor_require_home_blocks_when_occupancy_is_away() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=60,
+            grid_power_w=0,
+            home_occupied=False,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, underfloor_require_home=True),
+    )
+
+    assert not decision.underfloor_comfort_allowed
+    assert "nobody home" in decision.underfloor_reason
+
+
+def test_underfloor_require_home_allows_schedule_when_occupancy_unconfigured() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(18),
+            battery_soc=60,
+            grid_power_w=0,
+            home_occupied=None,
+            forecast_remaining_today_kwh=20,
+            heat_loads=[
+                HeatLoadState(
+                    name="Bathroom underfloor",
+                    priority=1,
+                    current_temp=8,
+                    load_type="floor_underfloor",
+                    comfort_min_temp=9,
+                    comfort_target_temp=12,
+                    allow_solar_soak=False,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True, underfloor_require_home=True),
+    )
+
+    assert decision.underfloor_comfort_allowed
 
 
 def test_underfloor_soc_floor_blocks_schedule() -> None:
