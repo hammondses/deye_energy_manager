@@ -186,6 +186,25 @@ def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
     assert decision.cheap_grid_preserve_target_soc == decision.morning_target_soc
 
 
+def test_cheap_grid_budget_uses_morning_target_not_daily_full_target() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(22, 40),
+            battery_soc=35,
+            forecast_remaining_today_kwh=0,
+            forecast_tomorrow_kwh=23,
+        ),
+        EnergyManagerSettings(daily_battery_target_soc=100, battery_capacity_kwh=30),
+    )
+
+    assert decision.energy_budget_target_name == "7am target"
+    assert 30 <= decision.energy_budget_target_soc <= 35
+    assert decision.battery_kwh_needed_to_target is not None
+    assert decision.battery_kwh_needed_to_target < 0.2
+    assert "to 7am target" in decision.energy_budget_reason
+    assert "to 100%" not in decision.energy_budget_reason
+
+
 def test_cheap_grid_dreadful_forecast_allows_heavy_charge() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,

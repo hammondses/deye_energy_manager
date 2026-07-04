@@ -300,6 +300,8 @@ class EnergyManagerDecision:
     thermal_target_hvac_mode: str | None
     thermal_lease_reason: str
     daily_battery_target_soc: float
+    energy_budget_target_soc: float
+    energy_budget_target_name: str
     remaining_solar_budget_kwh: float
     battery_kwh_needed_to_target: float | None
     expected_house_load_until_solar_end_kwh: float

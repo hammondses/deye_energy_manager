@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.5.8",
+        "version": "0.5.9",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -41,6 +41,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         },
         "energy_budget": {
             "daily_battery_target_soc": decision.daily_battery_target_soc if decision else None,
+            "energy_budget_target_soc": decision.energy_budget_target_soc if decision else None,
+            "energy_budget_target_name": decision.energy_budget_target_name if decision else None,
             "remaining_solar_budget_kwh": decision.remaining_solar_budget_kwh if decision else None,
             "battery_kwh_needed_to_target": decision.battery_kwh_needed_to_target if decision else None,
             "expected_house_load_until_solar_end_kwh": decision.expected_house_load_until_solar_end_kwh if decision else None,

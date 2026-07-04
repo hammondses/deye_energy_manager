@@ -21,7 +21,7 @@ HACS release notes:
 
 - Add this repository as category `Integration`, not `Dashboard`.
 - The repository uses normal HACS integration layout: `custom_components/deye_energy_manager/` plus root `hacs.json`.
-- Versioned updates are published as GitHub releases such as `v0.5.8`; HACS uses the latest release tag as the remote version.
+- Versioned updates are published as GitHub releases such as `v0.5.9`; HACS uses the latest release tag as the remote version.
 - If GitHub shows a newer release but HACS does not offer it, open the repository in HACS and use the 3-dot menu -> `Update information`, then `Redownload`.
 
 ## Control Gates

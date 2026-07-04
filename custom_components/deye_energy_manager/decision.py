@@ -185,6 +185,32 @@ def paid_grid_avoidance_state(
     return required, reason, floor, target, arrived, arrived_reason, forecast_drain_blocked
 
 
+def cheap_grid_morning_target_soc(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    tier: ForecastTier,
+) -> float:
+    """Return the 7am bridge target used for cheap-grid preserve/top-up."""
+
+    if tier.mode in {"excellent", "good"}:
+        forecast_target = 25.0
+    elif tier.mode == "medium":
+        forecast_target = 35.0
+    elif tier.mode == "poor":
+        forecast_target = 45.0
+    elif tier.mode == "dreadful":
+        forecast_target = 55.0
+    else:
+        forecast_target = 60.0
+
+    bridge_hours = 2.5
+    bridge_kwh = settings.base_load_estimate_w * bridge_hours / 1000.0 + min(settings.forecast_safety_buffer_kwh, 2.0)
+    bridge_target = settings.min_soc_floor + bridge_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
+    strategy_adjustment = {"aggressive": -5.0, "normal": 0.0, "conservative": 5.0}.get(settings.strategy, 0.0)
+    morning_target = max(settings.min_soc_floor, forecast_target, bridge_target, settings.cheap_grid_preserve_soc) + strategy_adjustment
+    return min(morning_target, settings.max_grid_charge_target_soc)
+
+
 def cheap_grid_state(
     inputs: EnergyManagerInputs,
     settings: EnergyManagerSettings,
@@ -206,22 +232,7 @@ def cheap_grid_state(
 
     soc = inputs.battery_soc
     forecast = inputs.forecast_tomorrow_kwh if inputs.forecast_tomorrow_kwh is not None else 0.0
-    if tier.mode in {"excellent", "good"}:
-        forecast_target = 25.0
-    elif tier.mode == "medium":
-        forecast_target = 35.0
-    elif tier.mode == "poor":
-        forecast_target = 45.0
-    elif tier.mode == "dreadful":
-        forecast_target = 55.0
-    else:
-        forecast_target = 60.0
-
-    bridge_hours = 2.5
-    bridge_kwh = settings.base_load_estimate_w * bridge_hours / 1000.0 + min(settings.forecast_safety_buffer_kwh, 2.0)
-    bridge_target = settings.min_soc_floor + bridge_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
-    strategy_adjustment = {"aggressive": -5.0, "normal": 0.0, "conservative": 5.0}.get(settings.strategy, 0.0)
-    morning_target = max(settings.min_soc_floor, forecast_target, bridge_target, settings.cheap_grid_preserve_soc) + strategy_adjustment
+    morning_target = cheap_grid_morning_target_soc(inputs, settings, tier)
     heavy_target = min(max(settings.cheap_grid_charge_target_soc, morning_target), settings.max_grid_charge_target_soc)
     heavy_required = (
         settings.cheap_grid_charge_enabled
@@ -233,7 +244,6 @@ def cheap_grid_state(
         )
         and not ev_grid_bypass_required
     )
-    morning_target = min(morning_target, settings.max_grid_charge_target_soc)
     topup_required = (
         settings.cheap_grid_charge_enabled
         and soc is not None
@@ -1028,12 +1038,17 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     base_load_w = inputs.base_load_estimate_w if inputs.base_load_estimate_w is not None else settings.base_load_estimate_w
     solar_hours_remaining = hours_until_solar_end(inputs.now)
     expected_house_load_kwh = base_load_w * solar_hours_remaining / 1000.0 + settings.house_load_forecast_buffer_kwh
+    energy_budget_target_soc = settings.daily_battery_target_soc
+    energy_budget_target_name = "daily target"
+    if cheap_window:
+        energy_budget_target_soc = cheap_grid_morning_target_soc(inputs, settings, tier)
+        energy_budget_target_name = "7am target"
     battery_kwh_needed = None
     if soc_known:
         efficiency = max(min(settings.battery_charge_efficiency, 1.0), 0.5)
         battery_kwh_needed = (
             settings.battery_capacity_kwh
-            * max(settings.daily_battery_target_soc - (soc or 0.0), 0.0)
+            * max(energy_budget_target_soc - (soc or 0.0), 0.0)
             / 100.0
             / efficiency
         )
@@ -1064,7 +1079,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     else:
         energy_budget_reason = (
             f"budget {discretionary_budget_kwh:.1f}kWh = forecast {remaining_forecast_kwh:.1f}kWh "
-            f"- battery need {battery_kwh_needed:.1f}kWh to {settings.daily_battery_target_soc:.0f}% "
+            f"- battery need {battery_kwh_needed:.1f}kWh to {energy_budget_target_name} {energy_budget_target_soc:.0f}% "
             f"- house load {expected_house_load_kwh:.1f}kWh - buffer {safety_buffer_kwh:.1f}kWh "
             f"- committed flexible {committed_flexible_kwh:.1f}kWh"
         )
@@ -1098,7 +1113,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_charge_w < settings.heat_add_min_charge_w
     )
 
-    battery_priority_satisfied = battery_target_reachable or (soc_known and soc >= settings.daily_battery_target_soc)
+    battery_priority_satisfied = battery_target_reachable or (soc_known and soc >= energy_budget_target_soc)
     curtailment_likely = (
         (soc_known and soc >= settings.full_soak_min_soc)
         or (
@@ -1668,6 +1683,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_target_hvac_mode=target_hvac_mode,
         thermal_lease_reason=lease_reason,
         daily_battery_target_soc=settings.daily_battery_target_soc,
+        energy_budget_target_soc=energy_budget_target_soc,
+        energy_budget_target_name=energy_budget_target_name,
         remaining_solar_budget_kwh=remaining_forecast_kwh,
         battery_kwh_needed_to_target=battery_kwh_needed,
         expected_house_load_until_solar_end_kwh=expected_house_load_kwh,

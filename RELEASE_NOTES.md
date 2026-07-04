@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.9
+
+- Make the rolling energy budget target phase-aware: cheap-grid night now budgets to the 7am morning target instead of the daily/full battery target.
+- Add `energy_budget_target_soc` and `energy_budget_target_name` sensors so dashboards can show the current operational target without guessing.
+- Keep daytime solar planning tied to the daily battery target while avoiding misleading overnight `need to 100%` budget reasons.
+- Add regression coverage for cheap-grid night SOC near the morning target with daily target still set to 100%.
+
 ## v0.5.8
 
 - Fix default cheap-grid preserve SOC mismatch so all settings paths use 30%, not 50%.
