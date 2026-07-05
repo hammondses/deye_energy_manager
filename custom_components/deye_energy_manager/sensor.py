@@ -25,8 +25,16 @@ class DeyeSensorDescription(SensorEntityDescription):
 
 SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="active_plan", name="Active plan", value_fn=lambda d: ",".join(d.proposed_actions) or "advisory_only"),
+    DeyeSensorDescription(key="active_policy", name="Active policy", value_fn=lambda d: d.active_policy),
     DeyeSensorDescription(key="forecast_mode", name="Forecast mode", value_fn=lambda d: d.forecast_mode),
     DeyeSensorDescription(key="current_slot", name="Current slot", value_fn=lambda d: d.active_slot),
+    DeyeSensorDescription(key="actual_active_prog", name="Actual active prog", value_fn=lambda d: d.actual_active_prog),
+    DeyeSensorDescription(key="actual_active_prog_start", name="Actual active prog start", value_fn=lambda d: d.actual_active_prog_start),
+    DeyeSensorDescription(key="actual_active_prog_end", name="Actual active prog end", value_fn=lambda d: d.actual_active_prog_end),
+    DeyeSensorDescription(key="actual_program_ranges", name="Actual program ranges", value_fn=lambda d: d.actual_active_prog),
+    DeyeSensorDescription(key="disabled_programs", name="Disabled programs", value_fn=lambda d: ",".join(d.disabled_programs) or "none"),
+    DeyeSensorDescription(key="logical_tariff_window", name="Logical tariff window", value_fn=lambda d: d.logical_tariff_window),
+    DeyeSensorDescription(key="program_schedule_warning", name="Program schedule warning", value_fn=lambda d: d.program_schedule_warning),
     DeyeSensorDescription(key="current_tariff_window", name="Current tariff window", value_fn=lambda d: d.tariff_window),
     DeyeSensorDescription(key="today_forecast_kwh", name="Today forecast", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.forecast_today_kwh),
     DeyeSensorDescription(key="remaining_forecast_kwh", name="Remaining forecast", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.forecast_remaining_today_kwh),
@@ -40,6 +48,7 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="morning_start_soc_target", name="Morning start SOC target", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.morning_start_soc_target),
     DeyeSensorDescription(key="evening_peak_soc_target", name="Evening peak SOC target", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.evening_peak_soc_target),
     DeyeSensorDescription(key="projected_4pm_soc", name="Projected 4pm SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.projected_4pm_soc),
+    DeyeSensorDescription(key="projected_16_00_soc", name="Projected 16:00 SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.projected_4pm_soc),
     DeyeSensorDescription(key="required_4pm_energy_kwh", name="Required 4pm energy", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.required_4pm_energy_kwh),
     DeyeSensorDescription(key="night_grid_topup_kwh_required", name="Night grid topup kWh required", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.night_grid_topup_kwh_required),
     DeyeSensorDescription(key="energy_plan_reason", name="Energy plan reason", value_fn=lambda d: d.energy_plan_reason),
@@ -47,10 +56,12 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="applied_deye_plan", name="Applied Deye plan", value_fn=lambda d: d.expected_action),
     DeyeSensorDescription(key="deye_write_reason", name="Deye write reason", value_fn=lambda d: d.reason),
     DeyeSensorDescription(key="deye_write_suppressed_reason", name="Deye write suppressed reason", value_fn=lambda d: d.reason),
+    DeyeSensorDescription(key="deye_plan_conflict_reason", name="Deye plan conflict reason", value_fn=lambda d: d.deye_plan_conflict_reason),
     DeyeSensorDescription(key="deye_write_count_last_hour", name="Deye write count last hour", value_fn=lambda d: 0),
     DeyeSensorDescription(key="cheap_grid_preserve_target_soc", name="Cheap grid preserve target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cheap_grid_preserve_target_soc),
     DeyeSensorDescription(key="cheap_grid_mode", name="Cheap grid mode", value_fn=lambda d: d.cheap_grid_mode),
     DeyeSensorDescription(key="cheap_grid_reason", name="Cheap grid reason", value_fn=lambda d: d.cheap_grid_reason),
+    DeyeSensorDescription(key="post_cheap_restore_reason", name="Post cheap restore reason", value_fn=lambda d: d.post_cheap_restore_reason),
     DeyeSensorDescription(key="battery_charge_w", name="Battery charge", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.battery_charge_w),
     DeyeSensorDescription(key="battery_discharge_w", name="Battery discharge", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.battery_discharge_w),
     DeyeSensorDescription(key="pv_power_now_w", name="PV power now", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.pv_power_now_w),
@@ -144,6 +155,15 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, object] | None:
         if self.entity_description.key == "recent_proposed_actions":
             return {"entries": list(self.coordinator.recent_proposed_actions)}
+        if self.entity_description.key == "actual_program_ranges":
+            decision = self.coordinator.data
+            if decision is None:
+                return None
+            return {
+                "ranges": decision.actual_program_ranges,
+                "disabled_programs": decision.disabled_programs,
+                "warning": decision.program_schedule_warning,
+            }
         if self.entity_description.key in {"expected_action", "last_decision_reason", "thermal_action_reason", "soc_source", "soc_age_minutes"}:
             decision = self.coordinator.data
             if decision is None:

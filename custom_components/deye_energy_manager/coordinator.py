@@ -34,7 +34,7 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import build_deye_plan, decide, deye_write_thrash_detected, resolve_soc_value, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, decide, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -103,6 +103,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._thermal_last_action: dict[str, tuple[str, str]] = {}
         self._thermal_leases: dict[str, dict[str, object]] = {}
         self._paid_grid_import_since: datetime | None = None
+        self._cheap_grid_session_date: str | None = None
+        self._cheap_grid_charge_blocked_target_soc: float | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
         self.load_diagnostics: dict[str, object] = {}
         self._remove_listeners: list[Callable[[], None]] = []
@@ -338,6 +340,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             pre_peak_preserve_min_reserve_soc=float(options["pre_peak_preserve_min_reserve_soc"]),
             paid_grid_import_threshold_w=float(options["paid_grid_import_threshold_w"]),
             paid_grid_import_grace_minutes=float(options["paid_grid_import_grace_minutes"]),
+            paid_time_discharge_margin_soc=float(options["paid_time_discharge_margin_soc"]),
+            cheap_grid_recharge_hysteresis_soc=float(options["cheap_grid_recharge_hysteresis_soc"]),
+            cheap_grid_target_increase_hysteresis_soc=float(options["cheap_grid_target_increase_hysteresis_soc"]),
             solar_arrived_charge_threshold_w=float(options["solar_arrived_charge_threshold_w"]),
             solar_arrived_pv_surplus_threshold_w=float(options["solar_arrived_pv_surplus_threshold_w"]),
             daily_battery_target_soc=float(options["daily_battery_target_soc"]),
@@ -749,14 +754,39 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
+            cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,
         )
         decision = decide(inputs, settings)
+        self._update_cheap_grid_session_state(decision)
         self._update_load_diagnostics(inputs, settings, decision)
         self._append_proposed_action(decision)
         self.previous_essential_power_w = essential_power
         self.ev_latch_on = decision.ev_latch_active
         self.ev_hold_until = decision.ev_hold_until if decision.ev_latch_active else None
         return decision
+
+    def _update_cheap_grid_session_state(self, decision: EnergyManagerDecision) -> None:
+        """Track cheap-grid charge completion to avoid preserve/charge oscillation."""
+
+        if decision.tariff_window != "cheap_grid":
+            self._cheap_grid_session_date = None
+            self._cheap_grid_charge_blocked_target_soc = None
+            return
+        session_date = decision.now.date().isoformat()
+        if self._cheap_grid_session_date != session_date:
+            self._cheap_grid_session_date = session_date
+            self._cheap_grid_charge_blocked_target_soc = None
+        if decision.battery_soc is None:
+            return
+        target = decision.grid_charge_target_soc if decision.grid_charge_required else decision.morning_start_soc_target
+        if decision.cheap_grid_mode in {"top_up_to_morning_target", "heavy_grid_charge"} and decision.battery_soc >= target - 0.25:
+            self._cheap_grid_charge_blocked_target_soc = target
+        elif decision.cheap_grid_mode == "preserve" and decision.battery_soc >= decision.morning_start_soc_target - 0.25:
+            self._cheap_grid_charge_blocked_target_soc = max(
+                self._cheap_grid_charge_blocked_target_soc or 0.0,
+                decision.morning_start_soc_target,
+                decision.grid_charge_target_soc,
+            )
 
     def _update_load_diagnostics(
         self,
@@ -932,6 +962,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 return False
         except (TypeError, ValueError):
             pass
+        if not force and self._last_written.get(entity_id) == value and self._recent_write(entity_id):
+            self.deye_write_suppressed_reason = f"{entity_id} desired value {value:.0f} already written recently"
+            return False
         if not force and self._suppress_deye_write(entity_id, value, emergency=emergency):
             return False
         await self.hass.services.async_call(
@@ -953,6 +986,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self._last_written[entity_id] = option
             self.deye_write_suppressed_reason = f"{entity_id} already {option}"
             return False
+        if not force and self._last_written.get(entity_id) == option and self._recent_write(entity_id):
+            self.deye_write_suppressed_reason = f"{entity_id} desired option {option} already written recently"
+            return False
         if not force and self._suppress_deye_write(entity_id, option, emergency=emergency):
             return False
         await self.hass.services.async_call(
@@ -973,6 +1009,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if state.state == ("on" if on else "off"):
             self._last_written[entity_id] = on
             self.deye_write_suppressed_reason = f"{entity_id} already {'on' if on else 'off'}"
+            return False
+        if not force and self._last_written.get(entity_id) == on and self._recent_write(entity_id):
+            self.deye_write_suppressed_reason = f"{entity_id} desired state {'on' if on else 'off'} already written recently"
             return False
         if not force and self._suppress_deye_write(entity_id, on, emergency=emergency):
             return False
@@ -1008,6 +1047,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.deye_write_reason = reason or f"{entity_id} -> {value}"
         self.deye_write_suppressed_reason = "none"
 
+    def _recent_write(self, entity_id: str) -> bool:
+        last = self._last_write_time.get(entity_id)
+        return last is not None and dt_util.utcnow() - last < timedelta(seconds=90)
+
     def _trim_deye_write_windows(self, now: datetime) -> None:
         cutoff_hour = now - timedelta(hours=1)
         while self._deye_write_events and self._deye_write_events[0][0] < cutoff_hour:
@@ -1021,7 +1064,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return deye_write_thrash_detected(list(self._deye_write_attempts), entity_id, now)
 
     def _manual_ev_power_plan(self, required: bool) -> DeyePlan:
-        slots = {"Prog6", "Prog1", "Prog2", "Prog3"}
+        slots = self._enabled_program_slots()
         value = 0.0 if required else self.settings.ev_restore_program_power_w
         return DeyePlan(
             mode="manual_ev_grid_bypass_start" if required else "manual_ev_grid_bypass_restore",
@@ -1030,7 +1073,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         )
 
     def _manual_restore_deye_plan(self) -> DeyePlan:
-        slots = ("Prog6", "Prog1", "Prog2", "Prog3")
+        slots = self._enabled_program_slots()
         return DeyePlan(
             mode="manual_restore_deye_normal",
             reason="manual restore: clear grid charge selects and restore programme powers",
@@ -1038,6 +1081,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             power_targets={slot: self.settings.ev_restore_program_power_w for slot in slots},
             grid_charge_enabled=False,
         )
+
+    def _enabled_program_slots(self) -> tuple[str, ...]:
+        return tuple(str(item["program"]) for item in program_ranges(self.settings) if not item["disabled"])
 
     async def _apply_deye_plan(self, plan: DeyePlan, *, force: bool = False, override_gates: bool = False) -> None:
         slot_to_capacity = {
@@ -1065,6 +1111,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "Prog6": PROG_POWER_ENTITIES[5],
         }
         self.desired_deye_plan = self._format_deye_plan(plan)
+        conflict = self._deye_plan_conflict_reason(plan, slot_to_capacity, slot_to_charge, slot_to_power)
+        if conflict:
+            self.deye_write_suppressed_reason = conflict
+            self.applied_deye_plan = f"no writes: {conflict}"
+            return
         writes = 0
         if self.settings.deye_control_enabled or override_gates:
             for slot, value in plan.capacity_targets.items():
@@ -1083,6 +1134,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                     writes += 1
         self.applied_deye_plan = self.desired_deye_plan if writes else "no writes: desired state already applied or suppressed"
         self.last_control_action = f"Deye plan {plan.mode}: {plan.reason}" if writes else self.last_control_action
+
+    def _deye_plan_conflict_reason(
+        self,
+        plan: DeyePlan,
+        slot_to_capacity: dict[str, str],
+        slot_to_charge: dict[str, str],
+        slot_to_power: dict[str, str],
+    ) -> str | None:
+        return deye_plan_conflict_reason(plan, slot_to_capacity, slot_to_charge, slot_to_power)
 
     def _format_deye_plan(self, plan: DeyePlan) -> str:
         capacities = ",".join(f"{slot}={value:.0f}" for slot, value in sorted(plan.capacity_targets.items()))

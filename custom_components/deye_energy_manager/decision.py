@@ -15,6 +15,8 @@ FORECAST_TIERS = [
     (float("-inf"), ForecastTier("brutal", 80.0, 65.0, 85.0, 30.0, 85.0, 80.0)),
 ]
 
+PROGRAM_ORDER = ("Prog1", "Prog2", "Prog3", "Prog4", "Prog5", "Prog6")
+
 
 def forecast_tier(forecast_tomorrow_kwh: float | None, settings: EnergyManagerSettings) -> ForecastTier:
     """Return the reserve policy tier for the forecast."""
@@ -66,6 +68,71 @@ def time_from_hour(value: float) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _program_start_times(settings: EnergyManagerSettings | None = None) -> tuple[str, str, str, str, str, str]:
+    """Return configured Deye programme start times in row order."""
+
+    return (settings or EnergyManagerSettings()).deye_program_start_times
+
+
+def program_ranges(settings: EnergyManagerSettings | None = None) -> list[dict[str, object]]:
+    """Return Deye programme ranges using inverter row order, not sorted time order."""
+
+    starts = _program_start_times(settings)
+    ranges: list[dict[str, object]] = []
+    for index, program in enumerate(PROGRAM_ORDER):
+        start = starts[index]
+        end = starts[(index + 1) % len(starts)]
+        disabled = start == end
+        ranges.append(
+            {
+                "program": program,
+                "start": start,
+                "end": end,
+                "wraps_midnight": not disabled and time.fromisoformat(end) <= time.fromisoformat(start),
+                "disabled": disabled,
+            }
+        )
+    return ranges
+
+
+def disabled_programs(settings: EnergyManagerSettings | None = None) -> list[str]:
+    """Return zero-length Deye programmes."""
+
+    return [str(item["program"]) for item in program_ranges(settings) if item["disabled"]]
+
+
+def program_schedule_warning(settings: EnergyManagerSettings | None = None) -> str:
+    """Return a diagnostic warning for duplicate Deye start times."""
+
+    starts = _program_start_times(settings)
+    duplicates: list[str] = []
+    for start in sorted(set(starts)):
+        programs = [PROGRAM_ORDER[index] for index, value in enumerate(starts) if value == start]
+        if len(programs) > 1:
+            duplicates.append(f"{start}: {','.join(programs)}")
+    if not duplicates:
+        return "none"
+    return "duplicate programme start times: " + "; ".join(duplicates)
+
+
+def active_program_range(now: datetime, settings: EnergyManagerSettings | None = None) -> dict[str, object]:
+    """Return the active Deye programme range from row-order TOU starts."""
+
+    ranges = program_ranges(settings)
+    for item in ranges:
+        if item["disabled"]:
+            continue
+        if time_between(now, str(item["start"]), str(item["end"])):
+            return item
+    return {
+        "program": "unknown",
+        "start": None,
+        "end": None,
+        "wraps_midnight": False,
+        "disabled": True,
+    }
+
+
 def is_underfloor_load(load: HeatLoadState | dict[str, object]) -> bool:
     """Return whether a load is an underfloor slab load."""
 
@@ -73,20 +140,10 @@ def is_underfloor_load(load: HeatLoadState | dict[str, object]) -> bool:
     return str(raw).lower() in {"underfloor", "floor_underfloor"}
 
 
-def active_slot(now: datetime) -> str:
+def active_slot(now: datetime, settings: EnergyManagerSettings | None = None) -> str:
     """Return the active Deye programme slot."""
 
-    if time_between(now, "21:00", "02:00"):
-        return "Prog6"
-    if time_between(now, "02:00", "04:00"):
-        return "Prog1"
-    if time_between(now, "04:00", "06:55"):
-        return "Prog2"
-    if time_between(now, "06:55", "13:00"):
-        return "Prog3"
-    if time_between(now, "13:00", "17:00"):
-        return "Prog4"
-    return "Prog5"
+    return str(active_program_range(now, settings)["program"])
 
 
 def tariff_window(now: datetime) -> str:
@@ -104,9 +161,9 @@ def tariff_window(now: datetime) -> str:
 def current_reserve_soc(now: datetime, tier: ForecastTier) -> float:
     """Return reserve floor for the current time."""
 
-    if time_between(now, "21:00", "06:55"):
+    if time_between(now, "21:00", "07:00"):
         return tier.overnight_floor
-    if time_between(now, "06:55", "13:00"):
+    if time_between(now, "07:00", "13:00"):
         return tier.morning_floor
     if time_between(now, "13:00", "17:00"):
         return tier.pre_peak_floor
@@ -116,9 +173,9 @@ def current_reserve_soc(now: datetime, tier: ForecastTier) -> float:
 def solar_phase(now: datetime) -> str:
     """Return the flexible-load phase for the day."""
 
-    if time_between(now, "21:00", "06:55"):
+    if time_between(now, "21:00", "07:00"):
         return "cheap_grid_night"
-    if time_between(now, "06:55", "11:30"):
+    if time_between(now, "07:00", "11:30"):
         return "morning_battery_priority"
     if time_between(now, "11:30", "14:30"):
         return "midday_balance"
@@ -131,6 +188,16 @@ def paid_time_floor_soc(now: datetime, settings: EnergyManagerSettings) -> float
     """Return the paid-time minimum reserve floor for the current phase."""
 
     return settings.min_soc_floor
+
+
+def paid_time_discharge_target_soc(soc: float | None, settings: EnergyManagerSettings) -> float:
+    """Return a paid-time reserve that leaves room for battery discharge."""
+
+    floor = settings.min_soc_floor
+    if soc is None or soc <= floor:
+        return floor
+    margin_target = soc - max(settings.paid_time_discharge_margin_soc, 0.0)
+    return max(min(floor, margin_target), 0.0)
 
 
 def solar_arrived(
@@ -307,6 +374,13 @@ def cheap_grid_state(
     forecast = inputs.forecast_tomorrow_kwh if inputs.forecast_tomorrow_kwh is not None else 0.0
     morning_target = cheap_grid_morning_target_soc(inputs, settings, tier)
     heavy_target = min(max(settings.cheap_grid_charge_target_soc, morning_target), settings.max_grid_charge_target_soc)
+    blocked_target = inputs.cheap_grid_charge_blocked_target_soc
+    charge_blocked_by_latch = (
+        blocked_target is not None
+        and soc is not None
+        and soc >= min(morning_target, blocked_target) - settings.cheap_grid_recharge_hysteresis_soc
+        and heavy_target <= blocked_target + settings.cheap_grid_target_increase_hysteresis_soc
+    )
     heavy_required = (
         settings.cheap_grid_charge_enabled
         and soc is not None
@@ -316,6 +390,7 @@ def cheap_grid_state(
             or settings.strategy == "conservative"
         )
         and not ev_grid_bypass_required
+        and not charge_blocked_by_latch
     )
     topup_required = (
         settings.cheap_grid_charge_enabled
@@ -323,6 +398,7 @@ def cheap_grid_state(
         and soc < morning_target - 1.0
         and not heavy_required
         and not ev_grid_bypass_required
+        and not charge_blocked_by_latch
     )
     charge_target = heavy_target if heavy_required else morning_target
     preserve_required = settings.cheap_grid_preserve_enabled
@@ -349,9 +425,10 @@ def cheap_grid_state(
     elif preserve_required:
         mode = "preserve"
         soc_text = f"SOC {soc:.0f}% at/above target" if soc is not None and soc >= morning_target - 1.0 else "SOC unavailable or below target"
+        latch_text = f"; charge latch held at {blocked_target:.0f}%" if charge_blocked_by_latch and blocked_target is not None else ""
         reason = (
             f"cheap_grid_preserve: {soc_text}; 7am target {morning_target:.0f}%; "
-            "using grid for house load, not charging battery"
+            f"using grid for house load, not charging battery{latch_text}"
         )
     elif not settings.cheap_grid_preserve_enabled and not settings.cheap_grid_charge_enabled:
         mode = "disabled"
@@ -378,7 +455,7 @@ def hours_until_time(now: datetime, target: str) -> float:
 def hours_until_solar_end(now: datetime) -> float:
     """Return local daylight-budget hours remaining until 17:00."""
 
-    if not time_between(now, "06:55", "17:00"):
+    if not time_between(now, "07:00", "17:00"):
         return 0.0
     end = now.replace(hour=17, minute=0, second=0, microsecond=0)
     return max((end - now).total_seconds() / 3600.0, 0.0)
@@ -1087,6 +1164,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     settings = settings or EnergyManagerSettings()
     tier = forecast_tier(inputs.forecast_tomorrow_kwh, settings)
+    active_prog_range = active_program_range(inputs.now, settings)
+    actual_active_prog = str(active_prog_range["program"])
     reserve_soc = current_reserve_soc(inputs.now, tier)
     battery_charge_w = max(-inputs.battery_power_w, 0.0)
     battery_discharge_w = max(inputs.battery_power_w, 0.0)
@@ -1710,6 +1789,29 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             f"and charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W"
         )
 
+    active_policy = "normal"
+    post_cheap_restore_reason = "none"
+    if time_between(inputs.now, "07:00", "21:00"):
+        active_policy = "paid_time_discharge_enable"
+        paid_discharge_target = paid_time_discharge_target_soc(soc, settings)
+        if tariff_window(inputs.now) == "morning_solar_ramp":
+            post_cheap_restore_reason = (
+                f"post-cheap restore required: {actual_active_prog} reserve {paid_discharge_target:.0f}% below SOC {soc:.0f}%"
+                if soc_known
+                else f"post-cheap restore required: {actual_active_prog} reserve {paid_discharge_target:.0f}% with SOC unavailable"
+            )
+            reason_parts.append(post_cheap_restore_reason)
+        elif soc_known and reserve_soc >= soc - settings.paid_time_discharge_margin_soc:
+            reason_parts.append(
+                f"paid-time reserve clamp required: active reserve {reserve_soc:.0f}% would pin SOC {soc:.0f}%"
+            )
+    elif grid_charge_required:
+        active_policy = cheap_grid_mode
+    elif cheap_grid_preserve_required:
+        active_policy = "cheap_grid_preserve"
+    elif ev_grid_mode_required:
+        active_policy = "ev_grid_bypass"
+
     expected_action = "none"
     if thermal_action == "shed_blocked_no_owned_loads":
         expected_action = "shed_blocked_no_owned_loads"
@@ -1731,7 +1833,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     return EnergyManagerDecision(
         now=inputs.now,
         forecast_mode=tier.mode,
-        active_slot=active_slot(inputs.now),
+        active_slot=actual_active_prog,
         tariff_window=tariff_window(inputs.now),
         target_17_soc=tier.target_17_soc,
         current_reserve_soc=reserve_soc,
@@ -1853,70 +1955,84 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         pv_power_now_w=inputs.pv_power_now_w,
         ev_hold_until=ev_hold_until,
         forecast_data_valid=inputs.forecast_tomorrow_kwh is not None,
+        active_policy=active_policy,
+        deye_plan_conflict_reason="none",
+        post_cheap_restore_reason=post_cheap_restore_reason,
+        actual_program_ranges=program_ranges(settings),
+        actual_active_prog=actual_active_prog,
+        actual_active_prog_start=str(active_prog_range["start"]) if active_prog_range["start"] is not None else None,
+        actual_active_prog_end=str(active_prog_range["end"]) if active_prog_range["end"] is not None else None,
+        disabled_programs=disabled_programs(settings),
+        logical_tariff_window=tariff_window(inputs.now),
+        program_schedule_warning=program_schedule_warning(settings),
     )
-
-
-def slot_capacity_targets(tier: ForecastTier) -> dict[str, float]:
-    """Return Deye programme capacity targets for a tier."""
-
-    return {
-        "Prog6": tier.overnight_floor,
-        "Prog1": tier.overnight_floor,
-        "Prog2": tier.overnight_floor,
-        "Prog3": tier.morning_floor,
-        "Prog4": tier.pre_peak_floor,
-        "Prog5": tier.peak_floor,
-    }
 
 
 def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSettings) -> DeyePlan:
     """Return the single desired Deye programme plan for this cycle."""
 
-    tier = forecast_tier(decision.forecast_tomorrow_kwh, settings)
-    capacities = slot_capacity_targets(tier)
-    charges = {
-        "Prog1": "No Grid or Gen",
-        "Prog2": "No Grid or Gen",
-        "Prog3": "No Grid or Gen",
-        "Prog4": "No Grid or Gen",
-        "Prog5": "No Grid or Gen",
-        "Prog6": "No Grid or Gen",
-    }
+    capacities: dict[str, float] = {}
+    charges: dict[str, str] = {}
     powers: dict[str, float] = {}
     mode = "normal_restore"
     reason = f"normal restore: forecast {decision.forecast_mode}; active {decision.active_slot}"
     grid_charge_enabled = False
+    policy = "normal"
+    post_cheap_restore_reason = "none"
 
-    if decision.paid_grid_avoidance_required or decision.forecast_drain_blocked:
+    if time_between(decision.now, "07:00", "21:00"):
+        target = paid_time_discharge_target_soc(decision.battery_soc, settings)
+        capacities[decision.active_slot] = target
+        charges[decision.active_slot] = "No Grid or Gen"
+        mode = "paid_time_discharge_enable"
+        policy = "paid_time_discharge_enable"
+        if decision.tariff_window == "morning_solar_ramp":
+            post_cheap_restore_reason = (
+                f"post-cheap restore: {decision.active_slot} reserve {target:.0f}% below SOC "
+                f"{decision.battery_soc:.0f}%"
+                if decision.battery_soc is not None
+                else f"post-cheap restore: {decision.active_slot} reserve {target:.0f}% with SOC unavailable"
+            )
+            reason = post_cheap_restore_reason
+        else:
+            reason = (
+                f"paid-time discharge enabled: {decision.active_slot} reserve {target:.0f}% below SOC "
+                f"{decision.battery_soc:.0f}%"
+                if decision.battery_soc is not None
+                else f"paid-time discharge enabled: {decision.active_slot} reserve {target:.0f}% with SOC unavailable"
+            )
+    elif decision.paid_grid_avoidance_required or decision.forecast_drain_blocked:
         capacities[decision.active_slot] = decision.active_reserve_target_soc
+        charges[decision.active_slot] = "No Grid or Gen"
         mode = "paid_grid_avoidance"
+        policy = "paid_grid_avoidance"
         reason = decision.paid_time_reserve_reason
 
-    cheap_slots = {"Prog6", "Prog1", "Prog2"}
     if decision.tariff_window == "cheap_grid":
         if decision.grid_charge_required:
-            for slot in cheap_slots:
-                capacities[slot] = decision.grid_charge_target_soc
+            capacities[decision.active_slot] = decision.grid_charge_target_soc
             charges[decision.active_slot] = "Allow Grid"
             mode = decision.cheap_grid_mode
+            policy = decision.cheap_grid_mode
             reason = decision.cheap_grid_reason
             grid_charge_enabled = True
         elif decision.cheap_grid_preserve_required:
-            for slot in cheap_slots:
-                capacities[slot] = decision.cheap_grid_preserve_target_soc
+            capacities[decision.active_slot] = decision.cheap_grid_preserve_target_soc
+            charges[decision.active_slot] = "No Grid or Gen"
             mode = "preserve"
+            policy = "cheap_grid_preserve"
             reason = decision.cheap_grid_reason
 
     if settings.ev_control_enabled:
-        ev_slots = {"Prog6", "Prog1", "Prog2", "Prog3"}
         value = 0.0 if decision.ev_grid_bypass_required else settings.ev_restore_program_power_w
-        powers = {slot: value for slot in ev_slots}
+        powers = {decision.active_slot: value}
         if decision.ev_grid_bypass_required:
             mode = "ev_grid_bypass"
+            policy = "ev_grid_bypass"
             reason = decision.ev_decision_reason
 
     if decision.thermal_should_emergency_shed:
-        reason = f"{reason}; emergency thermal shed active, Deye plan unchanged except selected safety floors"
+        reason = f"{reason}; emergency thermal shed active, Deye writes not marked emergency unless inverter targets are required"
 
     return DeyePlan(
         mode=mode,
@@ -1925,7 +2041,9 @@ def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSett
         charge_modes=charges,
         power_targets=powers,
         grid_charge_enabled=grid_charge_enabled,
-        emergency=decision.thermal_should_emergency_shed,
+        emergency=False,
+        policy=policy,
+        post_cheap_restore_reason=post_cheap_restore_reason,
     )
 
 
@@ -1941,3 +2059,30 @@ def deye_write_thrash_detected(
     if len(values) <= 6:
         return False
     return len({str(value) for value in values}) > 1
+
+
+def deye_plan_conflict_reason(
+    plan: DeyePlan,
+    slot_to_capacity: dict[str, str],
+    slot_to_charge: dict[str, str],
+    slot_to_power: dict[str, str],
+) -> str | None:
+    """Return a reason if one plan targets one entity with different values."""
+
+    desired: dict[str, object] = {}
+    for slot, value in plan.capacity_targets.items():
+        entity_id = slot_to_capacity[slot]
+        if entity_id in desired and desired[entity_id] != value:
+            return f"same-cycle conflict: {entity_id} wanted {desired[entity_id]} and {value}"
+        desired[entity_id] = value
+    for slot, value in plan.charge_modes.items():
+        entity_id = slot_to_charge[slot]
+        if entity_id in desired and desired[entity_id] != value:
+            return f"same-cycle conflict: {entity_id} wanted {desired[entity_id]} and {value}"
+        desired[entity_id] = value
+    for slot, value in plan.power_targets.items():
+        entity_id = slot_to_power[slot]
+        if entity_id in desired and desired[entity_id] != value:
+            return f"same-cycle conflict: {entity_id} wanted {desired[entity_id]} and {value}"
+        desired[entity_id] = value
+    return None

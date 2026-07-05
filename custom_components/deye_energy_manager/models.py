@@ -42,6 +42,7 @@ class EnergyManagerSettings:
     thermal_mode: str = "heating"
     thermal_actuation_mode: str = "advisory"
     flexible_load_priority: str = "battery_first"
+    deye_program_start_times: tuple[str, str, str, str, str, str] = ("07:00", "13:00", "17:00", "21:00", "07:00", "07:00")
     heat_soak_fan_mode: str = "high"
     heat_normal_fan_mode: str = "low"
     cool_soak_fan_mode: str = "high"
@@ -73,6 +74,9 @@ class EnergyManagerSettings:
     pre_peak_preserve_min_reserve_soc: float = 75.0
     paid_grid_import_threshold_w: float = 500.0
     paid_grid_import_grace_minutes: float = 2.0
+    paid_time_discharge_margin_soc: float = 2.0
+    cheap_grid_recharge_hysteresis_soc: float = 5.0
+    cheap_grid_target_increase_hysteresis_soc: float = 3.0
     solar_arrived_charge_threshold_w: float = 1500.0
     solar_arrived_pv_surplus_threshold_w: float = 1000.0
     daily_battery_target_soc: float = 100.0
@@ -228,6 +232,7 @@ class EnergyManagerInputs:
     porsche_charging_status: str | None = None
     porsche_charging_ends: datetime | None = None
     manual_clear_ev_latch: bool = False
+    cheap_grid_charge_blocked_target_soc: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +259,9 @@ class DeyePlan:
     power_targets: dict[str, float] = field(default_factory=dict)
     grid_charge_enabled: bool | None = None
     emergency: bool = False
+    policy: str = "normal"
+    conflict_reason: str = "none"
+    post_cheap_restore_reason: str = "none"
 
 
 @dataclass(slots=True)
@@ -378,6 +386,16 @@ class EnergyManagerDecision:
     pv_power_now_w: float | None = None
     ev_hold_until: datetime | None = None
     forecast_data_valid: bool = True
+    active_policy: str = "normal"
+    deye_plan_conflict_reason: str = "none"
+    post_cheap_restore_reason: str = "none"
+    actual_program_ranges: list[dict[str, object]] = field(default_factory=list)
+    actual_active_prog: str = "unknown"
+    actual_active_prog_start: str | None = None
+    actual_active_prog_end: str | None = None
+    disabled_programs: list[str] = field(default_factory=list)
+    logical_tariff_window: str = "unknown"
+    program_schedule_warning: str = "none"
 
 
 @dataclass(slots=True)

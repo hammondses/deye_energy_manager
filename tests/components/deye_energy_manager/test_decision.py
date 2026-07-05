@@ -7,10 +7,10 @@ from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
-from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, decide, deye_write_thrash_detected, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, decide, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value
 from custom_components.deye_energy_manager.migration import migrate_options
-from custom_components.deye_energy_manager.models import EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
+from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
 
 TZ = ZoneInfo("Pacific/Auckland")
@@ -52,17 +52,35 @@ def test_forecast_tiers() -> None:
 
 def test_time_slots_and_tariff_windows() -> None:
     cases = [
-        (dt(22), "Prog6", "cheap_grid"),
-        (dt(3), "Prog1", "cheap_grid"),
-        (dt(5), "Prog2", "cheap_grid"),
-        (dt(7, 30), "Prog3", "morning_solar_ramp"),
-        (dt(14), "Prog4", "pre_peak_preserve"),
-        (dt(18), "Prog5", "peak"),
+        (dt(22), "Prog4", "cheap_grid"),
+        (dt(3), "Prog4", "cheap_grid"),
+        (dt(5), "Prog4", "cheap_grid"),
+        (dt(7, 30), "Prog1", "morning_solar_ramp"),
+        (dt(14), "Prog2", "pre_peak_preserve"),
+        (dt(18), "Prog3", "peak"),
     ]
 
     for now, slot, window in cases:
         assert active_slot(now) == slot
         assert tariff_window(now) == window
+
+
+def test_program_ranges_follow_row_order_and_disable_zero_length_rows() -> None:
+    ranges = program_ranges(EnergyManagerSettings())
+
+    assert ranges[0]["program"] == "Prog1"
+    assert ranges[0]["start"] == "07:00"
+    assert ranges[0]["end"] == "13:00"
+    assert ranges[3]["program"] == "Prog4"
+    assert ranges[3]["start"] == "21:00"
+    assert ranges[3]["end"] == "07:00"
+    assert ranges[3]["wraps_midnight"]
+    assert disabled_programs(EnergyManagerSettings()) == ["Prog5", "Prog6"]
+    assert active_slot(dt(8)) == "Prog1"
+    assert active_slot(dt(14)) == "Prog2"
+    assert active_slot(dt(18)) == "Prog3"
+    assert active_slot(dt(23)) == "Prog4"
+    assert active_slot(dt(3)) == "Prog4"
 
 
 def test_heat_allowed_rules() -> None:
@@ -127,7 +145,7 @@ def test_cheap_grid_preserve_is_separate_from_grid_charge() -> None:
     )
 
     assert decision.tariff_window == "cheap_grid"
-    assert decision.active_slot == "Prog6"
+    assert decision.active_slot == "Prog4"
     assert decision.cheap_grid_preserve_required
     assert 30 <= decision.morning_target_soc <= 35
     assert decision.cheap_grid_mode == "preserve"
@@ -159,11 +177,12 @@ def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
 
     plan = build_deye_plan(decision, settings)
     assert plan.mode == "top_up_to_morning_target"
-    assert plan.charge_modes["Prog6"] == "Allow Grid"
-    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog1"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog2"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog3"] < 60
+    assert plan.charge_modes["Prog4"] == "Allow Grid"
+    assert plan.capacity_targets["Prog4"] == decision.morning_target_soc
+    assert "Prog1" not in plan.capacity_targets
+    assert "Prog2" not in plan.capacity_targets
+    assert "Prog3" not in plan.capacity_targets
+    assert "Prog6" not in plan.capacity_targets
     assert plan.grid_charge_enabled is True
 
 
@@ -236,11 +255,12 @@ def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
 
     plan = build_deye_plan(decision, settings)
     assert plan.mode == "preserve"
-    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog1"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog2"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog3"] < 60
+    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog4"] == decision.morning_target_soc
+    assert "Prog1" not in plan.capacity_targets
+    assert "Prog2" not in plan.capacity_targets
+    assert "Prog3" not in plan.capacity_targets
+    assert "Prog6" not in plan.capacity_targets
     assert plan.grid_charge_enabled is False
 
 
@@ -312,11 +332,139 @@ def test_cheap_grid_exits_at_7am() -> None:
     assert not decision.grid_charge_required
 
     plan = build_deye_plan(decision, settings)
-    assert decision.active_slot == "Prog3"
-    assert plan.charge_modes["Prog3"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog3"] == decision.active_reserve_target_soc
-    assert plan.capacity_targets["Prog3"] < 60
+    assert decision.active_slot == "Prog1"
+    assert plan.charge_modes["Prog1"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog1"] == decision.active_reserve_target_soc
+    assert plan.capacity_targets["Prog1"] < 60
     assert plan.grid_charge_enabled is False
+
+
+def test_paid_time_clamp_prevents_observed_0800_prog3_soc_pinning() -> None:
+    settings = EnergyManagerSettings(deye_control_enabled=True, grid_charge_control_enabled=True)
+    decision = decide(
+        base_inputs(now=dt(8), battery_soc=60, forecast_tomorrow_kwh=8, grid_power_w=0),
+        settings,
+    )
+
+    assert decision.active_slot == "Prog1"
+    assert decision.current_reserve_soc == 60
+
+    plan = build_deye_plan(decision, settings)
+
+    assert plan.mode == "paid_time_discharge_enable"
+    assert plan.capacity_targets["Prog1"] < 60
+    assert plan.capacity_targets["Prog1"] == settings.min_soc_floor
+    assert plan.charge_modes["Prog1"] == "No Grid or Gen"
+    assert plan.grid_charge_enabled is False
+
+
+def test_post_cheap_restore_prog3_below_soc_at_0700() -> None:
+    settings = EnergyManagerSettings(deye_control_enabled=True, grid_charge_control_enabled=True)
+
+    for soc in (35, 60):
+        decision = decide(base_inputs(now=dt(7), battery_soc=soc, forecast_tomorrow_kwh=8), settings)
+        plan = build_deye_plan(decision, settings)
+
+        assert decision.active_slot == "Prog1"
+        assert plan.mode == "paid_time_discharge_enable"
+        assert plan.capacity_targets["Prog1"] < soc
+        assert plan.capacity_targets["Prog1"] == settings.min_soc_floor
+        assert plan.charge_modes["Prog1"] == "No Grid or Gen"
+        assert plan.grid_charge_enabled is False
+        assert "post-cheap restore" in plan.post_cheap_restore_reason
+
+
+def test_cheap_grid_high_soc_preserves_without_grid_charge() -> None:
+    settings = EnergyManagerSettings(
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=25,
+        evening_peak_soc_target=50,
+        battery_capacity_kwh=30,
+    )
+    decision = decide(base_inputs(now=dt(22), battery_soc=70, forecast_tomorrow_kwh=35), settings)
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.cheap_grid_mode == "preserve"
+    assert not decision.grid_charge_required
+    assert 25 <= decision.morning_start_soc_target <= 30
+    assert plan.capacity_targets["Prog4"] == decision.morning_start_soc_target
+    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.grid_charge_enabled is False
+
+
+def test_cheap_grid_low_soc_charges_only_until_morning_target_then_preserves() -> None:
+    settings = EnergyManagerSettings(
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=30,
+        cheap_grid_charge_target_soc=60,
+    )
+    low = decide(base_inputs(now=dt(22), battery_soc=18, forecast_tomorrow_kwh=23), settings)
+    low_plan = build_deye_plan(low, settings)
+
+    assert low.cheap_grid_mode == "top_up_to_morning_target"
+    assert low.grid_charge_required
+    assert low_plan.capacity_targets["Prog4"] == low.morning_start_soc_target
+    assert low_plan.charge_modes["Prog4"] == "Allow Grid"
+
+    reached = decide(
+        base_inputs(now=dt(22), battery_soc=low.morning_start_soc_target, forecast_tomorrow_kwh=23),
+        settings,
+    )
+    reached_plan = build_deye_plan(reached, settings)
+
+    assert reached.cheap_grid_mode == "preserve"
+    assert not reached.grid_charge_required
+    assert reached_plan.capacity_targets["Prog4"] == reached.morning_start_soc_target
+    assert reached_plan.charge_modes["Prog4"] == "No Grid or Gen"
+
+
+def test_heavy_charge_latch_prevents_immediate_reentry_after_target_reached() -> None:
+    settings = EnergyManagerSettings(
+        grid_charge_control_enabled=True,
+        cheap_grid_charge_target_soc=75,
+        cheap_grid_recharge_hysteresis_soc=5,
+        cheap_grid_target_increase_hysteresis_soc=3,
+    )
+
+    decision = decide(
+        base_inputs(
+            now=dt(22),
+            battery_soc=72,
+            forecast_tomorrow_kwh=5,
+            cheap_grid_charge_blocked_target_soc=75,
+        ),
+        settings,
+    )
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.cheap_grid_mode == "preserve"
+    assert not decision.grid_charge_required
+    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog4"] != 75
+
+
+def test_cheap_grid_active_program_does_not_emit_55_75_flapping_after_latch() -> None:
+    settings = EnergyManagerSettings(
+        grid_charge_control_enabled=True,
+        cheap_grid_preserve_soc=55,
+        cheap_grid_charge_target_soc=75,
+        cheap_grid_recharge_hysteresis_soc=5,
+    )
+    outputs = []
+    for soc in (72, 73, 72, 73):
+        decision = decide(
+            base_inputs(
+                now=dt(22),
+                battery_soc=soc,
+                forecast_tomorrow_kwh=5,
+                cheap_grid_charge_blocked_target_soc=75,
+            ),
+            settings,
+        )
+        outputs.append(build_deye_plan(decision, settings).capacity_targets["Prog4"])
+
+    assert outputs != [55, 75, 55, 75]
+    assert len(set(outputs)) == 1
 
 
 def test_thermal_shed_during_cheap_grid_does_not_change_deye_plan() -> None:
@@ -341,9 +489,51 @@ def test_thermal_shed_during_cheap_grid_does_not_change_deye_plan() -> None:
 
     plan = build_deye_plan(decision, settings)
     assert plan.mode == "preserve"
-    assert plan.charge_modes["Prog2"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog2"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog3"] < 60
+    assert not plan.emergency
+    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog4"] == decision.morning_target_soc
+    assert "Prog1" not in plan.capacity_targets
+
+
+def test_emergency_thermal_shed_does_not_mark_deye_plan_emergency() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(22),
+            battery_soc=35,
+            battery_power_w=3000,
+            any_solar_owned_heat_load_on=True,
+        ),
+        EnergyManagerSettings(
+            deye_control_enabled=True,
+            grid_charge_control_enabled=True,
+            thermal_control_enabled=True,
+            thermal_emergency_shed_w=2500,
+        ),
+    )
+
+    assert decision.thermal_should_emergency_shed
+    plan = build_deye_plan(decision, EnergyManagerSettings())
+    assert not plan.emergency
+    assert "emergency thermal shed active" in plan.reason
+
+
+def test_deye_plan_conflict_detection_blocks_same_entity_different_values() -> None:
+    plan = DeyePlan(
+        mode="test",
+        reason="test",
+        capacity_targets={"Prog1": 55},
+        power_targets={"Prog1": 12000},
+    )
+
+    reason = deye_plan_conflict_reason(
+        plan,
+        {"Prog1": "number.deye_prog1"},
+        {},
+        {"Prog1": "number.deye_prog1"},
+    )
+
+    assert reason is not None
+    assert "same-cycle conflict" in reason
 
 
 def test_deye_write_thrash_detector_flags_repeated_alternation() -> None:

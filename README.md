@@ -111,8 +111,8 @@ Thermal policy states:
 
 Solar phases:
 
-- `cheap_grid_night`: 21:00-06:55
-- `morning_battery_priority`: 06:55-11:30
+- `cheap_grid_night`: 21:00-07:00
+- `morning_battery_priority`: 07:00-11:30
 - `midday_balance`: 11:30-14:30
 - `afternoon_soak`: 14:30-17:00
 - `evening_preserve`: 17:00-21:00
