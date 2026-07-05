@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.15
+
+- Repair Deye programme scheduling so active rows are calculated from inverter row order and zero-length programmes are not written.
+- Add paid-time reserve clamps and post-cheap restore safety so regular-price periods cannot pin the battery at the current SOC.
+- Correct cheap-grid reserve/charge semantics, add heavy-charge hysteresis, and suppress non-emergency Deye write thrash.
+- Add diagnostics and regression tests covering paid-time discharge, cheap-grid behavior, Prog6 flapping, thermal interaction, and coordinator write protection.
+
 ## v0.5.14
 
 - Add the root repository license required by HACS validation.

@@ -2,6 +2,12 @@
 
 This repository is a Home Assistant custom integration for `deye_energy_manager`.
 
+Release/HACS workflow:
+
+- For any code or user-visible behavior change, bump `custom_components/deye_energy_manager/manifest.json` before committing, and keep `RELEASE_NOTES.md` aligned.
+- HACS uses the latest GitHub release tag as the remote version, so create/push the matching `vX.Y.Z` tag after a release bump unless explicitly told not to.
+- Unless explicitly told not to, commit completed repo changes and push them to `origin` after relevant checks pass.
+
 Keep actuator writes behind feature gates. Defaults must remain:
 
 - `enabled = true`
