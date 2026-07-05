@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.16
+
+- Quantize Deye programme capacity targets to whole-percent values before planning diagnostics and service calls, preventing fractional reserve write churn such as `50`/`50.524%`.
+- Add regression coverage for fractional cheap-grid reserve targets producing integer Deye plans.
+
 ## v0.5.15
 
 - Repair Deye programme scheduling so active rows are calculated from inverter row order and zero-length programmes are not written.

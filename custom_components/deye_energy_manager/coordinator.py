@@ -34,7 +34,7 @@ from .const import (
     PROG_CHARGE_SELECT_ENTITIES,
     PROG_POWER_ENTITIES,
 )
-from .decision import build_deye_plan, decide, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -951,6 +951,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._apply_heat(decision)
 
     async def _call_number_set(self, entity_id: str, value: float, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
+        if entity_id in PROG_CAPACITY_ENTITIES:
+            value = deye_capacity_percent(value)
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
             self.deye_write_suppressed_reason = f"{entity_id} unavailable"

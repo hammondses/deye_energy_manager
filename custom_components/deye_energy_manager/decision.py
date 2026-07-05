@@ -18,6 +18,13 @@ FORECAST_TIERS = [
 PROGRAM_ORDER = ("Prog1", "Prog2", "Prog3", "Prog4", "Prog5", "Prog6")
 
 
+def deye_capacity_percent(value: float) -> int:
+    """Return a Deye-safe whole-percent programme capacity."""
+
+    clipped = max(0.0, min(100.0, float(value)))
+    return int(clipped + 0.5)
+
+
 def forecast_tier(forecast_tomorrow_kwh: float | None, settings: EnergyManagerSettings) -> ForecastTier:
     """Return the reserve policy tier for the forecast."""
 
@@ -2037,7 +2044,7 @@ def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSett
     return DeyePlan(
         mode=mode,
         reason=reason,
-        capacity_targets=capacities,
+        capacity_targets={slot: deye_capacity_percent(value) for slot, value in capacities.items()},
         charge_modes=charges,
         power_targets=powers,
         grid_charge_enabled=grid_charge_enabled,

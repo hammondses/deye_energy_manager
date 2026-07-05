@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
-from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, decide, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
@@ -390,6 +390,22 @@ def test_cheap_grid_high_soc_preserves_without_grid_charge() -> None:
     assert plan.capacity_targets["Prog4"] == decision.morning_start_soc_target
     assert plan.charge_modes["Prog4"] == "No Grid or Gen"
     assert plan.grid_charge_enabled is False
+
+
+def test_deye_plan_capacity_targets_are_whole_percent_values() -> None:
+    settings = EnergyManagerSettings(grid_charge_control_enabled=True)
+    decision = decide(base_inputs(now=dt(22), battery_soc=65, forecast_tomorrow_kwh=20), settings)
+    decision.cheap_grid_preserve_required = True
+    decision.grid_charge_required = False
+    decision.cheap_grid_preserve_target_soc = 50.5242666666667
+    decision.cheap_grid_mode = "preserve"
+    decision.cheap_grid_reason = "preserve fractional regression"
+
+    plan = build_deye_plan(decision, settings)
+
+    assert plan.capacity_targets["Prog4"] == 51
+    assert all(float(value).is_integer() for value in plan.capacity_targets.values())
+    assert deye_capacity_percent(50.5242666666667) == 51
 
 
 def test_cheap_grid_low_soc_charges_only_until_morning_target_then_preserves() -> None:
