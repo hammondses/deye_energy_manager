@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.19
+
+- Make overnight dining comfort opt-in by default so existing direct thermal installs do not start new overnight actuator behavior unexpectedly.
+- Target the selected overnight dining load when 07:00 SOC protection trips, instead of using the older broad non-bedroom shed path.
+- Add regression coverage for the opt-in default.
+
 ## v0.5.18
 
 - Add overnight dining/living heatpump comfort from spare battery headroom during the cheap-grid window.

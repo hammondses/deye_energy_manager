@@ -30,7 +30,7 @@ class EnergyManagerSettings:
     thermal_rotation_enabled: bool = True
     shed_unowned_managed_loads_on_battery_discharge: bool = False
     morning_preheat_enabled: bool = True
-    overnight_dining_comfort_enabled: bool = True
+    overnight_dining_comfort_enabled: bool = False
     passive_warming_guard_enabled: bool = True
     paid_time_grid_avoidance_enabled: bool = True
     underfloor_schedule_enabled: bool = True

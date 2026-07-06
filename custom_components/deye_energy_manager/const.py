@@ -218,7 +218,7 @@ FEATURE_DEFAULTS = {
     "thermal_rotation_enabled": True,
     "shed_unowned_managed_loads_on_battery_discharge": False,
     "morning_preheat_enabled": True,
-    "overnight_dining_comfort_enabled": True,
+    "overnight_dining_comfort_enabled": False,
     "passive_warming_guard_enabled": True,
     "paid_time_grid_avoidance_enabled": True,
     "underfloor_schedule_enabled": True,

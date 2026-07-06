@@ -2427,7 +2427,7 @@ def test_overnight_dining_comfort_uses_spare_soc_headroom() -> None:
 
     decision = decide(
         base_inputs(now=dt(23), battery_soc=80, forecast_tomorrow_kwh=35, heat_loads=[dining]),
-        EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30),
+        EnergyManagerSettings(thermal_control_enabled=True, overnight_dining_comfort_enabled=True, battery_capacity_kwh=30),
     )
 
     assert decision.morning_start_soc_target == 30
@@ -2451,7 +2451,7 @@ def test_overnight_dining_comfort_blocks_when_7am_target_at_risk() -> None:
 
     decision = decide(
         base_inputs(now=dt(23), battery_soc=45, forecast_tomorrow_kwh=35, heat_loads=[dining]),
-        EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30),
+        EnergyManagerSettings(thermal_control_enabled=True, overnight_dining_comfort_enabled=True, battery_capacity_kwh=30),
     )
 
     assert not decision.overnight_dining_comfort_allowed
@@ -2473,7 +2473,12 @@ def test_overnight_dining_comfort_running_can_drain_until_7am_margin() -> None:
         solar_owned=True,
         lease_reason="overnight_dining_comfort",
     )
-    settings = EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30, thermal_shed_discharge_w=500)
+    settings = EnergyManagerSettings(
+        thermal_control_enabled=True,
+        overnight_dining_comfort_enabled=True,
+        battery_capacity_kwh=30,
+        thermal_shed_discharge_w=500,
+    )
 
     safe = decide(
         base_inputs(
@@ -2506,3 +2511,23 @@ def test_overnight_dining_comfort_running_can_drain_until_7am_margin() -> None:
     assert unsafe.thermal_should_shed
     assert unsafe.thermal_load_to_shed == "Dining/living heat pump"
     assert unsafe.thermal_load_to_normalise == "Dining/living heat pump"
+
+
+def test_overnight_dining_comfort_is_opt_in() -> None:
+    dining = HeatLoadState(
+        name="Dining/living heat pump",
+        slug="dining",
+        priority=1,
+        current_temp=17.0,
+        estimated_load_w=1200,
+        load_type="room_heat_pump",
+    )
+
+    decision = decide(
+        base_inputs(now=dt(23), battery_soc=80, forecast_tomorrow_kwh=35, heat_loads=[dining]),
+        EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30),
+    )
+
+    assert not decision.overnight_dining_comfort_allowed
+    assert decision.overnight_dining_comfort_reason == "overnight_dining_blocked: disabled"
+    assert decision.thermal_action == "none"

@@ -174,7 +174,7 @@ Comfort and preheat are separate from solar soak:
 
 - Comfort heat uses `number.deye_energy_manager_heat_comfort_target_temp` and normal fan.
 - Morning preheat uses `number.deye_energy_manager_morning_preheat_target_temp` and `select.deye_energy_manager_morning_preheat_fan_mode`.
-- Overnight dining comfort uses the dining/living heatpump only during cheap-grid hours when projected 07:00 SOC remains above `morning_start_soc_target` plus `number.deye_energy_manager_overnight_dining_soc_margin`.
+- Overnight dining comfort is opt-in via `switch.deye_energy_manager_overnight_dining_comfort_enabled`; when enabled, it uses the dining/living heatpump only during cheap-grid hours while projected 07:00 SOC remains above `morning_start_soc_target` plus `number.deye_energy_manager_overnight_dining_soc_margin`.
 - Solar soak uses soak targets and soak fan modes.
 - Morning preheat initially targets the configured bedroom load only.
 

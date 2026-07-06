@@ -275,7 +275,7 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("thermal_rotation_enabled", default=defaults.get("thermal_rotation_enabled", True)): selector.BooleanSelector(),
             vol.Required("shed_unowned_managed_loads_on_battery_discharge", default=defaults.get("shed_unowned_managed_loads_on_battery_discharge", False)): selector.BooleanSelector(),
             vol.Required("morning_preheat_enabled", default=defaults.get("morning_preheat_enabled", True)): selector.BooleanSelector(),
-            vol.Required("overnight_dining_comfort_enabled", default=defaults.get("overnight_dining_comfort_enabled", True)): selector.BooleanSelector(),
+            vol.Required("overnight_dining_comfort_enabled", default=defaults.get("overnight_dining_comfort_enabled", False)): selector.BooleanSelector(),
             vol.Required("passive_warming_guard_enabled", default=defaults.get("passive_warming_guard_enabled", True)): selector.BooleanSelector(),
             vol.Required("underfloor_schedule_enabled", default=defaults.get("underfloor_schedule_enabled", True)): selector.BooleanSelector(),
             vol.Required("underfloor_require_home", default=defaults.get("underfloor_require_home", True)): selector.BooleanSelector(),

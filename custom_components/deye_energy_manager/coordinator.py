@@ -1202,7 +1202,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if decision.bedroom_heat_taper_recommended:
                 await self._direct_taper_bedroom_heat()
             if decision.overnight_protection_required:
-                await self._direct_shed_one_heat_load(nonessential_only=True)
+                await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, nonessential_only=True)
             elif decision.thermal_should_shed:
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise)
             elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
