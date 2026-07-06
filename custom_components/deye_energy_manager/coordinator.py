@@ -365,6 +365,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             thermal_start_min_soc=float(options.get("thermal_start_min_soc", options.get("heat_add_min_soc", 80.0))),
             thermal_start_min_charge_w=float(options.get("thermal_start_min_charge_w", options.get("heat_add_min_charge_w", 6000.0))),
             thermal_keep_running_min_charge_w=float(options["thermal_keep_running_min_charge_w"]),
+            thermal_export_start_w=float(options["thermal_export_start_w"]),
+            thermal_export_keep_w=float(options["thermal_export_keep_w"]),
+            thermal_export_import_tolerance_w=float(options["thermal_export_import_tolerance_w"]),
             thermal_shed_discharge_w=float(options.get("thermal_shed_discharge_w", options.get("heat_shed_discharge_w", 500.0))),
             thermal_emergency_shed_w=float(options["thermal_emergency_shed_w"]),
             room_satisfied_delta_c=float(options["room_satisfied_delta_c"]),
@@ -714,6 +717,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         ev_power = self._state_float("ev_power")
         settings = self.settings
         grid_power_w = self._state_float("grid_ct_power") or 0.0
+        export_power_w = max(-grid_power_w, 0.0)
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, settings)
         resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
@@ -732,6 +736,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             battery_power_w=self._state_float("battery_power") or 0.0,
             essential_power_w=essential_power,
             grid_power_w=grid_power_w,
+            export_power_w=export_power_w,
             paid_grid_import_w=paid_grid_import_w,
             base_load_estimate_w=base_load_estimate,
             previous_essential_power_w=self.previous_essential_power_w,
@@ -1198,7 +1203,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise)
             elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
                 await self._direct_rotate_heat_load(decision)
-            elif decision.thermal_action in {"morning_preheat", "underfloor_comfort", "comfort_heat"} or decision.thermal_allowed or (decision.pv_load_test_recommended and self.settings.pv_load_test_control_enabled):
+            elif decision.thermal_action in {"morning_preheat", "underfloor_comfort", "comfort_heat"} or decision.thermal_allowed:
                 await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
             return
         self.last_control_action = f"thermal actuation mode {mode} has no runtime actuator"

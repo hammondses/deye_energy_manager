@@ -706,7 +706,7 @@ def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     assert decision.ev_expected_action == "allow_solar_charge"
 
 
-def test_pv_load_test_recommended_when_expected_pv_is_clipped() -> None:
+def test_pv_load_test_recommendation_is_retired_when_expected_pv_is_high() -> None:
     settings = EnergyManagerSettings(export_limited_mode_enabled=True)
     decision = decide(
         base_inputs(
@@ -722,11 +722,69 @@ def test_pv_load_test_recommended_when_expected_pv_is_clipped() -> None:
         settings,
     )
 
-    assert decision.pv_load_test_recommended
-    assert "test_one_pv_load" in decision.proposed_actions
+    assert not decision.pv_load_test_recommended
+    assert "test_one_pv_load" not in decision.proposed_actions
 
 
-def test_pv_load_test_requires_export_limited_mode_and_no_owned_load() -> None:
+def test_live_export_allows_thermal_soak_with_low_forecast_budget() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=45,
+            grid_power_w=-2200,
+            export_power_w=2200,
+            forecast_remaining_today_kwh=0,
+            forecast_tomorrow_kwh=15,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            daily_battery_target_soc=100,
+            thermal_start_min_soc=80,
+            thermal_export_start_w=1000,
+            thermal_export_import_tolerance_w=300,
+        ),
+    )
+
+    assert decision.export_power_w == 2200
+    assert decision.grid_import_w == 0
+    assert decision.export_soak_available
+    assert decision.solar_soak_allowed
+    assert decision.thermal_allowed
+    assert decision.thermal_load_to_add == "Office"
+    assert decision.thermal_action == "add_one"
+    assert "add_one_heat_load" in decision.proposed_actions
+    assert "export soak available" in decision.thermal_action_reason
+
+
+def test_live_export_must_fit_candidate_load_before_thermal_soak_starts() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=45,
+            grid_power_w=-1200,
+            export_power_w=1200,
+            forecast_remaining_today_kwh=0,
+            forecast_tomorrow_kwh=15,
+            heat_loads=[HeatLoadState(name="Dining", priority=1, current_temp=20, estimated_load_w=3000)],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            daily_battery_target_soc=100,
+            thermal_start_min_soc=80,
+            thermal_export_start_w=1000,
+            thermal_export_import_tolerance_w=300,
+        ),
+    )
+
+    assert decision.export_soak_available
+    assert decision.solar_soak_allowed
+    assert decision.thermal_allowed
+    assert decision.thermal_load_to_add is None
+    assert decision.thermal_action == "hold"
+
+
+def test_no_live_export_keeps_old_budget_block_for_solar_soak() -> None:
     clipped_inputs = base_inputs(
         now=dt(11),
         battery_soc=78,
@@ -737,44 +795,63 @@ def test_pv_load_test_requires_export_limited_mode_and_no_owned_load() -> None:
     )
 
     assert not decide(clipped_inputs).pv_load_test_recommended
-    assert not decide(
+    decision = decide(
         base_inputs(
-            now=dt(11),
-            battery_soc=78,
-            battery_power_w=-1200,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=12,
+            now=dt(12),
+            battery_soc=45,
+            forecast_remaining_today_kwh=0,
+            forecast_tomorrow_kwh=15,
             pv_power_in_30_minutes_w=5200,
-            any_solar_owned_heat_load_on=True,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
         ),
-        EnergyManagerSettings(export_limited_mode_enabled=True),
-    ).pv_load_test_recommended
+        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100),
+    )
+
+    assert not decision.export_soak_available
+    assert not decision.solar_soak_allowed
+    assert not decision.thermal_allowed
 
 
-def test_pv_load_test_waits_for_healthy_soc_and_expected_pv() -> None:
-    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
-    assert not decide(
+def test_paid_grid_avoidance_blocks_export_soak() -> None:
+    decision = decide(
         base_inputs(
-            now=dt(11),
-            battery_soc=55,
-            battery_power_w=-1200,
-            forecast_remaining_today_kwh=12,
+            now=dt(18),
+            battery_soc=31,
+            grid_power_w=-2200,
+            export_power_w=2200,
+            paid_grid_import_w=800,
+            forecast_remaining_today_kwh=30,
             forecast_tomorrow_kwh=35,
-            pv_power_in_30_minutes_w=5200,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
         ),
-        settings,
-    ).pv_load_test_recommended
-    assert not decide(
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_export_start_w=1000),
+    )
+
+    assert decision.paid_grid_avoidance_required
+    assert decision.export_soak_available
+    assert not decision.solar_soak_allowed
+    assert not decision.thermal_allowed
+
+
+def test_battery_discharge_blocks_export_soak() -> None:
+    decision = decide(
         base_inputs(
-            now=dt(11),
-            battery_soc=78,
-            battery_power_w=-1200,
-            forecast_remaining_today_kwh=12,
+            now=dt(12),
+            battery_soc=95,
+            battery_power_w=700,
+            grid_power_w=-2200,
+            export_power_w=2200,
+            forecast_remaining_today_kwh=30,
             forecast_tomorrow_kwh=35,
-            pv_power_in_30_minutes_w=2500,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
         ),
-        settings,
-    ).pv_load_test_recommended
+        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500, thermal_export_start_w=1000),
+    )
+
+    assert decision.thermal_should_shed
+    assert decision.export_soak_available
+    assert not decision.solar_soak_allowed
+    assert not decision.thermal_allowed
 
 
 def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> None:

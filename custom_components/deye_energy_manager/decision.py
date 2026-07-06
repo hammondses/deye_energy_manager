@@ -474,6 +474,13 @@ def load_energy_cost_kwh(load: HeatLoadState, settings: EnergyManagerSettings) -
     return (load.estimated_load_w / 1000.0) * max(settings.min_thermal_run_minutes / 60.0, 0.25)
 
 
+def load_fits_export(load: HeatLoadState, export_power_w: float, settings: EnergyManagerSettings) -> bool:
+    """Return whether current export can absorb a candidate thermal load."""
+
+    load_w = load.estimated_load_w if load.estimated_load_w > 0 else settings.thermal_export_start_w
+    return export_power_w + settings.thermal_export_import_tolerance_w >= load_w
+
+
 def load_comfort_min_temp(load: HeatLoadState, settings: EnergyManagerSettings) -> float:
     """Return per-load comfort minimum."""
 
@@ -1176,6 +1183,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     reserve_soc = current_reserve_soc(inputs.now, tier)
     battery_charge_w = max(-inputs.battery_power_w, 0.0)
     battery_discharge_w = max(inputs.battery_power_w, 0.0)
+    grid_import_w = max(inputs.grid_power_w, 0.0)
+    export_power_w = max(inputs.export_power_w, max(-inputs.grid_power_w, 0.0))
+    thermal_export_margin_w = export_power_w - settings.thermal_export_start_w
     soc_known = inputs.battery_soc is not None
     soc = inputs.battery_soc
     cheap_window = time_between(inputs.now, "21:00", "07:00")
@@ -1291,13 +1301,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
 
     battery_priority_satisfied = battery_target_reachable or (soc_known and soc >= energy_budget_target_soc)
-    curtailment_likely = (
-        (soc_known and soc >= settings.full_soak_min_soc)
-        or (
-            battery_charge_w <= settings.pv_load_test_max_battery_charge_w
-            and expected_pv_power_w - inputs.essential_power_w >= settings.solar_arrived_pv_surplus_threshold_w
-        )
+    export_soak_available = export_power_w >= settings.thermal_export_start_w
+    export_soak_keep_available = export_power_w >= settings.thermal_export_keep_w
+    export_soak_reason = (
+        f"export soak available: exporting {export_power_w:.0f}W >= start {settings.thermal_export_start_w:.0f}W"
+        if export_soak_available
+        else f"export soak unavailable: exporting {export_power_w:.0f}W < start {settings.thermal_export_start_w:.0f}W"
     )
+    curtailment_likely = (soc_known and soc >= settings.full_soak_min_soc) or export_soak_available
     passive_warming_likely = (
         settings.passive_warming_guard_enabled
         and bool(inputs.heat_loads)
@@ -1313,7 +1324,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         )
     )
     passive_warming_reason = (
-        f"passive warming likely: expected PV {expected_pv_power_w:.0f}W and rooms at/above comfort while SOC {soc:.0f}% < {settings.full_soak_min_soc:.0f}%"
+        f"passive warming likely: expected PV {expected_pv_power_w:.0f}W/export {export_power_w:.0f}W and rooms at/above comfort while SOC {soc:.0f}% < {settings.full_soak_min_soc:.0f}%"
         if passive_warming_likely and soc_known
         else "passive warming not limiting"
     )
@@ -1335,17 +1346,22 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         not paid_grid_avoidance_required
         and not passive_warming_likely
         and battery_discharge_w < thermal_shed_discharge_w
-        and forecast_soak_allowed
+        and (forecast_soak_allowed or export_soak_available)
     )
     full_send_soak_allowed = (
         not paid_grid_avoidance_required
         and not passive_warming_likely
-        and battery_target_reachable
-        and discretionary_budget_kwh is not None
         and (
-            discretionary_budget_kwh >= 8.0
-            or (soc_known and soc >= settings.full_soak_min_soc)
-            or (phase == "afternoon_soak" and discretionary_budget_kwh >= 3.0)
+            export_soak_available
+            or (
+                battery_target_reachable
+                and discretionary_budget_kwh is not None
+                and (
+                    discretionary_budget_kwh >= 8.0
+                    or (soc_known and soc >= settings.full_soak_min_soc)
+                    or (phase == "afternoon_soak" and discretionary_budget_kwh >= 3.0)
+                )
+            )
         )
     )
 
@@ -1394,11 +1410,12 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     thermal_time_allowed = time_between(inputs.now, "08:00", "17:00") or (
         tier.mode in {"excellent", "good"}
         and time_between(inputs.now, "07:00", "17:00")
-        and (forecast_override or expected_pv_power_w >= settings.thermal_keep_running_min_charge_w)
+        and (forecast_override or expected_pv_power_w >= settings.thermal_keep_running_min_charge_w or export_soak_keep_available)
     )
     thermal_start_gate = (
         (soc_known and soc >= thermal_start_min_soc)
         or battery_charge_w >= thermal_start_min_charge_w
+        or export_soak_available
         or forecast_override
     )
     thermal_allowed = (
@@ -1447,6 +1464,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
                     and soc_known
                     and soc < thermal_start_min_soc
                     and battery_charge_w < settings.thermal_keep_running_min_charge_w
+                    and not export_soak_keep_available
                 )
                 or (
                     pre_peak_preserve_required
@@ -1467,22 +1485,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         )
     )
     emergency_unowned_candidates = [load for load in unowned_candidates if not load.never_emergency_shed]
-    pv_load_test_recommended = (
-        settings.enabled
-        and settings.export_limited_mode_enabled
-        and inputs.heat_available
-        and time_between(inputs.now, "08:00", "16:30")
-        and not inputs.any_solar_owned_heat_load_on
-        and not pre_peak_preserve_required
-        and soc_known
-        and soc >= settings.pv_load_test_min_soc
-        and soc < tier.target_17_soc
-        and discretionary_budget_positive
-        and battery_charge_w <= settings.pv_load_test_max_battery_charge_w
-        and expected_pv_power_w >= settings.pv_load_test_min_expected_power_w
-        and remaining_forecast_kwh >= settings.pv_load_test_min_remaining_forecast_kwh
-        and battery_discharge_w < 200.0
-    )
+    pv_load_test_recommended = False
 
     shed_candidates = sorted(
         [
@@ -1499,8 +1502,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
             for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode)
             if cooldown_block_reason(load, settings, inputs.now, "add") is None
             and (
-                discretionary_budget_kwh is not None
-                and discretionary_budget_kwh >= load_energy_cost_kwh(load, settings) + settings.solar_soak_required_battery_margin_kwh
+                (
+                    discretionary_budget_kwh is not None
+                    and discretionary_budget_kwh >= load_energy_cost_kwh(load, settings) + settings.solar_soak_required_battery_margin_kwh
+                )
+                or load_fits_export(load, export_power_w, settings)
             )
         ],
         key=lambda load: load.priority,
@@ -1662,7 +1668,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         reason_parts.append(f"SOC unavailable: raw {inputs.raw_soc or 'missing'} and fallback stale")
     if thermal_allowed:
         reason = "thermal_allowed=true"
-        reason += f": {energy_budget_reason}"
+        reason += f": {export_soak_reason}" if export_soak_available else f": {energy_budget_reason}"
         reason_parts.append(reason)
         thermal_reason_parts.append(reason)
     else:
@@ -1677,7 +1683,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         elif passive_warming_likely:
             reason = "thermal_allowed=false: passive warming likely and battery priority active"
         elif discretionary_budget_kwh is not None and discretionary_budget_kwh <= 0:
-            reason = f"thermal_allowed=false: battery_priority: {energy_budget_reason}"
+            reason = f"thermal_allowed=false: battery_priority: {energy_budget_reason}; {export_soak_reason}"
         elif not soc_known:
             reason = (
                 "thermal_allowed=false: "
@@ -1701,6 +1707,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_reason_parts.append(reason)
     if thermal_allowed and thermal_load_to_add:
         proposed_actions.append("add_one_heat_load")
+    if export_soak_available:
+        reason_parts.append(export_soak_reason)
     if morning_preheat_allowed and thermal_load_to_add:
         proposed_actions.append("morning_preheat")
         reason_parts.append(morning_preheat_reason)
@@ -1753,14 +1761,6 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if bedroom_heat_taper_recommended:
         proposed_actions.append("taper_bedroom_heat")
         reason_parts.append(f"bedroom_heat_taper_recommended=true: target {settings.overnight_bedroom_taper_target_temp:.1f}C")
-    if pv_load_test_recommended:
-        proposed_actions.append("test_one_pv_load")
-        reason_parts.append(
-            "pv_load_test_recommended=true: "
-            f"expected PV {expected_pv_power_w:.0f}W >= {settings.pv_load_test_min_expected_power_w:.0f}W, "
-            f"charge {battery_charge_w:.0f}W <= {settings.pv_load_test_max_battery_charge_w:.0f}W, "
-            f"SOC {soc:.0f}% >= {settings.pv_load_test_min_soc:.0f}%"
-        )
     if thermal_rotation_recommended:
         proposed_actions.append("rotate_heat_load")
         proposed_actions.append("rotate_thermal_load")
@@ -1894,6 +1894,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         active_reserve_target_soc=active_reserve_target_soc,
         active_reserve_current_soc=reserve_soc,
         paid_grid_import_w=max(inputs.paid_grid_import_w if inputs.paid_grid_import_w is not None else inputs.grid_power_w, 0.0),
+        grid_import_w=grid_import_w,
+        export_power_w=export_power_w,
+        export_soak_available=export_soak_available,
+        export_soak_reason=export_soak_reason,
+        thermal_export_margin_w=thermal_export_margin_w,
         solar_arrived=solar_has_arrived,
         solar_arrived_reason=solar_arrived_reason,
         forecast_drain_blocked=forecast_drain_blocked,

@@ -100,6 +100,9 @@ class EnergyManagerSettings:
     thermal_start_min_soc: float = 80.0
     thermal_start_min_charge_w: float = 6000.0
     thermal_keep_running_min_charge_w: float = 1500.0
+    thermal_export_start_w: float = 1000.0
+    thermal_export_keep_w: float = 300.0
+    thermal_export_import_tolerance_w: float = 300.0
     thermal_shed_discharge_w: float = 500.0
     thermal_emergency_shed_w: float = 2500.0
     room_satisfied_delta_c: float = 0.7
@@ -208,6 +211,7 @@ class EnergyManagerInputs:
     battery_power_w: float = 0.0
     essential_power_w: float = 0.0
     grid_power_w: float = 0.0
+    export_power_w: float = 0.0
     paid_grid_import_w: float | None = None
     base_load_estimate_w: float | None = None
     previous_essential_power_w: float | None = None
@@ -318,6 +322,11 @@ class EnergyManagerDecision:
     active_reserve_target_soc: float
     active_reserve_current_soc: float
     paid_grid_import_w: float
+    grid_import_w: float
+    export_power_w: float
+    export_soak_available: bool
+    export_soak_reason: str
+    thermal_export_margin_w: float
     solar_arrived: bool
     solar_arrived_reason: str
     forecast_drain_blocked: bool

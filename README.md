@@ -34,7 +34,6 @@ Actual writes are guarded by explicit toggles:
 - `switch.deye_energy_manager_thermal_control_enabled`
 - `switch.deye_energy_manager_heat_control_enabled`
 - `switch.deye_energy_manager_direct_climate_control_enabled`
-- `switch.deye_energy_manager_pv_load_test_control_enabled`
 
 Leave these off until advisory sensors match the current automations.
 
@@ -117,7 +116,7 @@ Solar phases:
 - `afternoon_soak`: 14:30-17:00
 - `evening_preserve`: 17:00-21:00
 
-Morning low-SOC behavior is deliberately conservative. Forecast-full override may permit soak only when the battery is already above the forecast soak SOC, the phase is afternoon soak, or curtailment/tapering is likely. Strong PV forecast plus low SOC in the morning keeps the controller in `battery_priority` unless a room is genuinely below comfort/preheat limits.
+Morning low-SOC behavior is deliberately conservative. Forecast-full override may permit soak only when the battery is already above the forecast soak SOC, the phase is afternoon soak, or live export proves surplus is available. Strong PV forecast plus low SOC in the morning keeps the controller in `battery_priority` unless a room is genuinely below comfort/preheat limits.
 
 ## Rolling Energy Budget
 
@@ -387,15 +386,24 @@ Diagnostics download and Home Assistant Repairs are supported for common setup i
 - Existing managed load editor
 - Outdoor/season thermal auto mode
 
-## PV Load Testing
+## Export Thermal Soak
 
-When inverter export is disabled or clipped, observed battery charge can understate available PV. The integration exposes:
+When solar export is available, the integration uses live grid CT power instead of probing loads from PV forecasts. `sensor.deye_grid_ct_power` is interpreted as signed grid flow:
 
-- `switch.deye_energy_manager_export_limited_mode_enabled`
-- `binary_sensor.deye_energy_manager_pv_load_test_recommended`
-- `switch.deye_energy_manager_pv_load_test_control_enabled`
+- positive = grid import
+- negative = grid export
 
-The recommendation becomes true only when expected PV is high, remaining forecast is healthy, battery SOC is above the configured test floor, observed battery charge is still low, and no solar-owned heat load is already on. The integration will not automatically test a load unless `pv_load_test_control_enabled` is explicitly turned on.
+Thermal soak can start when live export is above `number.deye_energy_manager_thermal_export_start_w` and a candidate load fits the available export plus the configured import tolerance. It can keep running while export remains above `number.deye_energy_manager_thermal_export_keep_w`, but paid-grid avoidance, battery discharge shedding, manual overrides, room comfort state, and direct-control gates still take priority.
+
+Useful diagnostics:
+
+- `sensor.deye_energy_manager_export_power`
+- `sensor.deye_energy_manager_grid_import`
+- `sensor.deye_energy_manager_thermal_export_margin`
+- `binary_sensor.deye_energy_manager_export_soak_available`
+- `sensor.deye_energy_manager_export_soak_reason`
+
+The old PV-load-test/export-limited controls are retained only as compatibility entities for existing configurations. Runtime thermal soak no longer turns loads on just to discover hidden clipped PV.
 
 When a solar-owned room is close to target and another managed room is materially below target, the integration also exposes:
 

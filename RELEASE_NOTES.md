@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.17
+
+- Replace export-limited PV load testing with live export-driven thermal soak using signed Deye grid CT power.
+- Add export thermal thresholds and diagnostics for export power, grid import, export soak availability, export margin, and export soak reason.
+- Keep paid-grid avoidance, battery discharge shedding, manual overrides, and direct climate gates ahead of export soak actions.
+- Retire automatic PV load-test recommendations while keeping old option entities compatible with existing installs.
+
 ## v0.5.16
 
 - Quantize Deye programme capacity targets to whole-percent values before planning diagnostics and service calls, preventing fractional reserve write churn such as `50`/`50.524%`.

@@ -29,6 +29,7 @@ BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="passive_warming_likely", name="Passive warming likely", value_fn=lambda d: d.passive_warming_likely),
     DeyeBinarySensorDescription(key="comfort_heat_allowed", name="Comfort heat allowed", value_fn=lambda d: d.comfort_heat_allowed),
     DeyeBinarySensorDescription(key="solar_soak_allowed", name="Solar soak allowed", value_fn=lambda d: d.solar_soak_allowed),
+    DeyeBinarySensorDescription(key="export_soak_available", name="Export soak available", value_fn=lambda d: d.export_soak_available),
     DeyeBinarySensorDescription(key="full_send_soak_allowed", name="Full send soak allowed", value_fn=lambda d: d.full_send_soak_allowed),
     DeyeBinarySensorDescription(key="morning_preheat_allowed", name="Morning preheat allowed", value_fn=lambda d: d.morning_preheat_allowed),
     DeyeBinarySensorDescription(key="underfloor_comfort_allowed", name="Underfloor comfort allowed", value_fn=lambda d: d.underfloor_comfort_allowed),
