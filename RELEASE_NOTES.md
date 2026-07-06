@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.18
+
+- Add overnight dining/living heatpump comfort from spare battery headroom during the cheap-grid window.
+- Guard overnight dining comfort with projected 07:00 SOC against the calculated morning start target plus configurable margin.
+- Prevent generic comfort heat from bypassing the overnight headroom check during cheap-grid hours.
+- Add diagnostics, controls, and regression coverage for overnight dining comfort allow/block/shed behavior.
+
 ## v0.5.17
 
 - Replace export-limited PV load testing with live export-driven thermal soak using signed Deye grid CT power.

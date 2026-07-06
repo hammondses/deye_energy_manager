@@ -2413,3 +2413,96 @@ def test_underfloor_diagnostic_uses_underfloor_thresholds_not_room_air_defaults(
     assert diagnostic.attributes["normal_target_temperature"] == 12.0
     assert diagnostic.attributes["needs_soak"] is False
     assert diagnostic.state in {"satisfied", "idle"}
+
+
+def test_overnight_dining_comfort_uses_spare_soc_headroom() -> None:
+    dining = HeatLoadState(
+        name="Dining/living heat pump",
+        slug="dining",
+        priority=1,
+        current_temp=17.0,
+        estimated_load_w=1200,
+        load_type="room_heat_pump",
+    )
+
+    decision = decide(
+        base_inputs(now=dt(23), battery_soc=80, forecast_tomorrow_kwh=35, heat_loads=[dining]),
+        EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30),
+    )
+
+    assert decision.morning_start_soc_target == 30
+    assert decision.overnight_dining_comfort_allowed
+    assert decision.thermal_action == "overnight_dining_comfort"
+    assert decision.thermal_load_to_add == "Dining/living heat pump"
+    assert decision.thermal_lease_reason == "overnight_dining_comfort"
+    assert decision.thermal_target_temperature == 20
+    assert decision.projected_soc_07_with_overnight_dining >= decision.morning_start_soc_target + 8
+
+
+def test_overnight_dining_comfort_blocks_when_7am_target_at_risk() -> None:
+    dining = HeatLoadState(
+        name="Dining/living heat pump",
+        slug="dining",
+        priority=1,
+        current_temp=17.0,
+        estimated_load_w=1200,
+        load_type="room_heat_pump",
+    )
+
+    decision = decide(
+        base_inputs(now=dt(23), battery_soc=45, forecast_tomorrow_kwh=35, heat_loads=[dining]),
+        EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30),
+    )
+
+    assert not decision.overnight_dining_comfort_allowed
+    assert "projected 07:00 SOC" in decision.overnight_dining_comfort_reason
+    assert decision.thermal_action == "none"
+    assert decision.thermal_load_to_add is None
+    assert not decision.comfort_heat_allowed
+
+
+def test_overnight_dining_comfort_running_can_drain_until_7am_margin() -> None:
+    dining = HeatLoadState(
+        name="Dining/living heat pump",
+        slug="dining",
+        priority=1,
+        current_temp=18.0,
+        estimated_load_w=1200,
+        load_type="room_heat_pump",
+        is_on=True,
+        solar_owned=True,
+        lease_reason="overnight_dining_comfort",
+    )
+    settings = EnergyManagerSettings(thermal_control_enabled=True, battery_capacity_kwh=30, thermal_shed_discharge_w=500)
+
+    safe = decide(
+        base_inputs(
+            now=dt(23),
+            battery_soc=80,
+            battery_power_w=1200,
+            essential_power_w=2200,
+            forecast_tomorrow_kwh=35,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[dining],
+        ),
+        settings,
+    )
+    unsafe = decide(
+        base_inputs(
+            now=dt(23),
+            battery_soc=45,
+            battery_power_w=1200,
+            essential_power_w=2200,
+            forecast_tomorrow_kwh=35,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[dining],
+        ),
+        settings,
+    )
+
+    assert not safe.thermal_should_shed
+    assert not safe.overnight_protection_required
+    assert unsafe.overnight_protection_required
+    assert unsafe.thermal_should_shed
+    assert unsafe.thermal_load_to_shed == "Dining/living heat pump"
+    assert unsafe.thermal_load_to_normalise == "Dining/living heat pump"

@@ -95,12 +95,13 @@ The integration now owns native thermal storage decisions and direct climate act
 - `sensor.deye_energy_manager_thermal_policy_state`
 - `sensor.deye_energy_manager_solar_phase`
 
-Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer, but it is no longer treated as "heat now" during morning battery-priority periods. The policy state separates comfort, morning preheat, solar soak, normalise, shed, and emergency shed.
+Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer, but it is no longer treated as "heat now" during morning battery-priority periods. The policy state separates comfort, overnight dining comfort, morning preheat, solar soak, normalise, shed, and emergency shed.
 
 Thermal policy states:
 
 - `battery_priority`
 - `comfort_only`
+- `overnight_dining_comfort`
 - `morning_preheat`
 - `solar_soak_allowed`
 - `solar_soak_full_send`
@@ -173,6 +174,7 @@ Comfort and preheat are separate from solar soak:
 
 - Comfort heat uses `number.deye_energy_manager_heat_comfort_target_temp` and normal fan.
 - Morning preheat uses `number.deye_energy_manager_morning_preheat_target_temp` and `select.deye_energy_manager_morning_preheat_fan_mode`.
+- Overnight dining comfort uses the dining/living heatpump only during cheap-grid hours when projected 07:00 SOC remains above `morning_start_soc_target` plus `number.deye_energy_manager_overnight_dining_soc_margin`.
 - Solar soak uses soak targets and soak fan modes.
 - Morning preheat initially targets the configured bedroom load only.
 
@@ -431,10 +433,12 @@ When battery discharge exceeds the emergency threshold, all manager-owned heat l
 Overnight protection:
 
 - `sensor.deye_energy_manager_projected_soc_08`
+- `sensor.deye_energy_manager_projected_soc_07_with_overnight_dining`
+- `binary_sensor.deye_energy_manager_overnight_dining_comfort_allowed`
 - `binary_sensor.deye_energy_manager_overnight_protection_required`
 - `binary_sensor.deye_energy_manager_bedroom_heat_taper_recommended`
 
-The integration projects SOC at 08:00 from current discharge and configured battery capacity. If projected SOC falls below the morning reserve target, it recommends shedding nonessential heat. Owned bedroom heat can be tapered to `overnight_bedroom_taper_target_temp`.
+The integration can run the dining/living heatpump overnight from spare battery headroom. It projects SOC to 07:00 from current discharge and candidate dining load, then allows the run only if the result stays above the calculated `morning_start_soc_target` plus `overnight_dining_soc_margin`. If an owned overnight dining run later threatens that guardrail, it targets that load for normalise/shed. Owned bedroom heat can still be tapered to `overnight_bedroom_taper_target_temp`.
 
 ## Agentic Editing
 

@@ -327,7 +327,7 @@ def evening_energy_plan(
     committed_flexible_kwh = sum(
         load_energy_cost_kwh(load, settings)
         for load in inputs.heat_loads
-        if load.solar_owned or load.lease_reason in {"solar_soak", "morning_preheat", "comfort_heat"}
+        if load.solar_owned or load.lease_reason in {"solar_soak", "morning_preheat", "comfort_heat", "overnight_dining_comfort"}
     )
     net_solar_surplus_kwh = solar_until_4pm_kwh - committed_flexible_kwh
     morning_start_soc_target = evening_peak_soc_target - net_solar_surplus_kwh / max(settings.battery_capacity_kwh, 1.0) * 100.0
@@ -819,6 +819,112 @@ def morning_preheat_candidates(loads: list[HeatLoadState], settings: EnergyManag
     ]
 
 
+def is_dining_load(load: HeatLoadState) -> bool:
+    """Return whether a load represents the dining/living heat pump."""
+
+    haystack = f"{load.name} {load.slug or ''} {load.climate_entity or ''}".lower()
+    return "dining" in haystack or "living" in haystack
+
+
+def overnight_dining_candidates(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+    """Return dining/living loads cold enough for overnight comfort."""
+
+    return [
+        load
+        for load in loads
+        if load.enabled
+        and load.supports_heating
+        and is_dining_load(load)
+        and not load.is_on
+        and not load.solar_owned
+        and load.owner not in {"manual", "external"}
+        and load.manual_override_until is None
+        and load.current_temp is not None
+        and load.current_temp < settings.overnight_dining_min_room_temp
+    ]
+
+
+def projected_soc_at_time(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    target: str,
+    extra_load_w: float = 0.0,
+) -> float | None:
+    """Project SOC at a target time from current discharge plus optional load."""
+
+    if inputs.battery_soc is None:
+        return None
+    if settings.battery_capacity_kwh <= 0:
+        return inputs.battery_soc
+    battery_discharge_w = max(inputs.battery_power_w, 0.0)
+    discharge_w = battery_discharge_w + max(extra_load_w, 0.0)
+    if discharge_w <= 0:
+        return inputs.battery_soc
+    discharge_kwh = discharge_w * hours_until_time(inputs.now, target) / 1000.0
+    return max(inputs.battery_soc - (discharge_kwh / settings.battery_capacity_kwh * 100.0), 0.0)
+
+
+def overnight_dining_comfort_decision(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    morning_start_soc_target: float,
+    thermal_control_enabled: bool,
+    thermal_mode: str,
+) -> tuple[bool, str, str | None, float | None]:
+    """Return overnight dining comfort permission and diagnostics."""
+
+    cheap_window = time_between(inputs.now, "21:00", "07:00")
+    candidates = sorted(overnight_dining_candidates(inputs.heat_loads, settings), key=lambda load: load.priority)
+    load = candidates[0] if candidates else None
+    load_w = load.estimated_load_w if load and load.estimated_load_w > 0 else 0.0
+    min_run_hours = max(settings.min_thermal_run_minutes / 60.0, 0.25)
+    min_run_soc_cost = load_w * min_run_hours / 1000.0 / max(settings.battery_capacity_kwh, 1.0) * 100.0
+    projected_07_with_load = projected_soc_at_time(inputs, settings, "07:00", load_w)
+    required_soc = morning_start_soc_target + settings.overnight_dining_soc_margin
+    min_run_safe = inputs.battery_soc is not None and inputs.battery_soc - min_run_soc_cost >= required_soc
+    allowed = (
+        settings.enabled
+        and settings.overnight_dining_comfort_enabled
+        and thermal_control_enabled
+        and thermal_mode == "heating"
+        and cheap_window
+        and load is not None
+        and projected_07_with_load is not None
+        and projected_07_with_load >= required_soc
+        and min_run_safe
+    )
+    if not settings.overnight_dining_comfort_enabled:
+        reason = "overnight_dining_blocked: disabled"
+    elif not thermal_control_enabled:
+        reason = "overnight_dining_blocked: thermal control disabled"
+    elif thermal_mode != "heating":
+        reason = f"overnight_dining_blocked: thermal mode {thermal_mode}"
+    elif not cheap_window:
+        reason = "overnight_dining_blocked: outside cheap-grid overnight window"
+    elif load is None:
+        reason = "overnight_dining_blocked: dining/living already comfortable or unavailable"
+    elif projected_07_with_load is None or inputs.battery_soc is None:
+        reason = "overnight_dining_blocked: SOC unavailable"
+    elif projected_07_with_load < required_soc:
+        reason = (
+            f"overnight_dining_blocked: projected 07:00 SOC {projected_07_with_load:.1f}% "
+            f"< target {morning_start_soc_target:.0f}% + margin {settings.overnight_dining_soc_margin:.0f}%"
+        )
+    elif not min_run_safe:
+        reason = (
+            f"overnight_dining_blocked: minimum run would leave SOC {inputs.battery_soc - min_run_soc_cost:.1f}% "
+            f"< target {morning_start_soc_target:.0f}% + margin {settings.overnight_dining_soc_margin:.0f}%"
+        )
+    else:
+        reason = (
+            f"overnight_dining_allowed: {load.name} {load.current_temp:.1f}C < "
+            f"{settings.overnight_dining_min_room_temp:.1f}C; projected 07:00 SOC "
+            f"{projected_07_with_load:.1f}% >= target {morning_start_soc_target:.0f}% "
+            f"+ margin {settings.overnight_dining_soc_margin:.0f}%"
+        )
+    return allowed, reason, load.name if allowed and load is not None else None, projected_07_with_load
+
+
 def unowned_shed_reason(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> str | None:
     """Return why an unowned configured load looks like a solar-soak load."""
 
@@ -1234,7 +1340,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     committed_flexible_kwh = sum(
         load_energy_cost_kwh(load, settings)
         for load in inputs.heat_loads
-        if load.solar_owned or load.lease_reason in {"solar_soak", "morning_preheat", "comfort_heat"}
+        if load.solar_owned or load.lease_reason in {"solar_soak", "morning_preheat", "comfort_heat", "overnight_dining_comfort"}
     )
     safety_buffer_kwh = settings.forecast_safety_buffer_kwh + settings.solar_soak_required_battery_margin_kwh
     if settings.paid_time_grid_avoidance_enabled:
@@ -1372,6 +1478,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and thermal_mode == "heating"
         and bool(comfort_candidates)
         and not paid_grid_avoidance_required
+        and not cheap_window
     )
 
     preheat_window = time_between(
@@ -1407,6 +1514,19 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     else:
         morning_preheat_reason = f"morning_preheat_allowed: {preheat_candidates[0].name} {preheat_candidates[0].current_temp:.1f}C < {settings.morning_preheat_min_room_temp:.1f}C, SOC {soc:.0f}%, forecast recovery OK"
 
+    (
+        overnight_dining_comfort_allowed,
+        overnight_dining_comfort_reason,
+        overnight_dining_load_to_add,
+        projected_soc_07_with_overnight_dining,
+    ) = overnight_dining_comfort_decision(
+        inputs,
+        settings,
+        morning_start_soc_target,
+        thermal_control_enabled,
+        thermal_mode,
+    )
+
     thermal_time_allowed = time_between(inputs.now, "08:00", "17:00") or (
         tier.mode in {"excellent", "good"}
         and time_between(inputs.now, "07:00", "17:00")
@@ -1431,11 +1551,23 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
 
     projected_soc = projected_soc_at_08(inputs, settings)
+    projected_soc_07 = projected_soc_at_time(inputs, settings, "07:00") if cheap_window else None
+    overnight_dining_owned = any(
+        load.solar_owned
+        and load.is_on
+        and is_dining_load(load)
+        and load.lease_reason == "overnight_dining_comfort"
+        for load in inputs.heat_loads
+    )
+    overnight_dining_projection_safe = (
+        projected_soc_07 is not None
+        and projected_soc_07 >= morning_start_soc_target + settings.overnight_dining_soc_margin
+    )
     overnight_protection_required = (
         settings.enabled
         and inputs.any_solar_owned_heat_load_on
-        and projected_soc is not None
-        and projected_soc < tier.morning_floor
+        and projected_soc_07 is not None
+        and projected_soc_07 < morning_start_soc_target + settings.overnight_dining_soc_margin
     )
     bedroom_heat_taper_recommended = (
         settings.enabled
@@ -1452,7 +1584,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         and battery_discharge_w >= thermal_shed_discharge_w
         and bool(unowned_candidates)
     )
-    discharge_shed_required = settings.enabled and battery_discharge_w >= thermal_shed_discharge_w
+    discharge_shed_required = (
+        settings.enabled
+        and battery_discharge_w >= thermal_shed_discharge_w
+        and not (cheap_window and overnight_dining_owned and overnight_dining_projection_safe)
+    )
 
     thermal_should_shed = (
         discharge_shed_required
@@ -1496,6 +1632,19 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         key=lambda load: load.priority,
         reverse=True,
     )
+    overnight_dining_shed_candidates = sorted(
+        [
+            load
+            for load in inputs.heat_loads
+            if overnight_protection_required
+            and load.solar_owned
+            and load.is_on
+            and is_dining_load(load)
+            and load.lease_reason == "overnight_dining_comfort"
+        ],
+        key=lambda load: load.priority,
+        reverse=True,
+    )
     add_candidates = sorted(
         [
             load
@@ -1514,6 +1663,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     thermal_load_to_shed = (
         shed_candidates[0].name
         if shed_candidates
+        else overnight_dining_shed_candidates[0].name
+        if overnight_dining_shed_candidates
         else emergency_unowned_candidates[0].name
         if thermal_should_emergency_shed and emergency_unowned_candidates
         else unowned_candidates[0].name
@@ -1523,7 +1674,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     morning_preheat_load_to_add = preheat_candidates[0].name if morning_preheat_allowed else None
     comfort_load_to_add = comfort_candidates[0].name if comfort_heat_allowed else None
     solar_soak_load_to_add = add_candidates[0].name if add_candidates else None
-    thermal_load_to_add = morning_preheat_load_to_add or underfloor_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
+    thermal_load_to_add = morning_preheat_load_to_add or overnight_dining_load_to_add or underfloor_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
     comfort_load = next((load for load in comfort_candidates if load.name == comfort_load_to_add), None)
     underfloor_load = next((load for load in inputs.heat_loads if load.name == underfloor_load_to_add), None)
     thermal_rotation_recommended = (
@@ -1594,6 +1745,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
     elif morning_preheat_allowed and thermal_load_to_add:
         thermal_action = "morning_preheat"
+    elif overnight_dining_comfort_allowed and thermal_load_to_add:
+        thermal_action = "overnight_dining_comfort"
     elif underfloor_comfort_allowed and thermal_load_to_add:
         thermal_action = "underfloor_comfort"
     elif comfort_heat_allowed and thermal_load_to_add:
@@ -1612,6 +1765,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_policy_state = "battery_priority"
     elif morning_preheat_allowed:
         thermal_policy_state = "morning_preheat"
+    elif overnight_dining_comfort_allowed:
+        thermal_policy_state = "overnight_dining_comfort"
     elif underfloor_comfort_allowed:
         thermal_policy_state = "underfloor_comfort"
     elif comfort_heat_allowed:
@@ -1632,6 +1787,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         target_fan_mode = settings.morning_preheat_fan_mode
         target_hvac_mode = "heat"
         lease_reason = "morning_preheat"
+    elif thermal_action == "overnight_dining_comfort":
+        target_temperature = settings.overnight_dining_target_temp
+        target_fan_mode = settings.heat_normal_fan_mode
+        target_hvac_mode = "heat"
+        lease_reason = "overnight_dining_comfort"
     elif thermal_action == "underfloor_comfort":
         target_temperature = min(
             load_comfort_target_temp(underfloor_load, settings),
@@ -1713,6 +1873,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         proposed_actions.append("morning_preheat")
         reason_parts.append(morning_preheat_reason)
         thermal_reason_parts.append(morning_preheat_reason)
+    elif overnight_dining_comfort_allowed and thermal_load_to_add:
+        proposed_actions.append("overnight_dining_comfort")
+        reason_parts.append(overnight_dining_comfort_reason)
+        thermal_reason_parts.append(overnight_dining_comfort_reason)
     elif underfloor_comfort_allowed and thermal_load_to_add:
         proposed_actions.append("underfloor_comfort")
         reason_parts.append(underfloor_reason)
@@ -1756,7 +1920,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if overnight_protection_required:
         proposed_actions.append("overnight_shed_nonessential_heat")
         reason_parts.append(
-            f"overnight_protection_required=true: projected SOC 08:00 {projected_soc:.1f}% < morning target {tier.morning_floor:.0f}%"
+            f"overnight_protection_required=true: projected SOC 07:00 {projected_soc_07:.1f}% < morning target {morning_start_soc_target:.0f}% + margin {settings.overnight_dining_soc_margin:.0f}%"
         )
     if bedroom_heat_taper_recommended:
         proposed_actions.append("taper_bedroom_heat")
@@ -1883,6 +2047,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         morning_preheat_allowed=morning_preheat_allowed,
         morning_preheat_reason=morning_preheat_reason,
         morning_preheat_load_to_add=morning_preheat_load_to_add,
+        overnight_dining_comfort_allowed=overnight_dining_comfort_allowed,
+        overnight_dining_comfort_reason=overnight_dining_comfort_reason,
+        overnight_dining_load_to_add=overnight_dining_load_to_add,
+        projected_soc_07_with_overnight_dining=projected_soc_07_with_overnight_dining,
         underfloor_comfort_allowed=underfloor_comfort_allowed,
         underfloor_policy_state=underfloor_policy_state,
         underfloor_reason=underfloor_reason,

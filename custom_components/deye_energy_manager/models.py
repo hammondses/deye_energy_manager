@@ -30,6 +30,7 @@ class EnergyManagerSettings:
     thermal_rotation_enabled: bool = True
     shed_unowned_managed_loads_on_battery_discharge: bool = False
     morning_preheat_enabled: bool = True
+    overnight_dining_comfort_enabled: bool = True
     passive_warming_guard_enabled: bool = True
     paid_time_grid_avoidance_enabled: bool = True
     underfloor_schedule_enabled: bool = True
@@ -68,6 +69,9 @@ class EnergyManagerSettings:
     morning_preheat_max_grid_import_w: float = 500.0
     morning_preheat_forecast_buffer_kwh: float = 3.0
     morning_preheat_fan_mode: str = "low"
+    overnight_dining_min_room_temp: float = 18.0
+    overnight_dining_target_temp: float = 20.0
+    overnight_dining_soc_margin: float = 8.0
     paid_time_min_reserve_soc: float = 40.0
     morning_paid_time_min_reserve_soc: float = 45.0
     evening_paid_time_min_reserve_soc: float = 30.0
@@ -311,6 +315,10 @@ class EnergyManagerDecision:
     morning_preheat_allowed: bool
     morning_preheat_reason: str
     morning_preheat_load_to_add: str | None
+    overnight_dining_comfort_allowed: bool
+    overnight_dining_comfort_reason: str
+    overnight_dining_load_to_add: str | None
+    projected_soc_07_with_overnight_dining: float | None
     underfloor_comfort_allowed: bool
     underfloor_policy_state: str
     underfloor_reason: str

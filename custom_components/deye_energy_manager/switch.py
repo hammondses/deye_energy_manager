@@ -31,6 +31,7 @@ SWITCHES = {
     "thermal_rotation_enabled": "Thermal rotation enabled",
     "shed_unowned_managed_loads_on_battery_discharge": "Shed unowned managed loads on battery discharge",
     "morning_preheat_enabled": "Morning preheat enabled",
+    "overnight_dining_comfort_enabled": "Overnight dining comfort enabled",
     "passive_warming_guard_enabled": "Passive warming guard enabled",
     "paid_time_grid_avoidance_enabled": "Paid time grid avoidance enabled",
     "underfloor_schedule_enabled": "Underfloor schedule enabled",

@@ -296,6 +296,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             thermal_rotation_enabled=bool(options["thermal_rotation_enabled"]),
             shed_unowned_managed_loads_on_battery_discharge=bool(options["shed_unowned_managed_loads_on_battery_discharge"]),
             morning_preheat_enabled=bool(options["morning_preheat_enabled"]),
+            overnight_dining_comfort_enabled=bool(options["overnight_dining_comfort_enabled"]),
             passive_warming_guard_enabled=bool(options["passive_warming_guard_enabled"]),
             paid_time_grid_avoidance_enabled=bool(options["paid_time_grid_avoidance_enabled"]),
             underfloor_schedule_enabled=bool(options["underfloor_schedule_enabled"]),
@@ -334,6 +335,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             morning_preheat_max_grid_import_w=float(options["morning_preheat_max_grid_import_w"]),
             morning_preheat_forecast_buffer_kwh=float(options["morning_preheat_forecast_buffer_kwh"]),
             morning_preheat_fan_mode=str(options["morning_preheat_fan_mode"]),
+            overnight_dining_min_room_temp=float(options["overnight_dining_min_room_temp"]),
+            overnight_dining_target_temp=float(options["overnight_dining_target_temp"]),
+            overnight_dining_soc_margin=float(options["overnight_dining_soc_margin"]),
             paid_time_min_reserve_soc=float(options["paid_time_min_reserve_soc"]),
             morning_paid_time_min_reserve_soc=float(options["morning_paid_time_min_reserve_soc"]),
             evening_paid_time_min_reserve_soc=float(options["evening_paid_time_min_reserve_soc"]),
@@ -1203,7 +1207,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise)
             elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
                 await self._direct_rotate_heat_load(decision)
-            elif decision.thermal_action in {"morning_preheat", "underfloor_comfort", "comfort_heat"} or decision.thermal_allowed:
+            elif decision.thermal_action in {"morning_preheat", "overnight_dining_comfort", "underfloor_comfort", "comfort_heat"} or decision.thermal_allowed:
                 await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
             return
         self.last_control_action = f"thermal actuation mode {mode} has no runtime actuator"
