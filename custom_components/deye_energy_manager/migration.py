@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .const import CONF_HEAT_LOADS, DEFAULT_HEAT_MODE, DEFAULT_THERMAL_ACTUATION_MODE
+from .const import CONF_HEAT_LOADS, DEFAULT_HEAT_MODE, DEFAULT_THERMAL_ACTUATION_MODE, TEXT_DEFAULTS
 from .decision import slugify
 
 
@@ -57,6 +57,10 @@ def migrate_options(options: dict[str, object], data: dict[str, object] | None =
 
     if heat_mode == "auto_scripts":
         migrated_options["heat_mode"] = "auto_direct" if bool(migrated_options.get("direct_climate_control_enabled", False)) else "advisory"
+        changed = True
+
+    if migrated_options.get("grid_loss_notify_service") == "notify.notify":
+        migrated_options["grid_loss_notify_service"] = TEXT_DEFAULTS["grid_loss_notify_service"]
         changed = True
 
     return migrated_options, changed

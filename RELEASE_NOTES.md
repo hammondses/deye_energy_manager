@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.23
+
+- Migrate any saved `grid_loss_notify_service: notify.notify` option to `notify.mobile_app_s26u` on startup, so the S26 target is used even if `v0.5.21` saved the old generic default.
+
 ## v0.5.22
 
 - Default grid-loss push notifications now target `notify.mobile_app_s26u`, so outage alerts go directly to the S26 after the grid-loss safety update is loaded.

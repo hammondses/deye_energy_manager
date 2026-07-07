@@ -1831,6 +1831,13 @@ def test_legacy_heat_script_options_map_to_advisory_settings() -> None:
     assert options["thermal_actuation_mode"] == "advisory"
 
 
+def test_grid_loss_notify_service_migrates_to_s26() -> None:
+    options, changed = migrate_options({"grid_loss_notify_service": "notify.notify"})
+
+    assert changed
+    assert options["grid_loss_notify_service"] == "notify.mobile_app_s26u"
+
+
 def test_morning_low_soc_strong_forecast_keeps_battery_priority() -> None:
     decision = decide(
         base_inputs(
