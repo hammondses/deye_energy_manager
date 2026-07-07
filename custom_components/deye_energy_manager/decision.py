@@ -1188,6 +1188,9 @@ def ev_decision(
     essential_jump_w = None
     if inputs.previous_essential_power_w is not None:
         essential_jump_w = inputs.essential_power_w - inputs.previous_essential_power_w
+    grid_jump_w = None
+    if inputs.previous_grid_power_w is not None:
+        grid_jump_w = inputs.grid_power_w - inputs.previous_grid_power_w
 
     power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
     jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w
@@ -1222,13 +1225,8 @@ def ev_decision(
         and inputs.previous_essential_power_w < 2500.0
     )
     load_drop_stopped = essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w
+    grid_drop_stopped = grid_jump_w is not None and grid_jump_w <= -settings.ev_stop_load_drop_w
     soc_stopped = inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0
-    porsche_power_stopped = (
-        inputs.ev_latch_on
-        and inputs.porsche_charging_power_w is not None
-        and inputs.porsche_charging_power_w < settings.ev_stopped_load_threshold_w
-        and not porsche_status_detected
-    )
     porsche_status_or_end_stopped = (
         inputs.ev_latch_on
         and not power_detected
@@ -1253,8 +1251,8 @@ def ev_decision(
         or low_power_stopped
         or inferred_low_load_stopped
         or load_drop_stopped
+        or grid_drop_stopped
         or soc_stopped
-        or porsche_power_stopped
         or porsche_status_or_end_stopped
         or hold_expired_low
         or failsafe_0700

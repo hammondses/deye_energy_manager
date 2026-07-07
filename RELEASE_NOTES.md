@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.25
+
+- Mirror the old EV automation's fast restore logic by releasing EV bypass on a clear `>6kW` drop in either essential power or grid CT power.
+- Avoid relying on the Porsche charging-power entity for EV stop detection because it can stay stale.
+
 ## v0.5.24
 
 - Release EV grid-bypass latch immediately when Porsche reports charging completed, charging power drops to zero, or the Porsche charging end time has passed.

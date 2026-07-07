@@ -728,7 +728,7 @@ def test_porsche_completed_status_releases_ev_latch() -> None:
     assert decision.ev_expected_action == "ev_grid_bypass_restore"
 
 
-def test_porsche_zero_charge_power_releases_ev_latch() -> None:
+def test_grid_ct_drop_releases_ev_latch() -> None:
     decision = decide(
         base_inputs(
             now=dt(3),
@@ -736,8 +736,8 @@ def test_porsche_zero_charge_power_releases_ev_latch() -> None:
             ev_hold_until=dt(5),
             essential_power_w=3200,
             previous_essential_power_w=3300,
-            porsche_charging_status="unknown",
-            porsche_charging_power_w=0,
+            grid_power_w=1000,
+            previous_grid_power_w=7600,
         ),
         EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
     )

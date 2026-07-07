@@ -70,6 +70,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.entry = entry
         self.started_at = dt_util.utcnow()
         self.previous_essential_power_w: float | None = None
+        self.previous_grid_power_w: float | None = None
         self._base_load_samples: deque[tuple[datetime, float]] = deque(maxlen=240)
         self._soc_store: Store[dict[str, object]] = Store(
             hass,
@@ -750,6 +751,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             export_power_w=export_power_w,
             paid_grid_import_w=paid_grid_import_w,
             base_load_estimate_w=base_load_estimate,
+            previous_grid_power_w=self.previous_grid_power_w,
             previous_essential_power_w=self.previous_essential_power_w,
             forecast_today_kwh=self._state_float("forecast_today"),
             forecast_remaining_today_kwh=self._state_float("forecast_remaining_today"),
@@ -770,7 +772,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
-            porsche_charging_power_w=self._state_float("porsche_charging_power"),
             cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,
         )
         decision = decide(inputs, settings)
@@ -778,6 +779,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._update_load_diagnostics(inputs, settings, decision)
         self._append_proposed_action(decision)
         self.previous_essential_power_w = essential_power
+        self.previous_grid_power_w = grid_power_w
         self.ev_latch_on = decision.ev_latch_active
         self.ev_hold_until = decision.ev_hold_until if decision.ev_latch_active else None
         return decision

@@ -223,6 +223,7 @@ class EnergyManagerInputs:
     export_power_w: float = 0.0
     paid_grid_import_w: float | None = None
     base_load_estimate_w: float | None = None
+    previous_grid_power_w: float | None = None
     previous_essential_power_w: float | None = None
     forecast_today_kwh: float | None = None
     forecast_remaining_today_kwh: float | None = None
@@ -244,7 +245,6 @@ class EnergyManagerInputs:
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None
     porsche_charging_ends: datetime | None = None
-    porsche_charging_power_w: float | None = None
     manual_clear_ev_latch: bool = False
     cheap_grid_charge_blocked_target_soc: float | None = None
 
