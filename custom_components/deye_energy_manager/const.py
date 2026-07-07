@@ -330,7 +330,7 @@ NUMBER_DEFAULTS = {
 }
 
 TEXT_DEFAULTS = {
-    "grid_loss_notify_service": "notify.notify",
+    "grid_loss_notify_service": "notify.mobile_app_s26u",
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]
