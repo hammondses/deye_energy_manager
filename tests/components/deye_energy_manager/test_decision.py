@@ -730,6 +730,29 @@ def test_ev_bypass_suppresses_battery_grid_charge() -> None:
     assert not decision.grid_charge_required
 
 
+def test_ev_bypass_uses_limited_program_power_not_zero() -> None:
+    settings = EnergyManagerSettings(
+        grid_charge_control_enabled=True,
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_bypass_program_power_w=2000,
+    )
+    decision = decide(
+        base_inputs(
+            now=dt(4),
+            forecast_tomorrow_kwh=12,
+            battery_soc=50,
+            ev_power_w=2000,
+        ),
+        settings,
+    )
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.active_slot == "Prog4"
+    assert decision.ev_grid_bypass_required
+    assert plan.power_targets == {"Prog4": 2000}
+
+
 def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     decision = decide(
         base_inputs(now=dt(12), battery_soc=90, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=22),

@@ -21,6 +21,7 @@ SWITCHES = {
     "ev_grid_bypass_enabled": "EV grid bypass enabled",
     "ev_solar_charging_enabled": "EV solar charging enabled",
     "ev_cheap_grid_charging_enabled": "EV cheap grid charging enabled",
+    "grid_loss_notification_enabled": "Grid loss notification enabled",
     "heat_control_enabled": "Heat control enabled",
     "thermal_control_enabled": "Thermal control enabled",
     "direct_climate_control_enabled": "Direct climate control enabled",

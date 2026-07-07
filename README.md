@@ -244,9 +244,9 @@ EV support is native to the integration and disabled by default.
 - `number.deye_energy_manager_ev_stopped_load_threshold`
 - `number.deye_energy_manager_ev_restore_program_power`
 
-Cheap-grid EV bypass detects charging from an optional EV power sensor first, then falls back to essential-load jumps/high load and Porsche signals. When enabled during the cheap window, it sets Deye programme powers 6/1/2/3 to `0`; when EV charging stops, it restores them to `ev_restore_program_power_w`.
+Cheap-grid EV bypass detects charging from an optional EV power sensor first, then falls back to essential-load jumps/high load and Porsche signals. When enabled during the cheap window, it caps the active Deye programme power at `number.deye_energy_manager_ev_bypass_program_power`, default `2000W`; when EV charging stops, it restores programme power to `ev_restore_program_power_w`.
 
-EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power.
+EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power. The non-zero bypass cap leaves a limited inverter allowance if grid power is lost while the car is connected. Grid loss is detected from the configured Deye grid-voltage entity and can send persistent plus `notify.*` alerts.
 
 ## Diagnostics And Tuning
 

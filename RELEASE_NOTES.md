@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.21
+
+- Change EV cheap-grid bypass from a hard `0W` programme power limit to configurable `ev_bypass_program_power_w`, defaulting to `2000W`, so an outage/RCBO trip cannot let the car instantly pull unrestricted battery power.
+- Apply the same bypass power limit to manual EV bypass.
+- Add grid-loss detection from the Deye grid-voltage entity, with persistent and configurable `notify.*` alerts plus cooldown.
+- Add default `grid_voltage` entity mapping and regression coverage for the non-zero EV bypass cap.
+
 ## v0.5.20
 
 - Release fallback EV bypass latches after sustained low house load when no dedicated EV power sensor is configured.

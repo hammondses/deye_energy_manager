@@ -38,6 +38,7 @@ DEFAULT_ENTITY_MAP = {
     "fallback_soc_timestamp_entity": "input_datetime.deye_battery_soc_last_good_updated",
     "battery_power": "sensor.deye_battery_power",
     "grid_ct_power": "sensor.deye_grid_ct_power",
+    "grid_voltage": "sensor.deye_grid_voltage",
     "essential_power": "sensor.deye_essential_power",
     "battery_rated_capacity": "sensor.deye_battery_rated_capacity",
     "battery_voltage": "sensor.deye_battery_voltage",
@@ -208,6 +209,7 @@ FEATURE_DEFAULTS = {
     "ev_grid_bypass_enabled": False,
     "ev_solar_charging_enabled": False,
     "ev_cheap_grid_charging_enabled": True,
+    "grid_loss_notification_enabled": True,
     "heat_control_enabled": False,
     "thermal_control_enabled": False,
     "direct_climate_control_enabled": False,
@@ -297,7 +299,10 @@ NUMBER_DEFAULTS = {
     "ev_stopped_load_threshold_w": 300.0,
     "ev_hold_extra_minutes": 10.0,
     "ev_fallback_hold_minutes": 180.0,
+    "ev_bypass_program_power_w": 2000.0,
     "ev_restore_program_power_w": 12000.0,
+    "grid_loss_voltage_threshold": 50.0,
+    "grid_loss_notification_cooldown_minutes": 30.0,
     "min_thermal_run_minutes": 20.0,
     "min_thermal_rest_minutes": 10.0,
     "thermal_rotation_cooldown_minutes": 15.0,
@@ -322,6 +327,10 @@ NUMBER_DEFAULTS = {
     "battery_capacity_kwh": 30.0,
     "overnight_bedroom_taper_target_temp": 18.0,
     "max_fallback_soc_age_minutes": 360.0,
+}
+
+TEXT_DEFAULTS = {
+    "grid_loss_notify_service": "notify.notify",
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]

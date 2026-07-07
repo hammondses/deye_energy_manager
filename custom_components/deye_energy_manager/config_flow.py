@@ -28,6 +28,7 @@ from .const import (
     HEAT_MODE_OPTIONS,
     NUMBER_DEFAULTS,
     STRATEGY_OPTIONS,
+    TEXT_DEFAULTS,
     THERMAL_ACTUATION_MODE_OPTIONS,
     THERMAL_MODE_OPTIONS,
 )
@@ -306,6 +307,7 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
         "ev_stopped_load_threshold_w",
         "ev_hold_extra_minutes",
         "ev_fallback_hold_minutes",
+        "ev_bypass_program_power_w",
         "ev_restore_program_power_w",
     ]
     return vol.Schema(
@@ -314,6 +316,14 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("ev_grid_bypass_enabled", default=defaults.get("ev_grid_bypass_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_solar_charging_enabled", default=defaults.get("ev_solar_charging_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_cheap_grid_charging_enabled", default=defaults.get("ev_cheap_grid_charging_enabled", True)): selector.BooleanSelector(),
+            vol.Required("grid_loss_notification_enabled", default=defaults.get("grid_loss_notification_enabled", True)): selector.BooleanSelector(),
+            vol.Required("grid_loss_notify_service", default=defaults.get("grid_loss_notify_service", TEXT_DEFAULTS["grid_loss_notify_service"])): selector.TextSelector(),
+            vol.Required("grid_loss_voltage_threshold", default=defaults.get("grid_loss_voltage_threshold", NUMBER_DEFAULTS["grid_loss_voltage_threshold"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=5)
+            ),
+            vol.Required("grid_loss_notification_cooldown_minutes", default=defaults.get("grid_loss_notification_cooldown_minutes", NUMBER_DEFAULTS["grid_loss_notification_cooldown_minutes"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=1)
+            ),
             **{
                 vol.Required(key, default=defaults.get(key, NUMBER_DEFAULTS[key])): selector.NumberSelector(
                     selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0, step=100)
@@ -398,6 +408,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 options={
                     **FEATURE_DEFAULTS,
                     **NUMBER_DEFAULTS,
+                    **TEXT_DEFAULTS,
                     "strategy": DEFAULT_STRATEGY,
                     "heat_mode": DEFAULT_HEAT_MODE,
                     "thermal_mode": DEFAULT_THERMAL_MODE,

@@ -2222,7 +2222,7 @@ def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSett
             reason = decision.cheap_grid_reason
 
     if settings.ev_control_enabled:
-        value = 0.0 if decision.ev_grid_bypass_required else settings.ev_restore_program_power_w
+        value = settings.ev_bypass_program_power_w if decision.ev_grid_bypass_required else settings.ev_restore_program_power_w
         powers = {decision.active_slot: value}
         if decision.ev_grid_bypass_required:
             mode = "ev_grid_bypass"

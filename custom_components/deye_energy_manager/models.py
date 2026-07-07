@@ -118,7 +118,12 @@ class EnergyManagerSettings:
     ev_stopped_load_threshold_w: float = 300.0
     ev_hold_extra_minutes: float = 10.0
     ev_fallback_hold_minutes: float = 180.0
+    ev_bypass_program_power_w: float = 2000.0
     ev_restore_program_power_w: float = 12000.0
+    grid_loss_notification_enabled: bool = True
+    grid_loss_voltage_threshold: float = 50.0
+    grid_loss_notification_cooldown_minutes: float = 30.0
+    grid_loss_notify_service: str = "notify.notify"
     min_thermal_run_minutes: float = 20.0
     min_thermal_rest_minutes: float = 10.0
     thermal_rotation_cooldown_minutes: float = 15.0
