@@ -656,6 +656,44 @@ def test_ev_power_sensor_stop_restores_latch() -> None:
     assert decision.ev_expected_action == "ev_grid_bypass_restore"
 
 
+def test_inferred_ev_latch_restores_after_sustained_low_house_load() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(22),
+            ev_latch_on=True,
+            ev_hold_until=dt(23),
+            ev_power_w=None,
+            essential_power_w=1800,
+            previous_essential_power_w=1900,
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert not decision.ev_latch_active
+    assert not decision.ev_grid_bypass_required
+    assert decision.ev_expected_action == "ev_grid_bypass_restore"
+    assert decision.ev_decision_reason == "EV stop condition active"
+
+
+def test_inferred_ev_latch_holds_while_house_load_still_elevated() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(22),
+            ev_latch_on=True,
+            ev_hold_until=dt(23),
+            ev_power_w=None,
+            essential_power_w=3200,
+            previous_essential_power_w=3300,
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert decision.ev_latch_active
+    assert decision.ev_grid_bypass_required
+    assert decision.ev_expected_action == "ev_grid_bypass_hold"
+    assert decision.ev_decision_reason == "EV bypass latch holding from previous detection"
+
+
 def test_porsche_stale_status_does_not_hold_after_expiry_and_low_load() -> None:
     decision = decide(
         base_inputs(

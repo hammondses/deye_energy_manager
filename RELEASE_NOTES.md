@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.20
+
+- Release fallback EV bypass latches after sustained low house load when no dedicated EV power sensor is configured.
+- Clarify EV bypass diagnostics when the controller is holding a previous inferred EV latch rather than detecting current EV charging.
+- Add regression coverage for inferred EV latch release and hold behavior.
+
 ## v0.5.19
 
 - Make overnight dining comfort opt-in by default so existing direct thermal installs do not start new overnight actuator behavior unexpectedly.

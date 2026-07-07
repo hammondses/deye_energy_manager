@@ -1203,6 +1203,14 @@ def ev_decision(
         and inputs.ev_low_since is not None
         and (inputs.now - inputs.ev_low_since) >= timedelta(minutes=2)
     )
+    inferred_low_load_stopped = (
+        inputs.ev_latch_on
+        and inputs.ev_power_w is None
+        and not porsche_status_detected
+        and inputs.essential_power_w < 2500.0
+        and inputs.previous_essential_power_w is not None
+        and inputs.previous_essential_power_w < 2500.0
+    )
     load_drop_stopped = essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w
     soc_stopped = inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0
     hold_expired_low = (
@@ -1212,7 +1220,15 @@ def ev_decision(
         and (inputs.ev_power_w is None or inputs.ev_power_w < settings.ev_active_load_threshold_w)
     )
     failsafe_0700 = inputs.ev_latch_on and not cheap_window
-    ev_stop = inputs.manual_clear_ev_latch or low_power_stopped or load_drop_stopped or soc_stopped or hold_expired_low or failsafe_0700
+    ev_stop = (
+        inputs.manual_clear_ev_latch
+        or low_power_stopped
+        or inferred_low_load_stopped
+        or load_drop_stopped
+        or soc_stopped
+        or hold_expired_low
+        or failsafe_0700
+    )
 
     ev_grid_bypass_required = (
         settings.enabled
@@ -1262,6 +1278,8 @@ def ev_decision(
         reason = f"EV charging inferred: essential load {inputs.essential_power_w:.0f}W high in cheap window"
     elif ev_stop:
         reason = "EV stop condition active"
+    elif ev_grid_bypass_required and inputs.ev_latch_on:
+        reason = "EV bypass latch holding from previous detection"
     elif ev_solar_charge_allowed:
         reason = "EV solar charge allowed: battery priority satisfied and forecast override active"
     else:
