@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.24
+
+- Release EV grid-bypass latch immediately when Porsche reports charging completed, charging power drops to zero, or the Porsche charging end time has passed.
+- Reduce the fallback EV bypass hold default from 180 minutes to 15 minutes, and migrate saved installs that still have the old 180 minute default.
+- This prevents EV bypass from blocking cheap-grid battery top-up overnight after the car has stopped charging.
+
 ## v0.5.23
 
 - Migrate any saved `grid_loss_notify_service: notify.notify` option to `notify.mobile_app_s26u` on startup, so the S26 target is used even if `v0.5.21` saved the old generic default.

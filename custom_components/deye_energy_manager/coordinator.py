@@ -770,6 +770,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
+            porsche_charging_power_w=self._state_float("porsche_charging_power"),
             cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,
         )
         decision = decide(inputs, settings)

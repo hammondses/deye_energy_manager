@@ -711,6 +711,89 @@ def test_porsche_stale_status_does_not_hold_after_expiry_and_low_load() -> None:
     assert decision.ev_expected_action == "ev_grid_bypass_restore"
 
 
+def test_porsche_completed_status_releases_ev_latch() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(3),
+            ev_latch_on=True,
+            ev_hold_until=dt(5),
+            essential_power_w=3200,
+            previous_essential_power_w=3300,
+            porsche_charging_status="charging_completed",
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert not decision.ev_latch_active
+    assert decision.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_porsche_zero_charge_power_releases_ev_latch() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(3),
+            ev_latch_on=True,
+            ev_hold_until=dt(5),
+            essential_power_w=3200,
+            previous_essential_power_w=3300,
+            porsche_charging_status="unknown",
+            porsche_charging_power_w=0,
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert not decision.ev_latch_active
+    assert decision.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_porsche_elapsed_charge_end_releases_ev_latch() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(3),
+            ev_latch_on=True,
+            ev_hold_until=dt(5),
+            essential_power_w=3200,
+            previous_essential_power_w=3300,
+            porsche_charging_status="unknown",
+            porsche_charging_ends=dt(2, 59),
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True),
+    )
+
+    assert not decision.ev_latch_active
+    assert decision.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_ev_latch_release_allows_cheap_grid_topup() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        cheap_grid_preserve_soc=30,
+    )
+
+    decision = decide(
+        base_inputs(
+            now=dt(3),
+            forecast_tomorrow_kwh=23,
+            battery_soc=19,
+            ev_latch_on=True,
+            ev_hold_until=dt(5),
+            essential_power_w=3200,
+            previous_essential_power_w=3300,
+            porsche_charging_status="charging_completed",
+        ),
+        settings,
+    )
+
+    assert not decision.ev_grid_bypass_required
+    assert not decision.ev_latch_active
+    assert decision.cheap_grid_mode == "top_up_to_morning_target"
+    assert decision.grid_charge_required
+
+
 def test_ev_bypass_suppresses_battery_grid_charge() -> None:
     decision = decide(
         base_inputs(
@@ -1836,6 +1919,13 @@ def test_grid_loss_notify_service_migrates_to_s26() -> None:
 
     assert changed
     assert options["grid_loss_notify_service"] == "notify.mobile_app_s26u"
+
+
+def test_ev_fallback_hold_migrates_from_old_three_hour_default() -> None:
+    options, changed = migrate_options({"ev_fallback_hold_minutes": 180.0})
+
+    assert changed
+    assert options["ev_fallback_hold_minutes"] == 15.0
 
 
 def test_morning_low_soc_strong_forecast_keeps_battery_priority() -> None:

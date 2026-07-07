@@ -1192,7 +1192,17 @@ def ev_decision(
     power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
     jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w
     high_load_detected = inputs.ev_power_w is None and cheap_window and inputs.essential_power_w > 6500.0
-    porsche_status_detected = (inputs.porsche_charging_status or "").lower() == "charging"
+    porsche_status = (inputs.porsche_charging_status or "").lower()
+    porsche_status_detected = porsche_status == "charging"
+    porsche_status_stopped = porsche_status in {
+        "charging_completed",
+        "completed",
+        "complete",
+        "not_charging",
+        "not charging",
+        "off",
+        "idle",
+    }
     ev_charging_detected = power_detected or jump_detected or high_load_detected or (
         porsche_status_detected and inputs.ev_latch_on
     )
@@ -1213,6 +1223,24 @@ def ev_decision(
     )
     load_drop_stopped = essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w
     soc_stopped = inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0
+    porsche_power_stopped = (
+        inputs.ev_latch_on
+        and inputs.porsche_charging_power_w is not None
+        and inputs.porsche_charging_power_w < settings.ev_stopped_load_threshold_w
+        and not porsche_status_detected
+    )
+    porsche_status_or_end_stopped = (
+        inputs.ev_latch_on
+        and not power_detected
+        and (
+            porsche_status_stopped
+            or (
+                inputs.porsche_charging_ends is not None
+                and inputs.porsche_charging_ends <= inputs.now
+                and not porsche_status_detected
+            )
+        )
+    )
     hold_expired_low = (
         inputs.ev_hold_until is not None
         and inputs.now >= inputs.ev_hold_until
@@ -1226,6 +1254,8 @@ def ev_decision(
         or inferred_low_load_stopped
         or load_drop_stopped
         or soc_stopped
+        or porsche_power_stopped
+        or porsche_status_or_end_stopped
         or hold_expired_low
         or failsafe_0700
     )

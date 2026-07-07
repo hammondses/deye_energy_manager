@@ -117,7 +117,7 @@ class EnergyManagerSettings:
     ev_active_load_threshold_w: float = 1000.0
     ev_stopped_load_threshold_w: float = 300.0
     ev_hold_extra_minutes: float = 10.0
-    ev_fallback_hold_minutes: float = 180.0
+    ev_fallback_hold_minutes: float = 15.0
     ev_bypass_program_power_w: float = 2000.0
     ev_restore_program_power_w: float = 12000.0
     grid_loss_notification_enabled: bool = True
@@ -244,6 +244,7 @@ class EnergyManagerInputs:
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None
     porsche_charging_ends: datetime | None = None
+    porsche_charging_power_w: float | None = None
     manual_clear_ev_latch: bool = False
     cheap_grid_charge_blocked_target_soc: float | None = None
 

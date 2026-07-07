@@ -63,4 +63,8 @@ def migrate_options(options: dict[str, object], data: dict[str, object] | None =
         migrated_options["grid_loss_notify_service"] = TEXT_DEFAULTS["grid_loss_notify_service"]
         changed = True
 
+    if migrated_options.get("ev_fallback_hold_minutes") == 180.0:
+        migrated_options["ev_fallback_hold_minutes"] = 15.0
+        changed = True
+
     return migrated_options, changed

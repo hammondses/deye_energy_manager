@@ -298,7 +298,7 @@ NUMBER_DEFAULTS = {
     "ev_active_load_threshold_w": 1000.0,
     "ev_stopped_load_threshold_w": 300.0,
     "ev_hold_extra_minutes": 10.0,
-    "ev_fallback_hold_minutes": 180.0,
+    "ev_fallback_hold_minutes": 15.0,
     "ev_bypass_program_power_w": 2000.0,
     "ev_restore_program_power_w": 12000.0,
     "grid_loss_voltage_threshold": 50.0,
