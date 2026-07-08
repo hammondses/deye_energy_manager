@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.26
+
+- Allow cheap-grid battery top-up to continue while EV/high house load is active until the calculated morning SOC target is reached.
+- Once EV/high load is active and the morning target is reached, turn grid charge off and preserve the battery above current SOC so the house and EV use grid instead of bleeding the battery.
+- Pause EV-time battery top-up when grid capacity is saturated and the battery is not charging, preserving just above current SOC to prevent top-up/drain cycling.
+
 ## v0.5.25
 
 - Mirror the old EV automation's fast restore logic by releasing EV bypass on a clear `>6kW` drop in either essential power or grid CT power.

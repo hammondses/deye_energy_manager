@@ -562,7 +562,7 @@ def test_deye_write_thrash_detector_flags_repeated_alternation() -> None:
     assert deye_write_thrash_detected(attempts, "number.deye_prog6_capacity", now)
 
 
-def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
+def test_ev_bypass_allows_cheap_grid_topup_below_morning_target() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,
         cheap_grid_charge_enabled=True,
@@ -579,13 +579,13 @@ def test_ev_bypass_does_not_clear_cheap_grid_preserve_target() -> None:
     )
 
     assert decision.ev_grid_bypass_required
-    assert decision.cheap_grid_mode == "ev_bypass"
+    assert decision.cheap_grid_mode == "ev_bypass_top_up_to_morning_target"
     assert decision.cheap_grid_preserve_required
-    assert not decision.grid_charge_required
+    assert decision.grid_charge_required
     assert decision.active_reserve_target_soc >= decision.morning_target_soc
 
 
-def test_ev_bypass_suspends_battery_grid_topup_until_ev_stops() -> None:
+def test_ev_bypass_preserves_above_soc_once_morning_target_reached() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,
         cheap_grid_charge_enabled=True,
@@ -595,22 +595,51 @@ def test_ev_bypass_suspends_battery_grid_topup_until_ev_stops() -> None:
         cheap_grid_preserve_soc=30,
     )
 
-    with_ev = decide(
-        base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=23, essential_power_w=7200, previous_essential_power_w=1000),
+    decision = decide(
+        base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=50.5, essential_power_w=7200, previous_essential_power_w=1000),
         settings,
     )
-    after_ev = decide(
-        base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=23, essential_power_w=1000, previous_essential_power_w=7200, ev_latch_on=True),
-        settings,
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.ev_grid_bypass_required
+    assert decision.cheap_grid_mode == "ev_bypass_preserve"
+    assert not decision.grid_charge_required
+    assert decision.cheap_grid_preserve_target_soc > decision.battery_soc
+    assert plan.capacity_targets["Prog4"] > int(decision.battery_soc)
+    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+
+
+def test_ev_bypass_pauses_topup_when_grid_capacity_is_saturated() -> None:
+    settings = EnergyManagerSettings(
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        cheap_grid_preserve_soc=30,
+        ev_restore_program_power_w=12000,
     )
 
-    assert with_ev.ev_grid_bypass_required
-    assert with_ev.cheap_grid_mode == "ev_bypass"
-    assert not with_ev.grid_charge_required
-    assert with_ev.active_reserve_target_soc >= with_ev.morning_target_soc
-    assert not after_ev.ev_grid_bypass_required
-    assert after_ev.cheap_grid_mode == "top_up_to_morning_target"
-    assert after_ev.grid_charge_required
+    decision = decide(
+        base_inputs(
+            now=dt(22),
+            forecast_tomorrow_kwh=23,
+            battery_soc=23,
+            battery_power_w=100,
+            grid_power_w=11200,
+            essential_power_w=9000,
+            previous_essential_power_w=1000,
+        ),
+        settings,
+    )
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.ev_grid_bypass_required
+    assert decision.cheap_grid_mode == "ev_bypass_preserve"
+    assert not decision.grid_charge_required
+    assert decision.cheap_grid_preserve_target_soc == 24
+    assert plan.capacity_targets["Prog4"] == 24
+    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
 
 
 def test_ev_start_and_stop_rules() -> None:
@@ -794,12 +823,12 @@ def test_ev_latch_release_allows_cheap_grid_topup() -> None:
     assert decision.grid_charge_required
 
 
-def test_ev_bypass_suppresses_battery_grid_charge() -> None:
+def test_ev_bypass_does_not_suppress_battery_grid_charge_below_morning_target() -> None:
     decision = decide(
         base_inputs(
             now=dt(4),
             forecast_tomorrow_kwh=12,
-            battery_soc=50,
+            battery_soc=20,
             ev_power_w=2000,
         ),
         EnergyManagerSettings(
@@ -810,7 +839,7 @@ def test_ev_bypass_suppresses_battery_grid_charge() -> None:
     )
 
     assert decision.ev_grid_bypass_required
-    assert not decision.grid_charge_required
+    assert decision.grid_charge_required
 
 
 def test_ev_bypass_uses_limited_program_power_not_zero() -> None:

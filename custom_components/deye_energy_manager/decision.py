@@ -388,6 +388,14 @@ def cheap_grid_state(
         and soc >= min(morning_target, blocked_target) - settings.cheap_grid_recharge_hysteresis_soc
         and heavy_target <= blocked_target + settings.cheap_grid_target_increase_hysteresis_soc
     )
+    ev_target_reached = ev_grid_bypass_required and soc is not None and soc >= morning_target - 0.25
+    ev_charge_saturated = (
+        ev_grid_bypass_required
+        and soc is not None
+        and soc < morning_target - 1.0
+        and inputs.grid_power_w >= settings.ev_restore_program_power_w * 0.85
+        and inputs.battery_power_w > -settings.ev_stopped_load_threshold_w
+    )
     heavy_required = (
         settings.cheap_grid_charge_enabled
         and soc is not None
@@ -404,14 +412,33 @@ def cheap_grid_state(
         and soc is not None
         and soc < morning_target - 1.0
         and not heavy_required
-        and not ev_grid_bypass_required
+        and not ev_target_reached
+        and not ev_charge_saturated
         and not charge_blocked_by_latch
     )
     charge_target = heavy_target if heavy_required else morning_target
     preserve_required = settings.cheap_grid_preserve_enabled
-    preserve_target = morning_target
+    preserve_target = min(100.0, soc + 1.0) if ev_grid_bypass_required and soc is not None else morning_target
 
-    if ev_grid_bypass_required:
+    if ev_charge_saturated:
+        mode = "ev_bypass_preserve"
+        reason = (
+            f"cheap_grid_ev_preserve: EV/high load using grid capacity; SOC {soc:.0f}% below 7am target "
+            f"{morning_target:.0f}% but battery is not charging, so preserve at {preserve_target:.0f}%"
+        )
+    elif ev_target_reached:
+        mode = "ev_bypass_preserve"
+        reason = (
+            f"cheap_grid_ev_preserve: SOC {soc:.0f}% reached 7am target {morning_target:.0f}%; "
+            f"preserve above current SOC at {preserve_target:.0f}% while EV/high load uses grid"
+        )
+    elif ev_grid_bypass_required and topup_required:
+        mode = "ev_bypass_top_up_to_morning_target"
+        reason = (
+            f"cheap_grid_ev_topup: SOC {soc:.0f}% below 7am target {morning_target:.0f}%; "
+            "allowing grid charge while EV/high load also uses cheap grid"
+        )
+    elif ev_grid_bypass_required:
         mode = "ev_bypass"
         reason = (
             "cheap_grid_mode=ev_bypass: EV cheap-grid bypass active; "
@@ -1775,7 +1802,6 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         settings.enabled
         and settings.grid_charge_control_enabled
         and cheap_grid_charge_required
-        and not (ev_grid_bypass_required or ev_latch_active)
     )
     effective_grid_charge_target_soc = cheap_grid_charge_target_soc if grid_charge_required else tier.grid_charge_target_soc
 
@@ -2252,7 +2278,7 @@ def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSett
     if settings.ev_control_enabled:
         value = settings.ev_bypass_program_power_w if decision.ev_grid_bypass_required else settings.ev_restore_program_power_w
         powers = {decision.active_slot: value}
-        if decision.ev_grid_bypass_required:
+        if decision.ev_grid_bypass_required and not decision.grid_charge_required:
             mode = "ev_grid_bypass"
             policy = "ev_grid_bypass"
             reason = decision.ev_decision_reason
