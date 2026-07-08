@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
-from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
@@ -81,6 +81,37 @@ def test_program_ranges_follow_row_order_and_disable_zero_length_rows() -> None:
     assert active_slot(dt(18)) == "Prog3"
     assert active_slot(dt(23)) == "Prog4"
     assert active_slot(dt(3)) == "Prog4"
+    assert cheap_grid_mirror_programs(EnergyManagerSettings(), "Prog4") == ("Prog5", "Prog6")
+
+
+def test_cheap_grid_plan_mirrors_duplicate_boundary_rows() -> None:
+    settings = EnergyManagerSettings(
+        deye_control_enabled=True,
+        grid_charge_control_enabled=True,
+        ev_control_enabled=True,
+        cheap_grid_charge_enabled=True,
+    )
+
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=18), settings)
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.active_slot == "Prog4"
+    assert decision.grid_charge_required
+    for slot in ("Prog4", "Prog5", "Prog6"):
+        assert plan.capacity_targets[slot] == 30
+        assert plan.charge_modes[slot] == "Allow Grid"
+        assert plan.power_targets[slot] == 12000
+
+
+def test_paid_time_plan_does_not_mirror_duplicate_boundary_rows() -> None:
+    settings = EnergyManagerSettings(deye_control_enabled=True, grid_charge_control_enabled=True)
+
+    decision = decide(base_inputs(now=dt(8), battery_soc=60), settings)
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.active_slot == "Prog1"
+    assert set(plan.capacity_targets) == {"Prog1"}
+    assert set(plan.charge_modes) == {"Prog1"}
 
 
 def test_heat_allowed_rules() -> None:
@@ -182,7 +213,10 @@ def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
     assert "Prog1" not in plan.capacity_targets
     assert "Prog2" not in plan.capacity_targets
     assert "Prog3" not in plan.capacity_targets
-    assert "Prog6" not in plan.capacity_targets
+    assert plan.capacity_targets["Prog5"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
+    assert plan.charge_modes["Prog5"] == "Allow Grid"
+    assert plan.charge_modes["Prog6"] == "Allow Grid"
     assert plan.grid_charge_enabled is True
 
 
@@ -260,7 +294,10 @@ def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
     assert "Prog1" not in plan.capacity_targets
     assert "Prog2" not in plan.capacity_targets
     assert "Prog3" not in plan.capacity_targets
-    assert "Prog6" not in plan.capacity_targets
+    assert plan.capacity_targets["Prog5"] == decision.morning_target_soc
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
+    assert plan.charge_modes["Prog5"] == "No Grid or Gen"
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
     assert plan.grid_charge_enabled is False
 
 
@@ -862,7 +899,7 @@ def test_ev_bypass_uses_limited_program_power_not_zero() -> None:
 
     assert decision.active_slot == "Prog4"
     assert decision.ev_grid_bypass_required
-    assert plan.power_targets == {"Prog4": 2000}
+    assert plan.power_targets == {"Prog4": 2000, "Prog5": 2000, "Prog6": 2000}
 
 
 def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:

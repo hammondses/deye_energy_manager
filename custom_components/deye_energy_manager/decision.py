@@ -108,6 +108,29 @@ def disabled_programs(settings: EnergyManagerSettings | None = None) -> list[str
     return [str(item["program"]) for item in program_ranges(settings) if item["disabled"]]
 
 
+def cheap_grid_mirror_programs(
+    settings: EnergyManagerSettings | None = None,
+    active_program: str = "Prog4",
+) -> tuple[str, ...]:
+    """Return duplicate boundary rows that must mirror the cheap-grid row.
+
+    Some Deye/Sunsynk installations still honour duplicated zero-length rows at
+    the cheap-grid boundary.  Keeping them aligned prevents stale rows such as
+    Prog6=65%/No Grid from blocking the active overnight grid charge.
+    """
+
+    ranges = program_ranges(settings)
+    cheap = next((item for item in ranges if item["program"] == active_program), None)
+    if cheap is None:
+        return ()
+    cheap_end = str(cheap["end"])
+    return tuple(
+        str(item["program"])
+        for item in ranges
+        if item["disabled"] and str(item["start"]) == cheap_end and str(item["end"]) == cheap_end
+    )
+
+
 def program_schedule_warning(settings: EnergyManagerSettings | None = None) -> str:
     """Return a diagnostic warning for duplicate Deye start times."""
 
@@ -2282,6 +2305,15 @@ def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSett
             mode = "ev_grid_bypass"
             policy = "ev_grid_bypass"
             reason = decision.ev_decision_reason
+
+    if decision.tariff_window == "cheap_grid":
+        for slot in cheap_grid_mirror_programs(settings, decision.active_slot):
+            if decision.active_slot in capacities:
+                capacities[slot] = capacities[decision.active_slot]
+            if decision.active_slot in charges:
+                charges[slot] = charges[decision.active_slot]
+            if decision.active_slot in powers:
+                powers[slot] = powers[decision.active_slot]
 
     if decision.thermal_should_emergency_shed:
         reason = f"{reason}; emergency thermal shed active, Deye writes not marked emergency unless inverter targets are required"

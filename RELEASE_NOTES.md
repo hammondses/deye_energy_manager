@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.27
+
+- Mirror cheap-grid Deye capacity, charge-source, and programme-power writes onto duplicate 07:00 boundary rows so stale Prog5/Prog6 settings cannot block overnight grid charging.
+- Include duplicate cheap-grid boundary rows in manual EV bypass/restore power writes.
+- Add regression coverage proving cheap-grid top-up writes Prog4/Prog5/Prog6 together while paid-time plans still only write the active paid row.
+
 ## v0.5.26
 
 - Allow cheap-grid battery top-up to continue while EV/high house load is active until the calculated morning SOC target is reached.

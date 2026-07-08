@@ -35,7 +35,7 @@ from .const import (
     PROG_POWER_ENTITIES,
     TEXT_DEFAULTS,
 )
-from .decision import build_deye_plan, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -1159,7 +1159,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         )
 
     def _enabled_program_slots(self) -> tuple[str, ...]:
-        return tuple(str(item["program"]) for item in program_ranges(self.settings) if not item["disabled"])
+        slots = [str(item["program"]) for item in program_ranges(self.settings) if not item["disabled"]]
+        for slot in cheap_grid_mirror_programs(self.settings):
+            if slot not in slots:
+                slots.append(slot)
+        return tuple(slots)
 
     async def _apply_deye_plan(self, plan: DeyePlan, *, force: bool = False, override_gates: bool = False) -> None:
         slot_to_capacity = {
