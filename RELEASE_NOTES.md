@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.28
+
+- Change the default Deye programme schedule to explicit row-order windows where Prog6 owns the cheap-grid period (`21:00 -> 07:00`), matching observed Sunsynk/Deye behaviour.
+- Migrate saved installs from the duplicate `07:00` zero-length Prog5/Prog6 schedule to the explicit Prog4 `20:50`, Prog5 `20:55`, Prog6 `21:00` schedule.
+- Keep legacy duplicate-row mirroring compatibility for installs that have not yet migrated.
+
 ## v0.5.27
 
 - Mirror cheap-grid Deye capacity, charge-source, and programme-power writes onto duplicate 07:00 boundary rows so stale Prog5/Prog6 settings cannot block overnight grid charging.

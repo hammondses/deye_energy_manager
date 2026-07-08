@@ -52,9 +52,11 @@ def test_forecast_tiers() -> None:
 
 def test_time_slots_and_tariff_windows() -> None:
     cases = [
-        (dt(22), "Prog4", "cheap_grid"),
-        (dt(3), "Prog4", "cheap_grid"),
-        (dt(5), "Prog4", "cheap_grid"),
+        (dt(20, 52), "Prog4", "peak"),
+        (dt(20, 57), "Prog5", "peak"),
+        (dt(22), "Prog6", "cheap_grid"),
+        (dt(3), "Prog6", "cheap_grid"),
+        (dt(5), "Prog6", "cheap_grid"),
         (dt(7, 30), "Prog1", "morning_solar_ramp"),
         (dt(14), "Prog2", "pre_peak_preserve"),
         (dt(18), "Prog3", "peak"),
@@ -72,19 +74,23 @@ def test_program_ranges_follow_row_order_and_disable_zero_length_rows() -> None:
     assert ranges[0]["start"] == "07:00"
     assert ranges[0]["end"] == "13:00"
     assert ranges[3]["program"] == "Prog4"
-    assert ranges[3]["start"] == "21:00"
-    assert ranges[3]["end"] == "07:00"
-    assert ranges[3]["wraps_midnight"]
-    assert disabled_programs(EnergyManagerSettings()) == ["Prog5", "Prog6"]
+    assert ranges[3]["start"] == "20:50"
+    assert ranges[3]["end"] == "20:55"
+    assert not ranges[3]["wraps_midnight"]
+    assert ranges[5]["program"] == "Prog6"
+    assert ranges[5]["start"] == "21:00"
+    assert ranges[5]["end"] == "07:00"
+    assert ranges[5]["wraps_midnight"]
+    assert disabled_programs(EnergyManagerSettings()) == []
     assert active_slot(dt(8)) == "Prog1"
     assert active_slot(dt(14)) == "Prog2"
     assert active_slot(dt(18)) == "Prog3"
-    assert active_slot(dt(23)) == "Prog4"
-    assert active_slot(dt(3)) == "Prog4"
-    assert cheap_grid_mirror_programs(EnergyManagerSettings(), "Prog4") == ("Prog5", "Prog6")
+    assert active_slot(dt(23)) == "Prog6"
+    assert active_slot(dt(3)) == "Prog6"
+    assert cheap_grid_mirror_programs(EnergyManagerSettings(), "Prog6") == ()
 
 
-def test_cheap_grid_plan_mirrors_duplicate_boundary_rows() -> None:
+def test_cheap_grid_plan_targets_prog6_owned_night_row() -> None:
     settings = EnergyManagerSettings(
         deye_control_enabled=True,
         grid_charge_control_enabled=True,
@@ -95,8 +101,27 @@ def test_cheap_grid_plan_mirrors_duplicate_boundary_rows() -> None:
     decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=18), settings)
     plan = build_deye_plan(decision, settings)
 
-    assert decision.active_slot == "Prog4"
+    assert decision.active_slot == "Prog6"
     assert decision.grid_charge_required
+    assert plan.capacity_targets == {"Prog6": 30}
+    assert plan.charge_modes == {"Prog6": "Allow Grid"}
+    assert plan.power_targets == {"Prog6": 12000}
+
+
+def test_cheap_grid_plan_mirrors_legacy_duplicate_boundary_rows() -> None:
+    settings = EnergyManagerSettings(
+        deye_control_enabled=True,
+        grid_charge_control_enabled=True,
+        ev_control_enabled=True,
+        cheap_grid_charge_enabled=True,
+        deye_program_start_times=("07:00", "13:00", "17:00", "21:00", "07:00", "07:00"),
+    )
+
+    decision = decide(base_inputs(now=dt(22), forecast_tomorrow_kwh=23, battery_soc=18), settings)
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.active_slot == "Prog4"
+    assert cheap_grid_mirror_programs(settings, "Prog4") == ("Prog5", "Prog6")
     for slot in ("Prog4", "Prog5", "Prog6"):
         assert plan.capacity_targets[slot] == 30
         assert plan.charge_modes[slot] == "Allow Grid"
@@ -176,7 +201,7 @@ def test_cheap_grid_preserve_is_separate_from_grid_charge() -> None:
     )
 
     assert decision.tariff_window == "cheap_grid"
-    assert decision.active_slot == "Prog4"
+    assert decision.active_slot == "Prog6"
     assert decision.cheap_grid_preserve_required
     assert 30 <= decision.morning_target_soc <= 35
     assert decision.cheap_grid_mode == "preserve"
@@ -208,15 +233,13 @@ def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
 
     plan = build_deye_plan(decision, settings)
     assert plan.mode == "top_up_to_morning_target"
-    assert plan.charge_modes["Prog4"] == "Allow Grid"
-    assert plan.capacity_targets["Prog4"] == decision.morning_target_soc
+    assert plan.charge_modes["Prog6"] == "Allow Grid"
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
     assert "Prog1" not in plan.capacity_targets
     assert "Prog2" not in plan.capacity_targets
     assert "Prog3" not in plan.capacity_targets
-    assert plan.capacity_targets["Prog5"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
-    assert plan.charge_modes["Prog5"] == "Allow Grid"
-    assert plan.charge_modes["Prog6"] == "Allow Grid"
+    assert "Prog4" not in plan.capacity_targets
+    assert "Prog5" not in plan.capacity_targets
     assert plan.grid_charge_enabled is True
 
 
@@ -289,15 +312,13 @@ def test_cheap_grid_at_morning_target_preserves_without_charging() -> None:
 
     plan = build_deye_plan(decision, settings)
     assert plan.mode == "preserve"
-    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog4"] == decision.morning_target_soc
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
     assert "Prog1" not in plan.capacity_targets
     assert "Prog2" not in plan.capacity_targets
     assert "Prog3" not in plan.capacity_targets
-    assert plan.capacity_targets["Prog5"] == decision.morning_target_soc
-    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
-    assert plan.charge_modes["Prog5"] == "No Grid or Gen"
-    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
+    assert "Prog4" not in plan.capacity_targets
+    assert "Prog5" not in plan.capacity_targets
     assert plan.grid_charge_enabled is False
 
 
@@ -424,8 +445,8 @@ def test_cheap_grid_high_soc_preserves_without_grid_charge() -> None:
     assert decision.cheap_grid_mode == "preserve"
     assert not decision.grid_charge_required
     assert 25 <= decision.morning_start_soc_target <= 30
-    assert plan.capacity_targets["Prog4"] == decision.morning_start_soc_target
-    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] == decision.morning_start_soc_target
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
     assert plan.grid_charge_enabled is False
 
 
@@ -440,7 +461,7 @@ def test_deye_plan_capacity_targets_are_whole_percent_values() -> None:
 
     plan = build_deye_plan(decision, settings)
 
-    assert plan.capacity_targets["Prog4"] == 51
+    assert plan.capacity_targets["Prog6"] == 51
     assert all(float(value).is_integer() for value in plan.capacity_targets.values())
     assert deye_capacity_percent(50.5242666666667) == 51
 
@@ -456,8 +477,8 @@ def test_cheap_grid_low_soc_charges_only_until_morning_target_then_preserves() -
 
     assert low.cheap_grid_mode == "top_up_to_morning_target"
     assert low.grid_charge_required
-    assert low_plan.capacity_targets["Prog4"] == low.morning_start_soc_target
-    assert low_plan.charge_modes["Prog4"] == "Allow Grid"
+    assert low_plan.capacity_targets["Prog6"] == low.morning_start_soc_target
+    assert low_plan.charge_modes["Prog6"] == "Allow Grid"
 
     reached = decide(
         base_inputs(now=dt(22), battery_soc=low.morning_start_soc_target, forecast_tomorrow_kwh=23),
@@ -467,8 +488,8 @@ def test_cheap_grid_low_soc_charges_only_until_morning_target_then_preserves() -
 
     assert reached.cheap_grid_mode == "preserve"
     assert not reached.grid_charge_required
-    assert reached_plan.capacity_targets["Prog4"] == reached.morning_start_soc_target
-    assert reached_plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert reached_plan.capacity_targets["Prog6"] == reached.morning_start_soc_target
+    assert reached_plan.charge_modes["Prog6"] == "No Grid or Gen"
 
 
 def test_heavy_charge_latch_prevents_immediate_reentry_after_target_reached() -> None:
@@ -492,8 +513,8 @@ def test_heavy_charge_latch_prevents_immediate_reentry_after_target_reached() ->
 
     assert decision.cheap_grid_mode == "preserve"
     assert not decision.grid_charge_required
-    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog4"] != 75
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] != 75
 
 
 def test_cheap_grid_active_program_does_not_emit_55_75_flapping_after_latch() -> None:
@@ -514,7 +535,7 @@ def test_cheap_grid_active_program_does_not_emit_55_75_flapping_after_latch() ->
             ),
             settings,
         )
-        outputs.append(build_deye_plan(decision, settings).capacity_targets["Prog4"])
+        outputs.append(build_deye_plan(decision, settings).capacity_targets["Prog6"])
 
     assert outputs != [55, 75, 55, 75]
     assert len(set(outputs)) == 1
@@ -543,8 +564,8 @@ def test_thermal_shed_during_cheap_grid_does_not_change_deye_plan() -> None:
     plan = build_deye_plan(decision, settings)
     assert plan.mode == "preserve"
     assert not plan.emergency
-    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog4"] == decision.morning_target_soc
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
     assert "Prog1" not in plan.capacity_targets
 
 
@@ -642,8 +663,8 @@ def test_ev_bypass_preserves_above_soc_once_morning_target_reached() -> None:
     assert decision.cheap_grid_mode == "ev_bypass_preserve"
     assert not decision.grid_charge_required
     assert decision.cheap_grid_preserve_target_soc > decision.battery_soc
-    assert plan.capacity_targets["Prog4"] > int(decision.battery_soc)
-    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] > int(decision.battery_soc)
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
 
 
 def test_ev_bypass_pauses_topup_when_grid_capacity_is_saturated() -> None:
@@ -675,8 +696,8 @@ def test_ev_bypass_pauses_topup_when_grid_capacity_is_saturated() -> None:
     assert decision.cheap_grid_mode == "ev_bypass_preserve"
     assert not decision.grid_charge_required
     assert decision.cheap_grid_preserve_target_soc == 24
-    assert plan.capacity_targets["Prog4"] == 24
-    assert plan.charge_modes["Prog4"] == "No Grid or Gen"
+    assert plan.capacity_targets["Prog6"] == 24
+    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
 
 
 def test_ev_start_and_stop_rules() -> None:
@@ -897,9 +918,9 @@ def test_ev_bypass_uses_limited_program_power_not_zero() -> None:
     )
     plan = build_deye_plan(decision, settings)
 
-    assert decision.active_slot == "Prog4"
+    assert decision.active_slot == "Prog6"
     assert decision.ev_grid_bypass_required
-    assert plan.power_targets == {"Prog4": 2000, "Prog5": 2000, "Prog6": 2000}
+    assert plan.power_targets == {"Prog6": 2000}
 
 
 def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:

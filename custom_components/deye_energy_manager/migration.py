@@ -5,6 +5,9 @@ from __future__ import annotations
 from .const import CONF_HEAT_LOADS, DEFAULT_HEAT_MODE, DEFAULT_THERMAL_ACTUATION_MODE, TEXT_DEFAULTS
 from .decision import slugify
 
+OLD_DUPLICATE_DEYE_PROGRAM_START_TIMES = ("07:00", "13:00", "17:00", "21:00", "07:00", "07:00")
+PROG6_CHEAP_GRID_START_TIMES = ("07:00", "13:00", "17:00", "20:50", "20:55", "21:00")
+
 
 def infer_load_slug(load: dict[str, object]) -> str:
     """Infer a stable load slug from known entity/name fields."""
@@ -65,6 +68,10 @@ def migrate_options(options: dict[str, object], data: dict[str, object] | None =
 
     if migrated_options.get("ev_fallback_hold_minutes") == 180.0:
         migrated_options["ev_fallback_hold_minutes"] = 15.0
+        changed = True
+
+    if tuple(migrated_options.get("deye_program_start_times", ())) == OLD_DUPLICATE_DEYE_PROGRAM_START_TIMES:
+        migrated_options["deye_program_start_times"] = PROG6_CHEAP_GRID_START_TIMES
         changed = True
 
     return migrated_options, changed

@@ -43,7 +43,7 @@ class EnergyManagerSettings:
     thermal_mode: str = "heating"
     thermal_actuation_mode: str = "advisory"
     flexible_load_priority: str = "battery_first"
-    deye_program_start_times: tuple[str, str, str, str, str, str] = ("07:00", "13:00", "17:00", "21:00", "07:00", "07:00")
+    deye_program_start_times: tuple[str, str, str, str, str, str] = ("07:00", "13:00", "17:00", "20:50", "20:55", "21:00")
     heat_soak_fan_mode: str = "high"
     heat_normal_fan_mode: str = "low"
     cool_soak_fan_mode: str = "high"
