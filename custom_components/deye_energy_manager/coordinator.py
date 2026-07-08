@@ -107,7 +107,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._paid_grid_import_since: datetime | None = None
         self._cheap_grid_session_date: str | None = None
         self._cheap_grid_charge_blocked_target_soc: float | None = None
-        self._last_grid_loss_notification_at: datetime | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
         self.load_diagnostics: dict[str, object] = {}
         self._remove_listeners: list[Callable[[], None]] = []
@@ -964,7 +963,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if dt_util.utcnow() - self.started_at < timedelta(seconds=60):
                 return
             settings = self.settings
-            await self._notify_grid_loss_if_needed(decision, settings)
             if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
                 await self._apply_deye_plan(build_deye_plan(decision, settings))
             if settings.heat_control_enabled or settings.thermal_control_enabled:
@@ -1112,51 +1110,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if state is None:
             return False, f"{entity_id} not found"
         if state.state in UNAVAILABLE:
-            return True, f"{entity_id} is {state.state}"
+            return False, f"{entity_id} is {state.state}"
         try:
             voltage = float(state.state)
         except (TypeError, ValueError):
-            return True, f"{entity_id} non-numeric state {state.state}"
+            return False, f"{entity_id} non-numeric state {state.state}"
         if voltage < settings.grid_loss_voltage_threshold:
             return True, f"{entity_id} {voltage:.1f}V < {settings.grid_loss_voltage_threshold:.0f}V"
         return False, f"{entity_id} {voltage:.1f}V"
-
-    async def _notify_grid_loss_if_needed(self, decision: EnergyManagerDecision, settings: EnergyManagerSettings) -> None:
-        if not settings.grid_loss_notification_enabled:
-            return
-        active, grid_reason = self._grid_loss_active(settings)
-        if not active:
-            return
-        now = dt_util.utcnow()
-        cooldown = timedelta(minutes=max(settings.grid_loss_notification_cooldown_minutes, 0.0))
-        if self._last_grid_loss_notification_at is not None and now - self._last_grid_loss_notification_at < cooldown:
-            return
-        self._last_grid_loss_notification_at = now
-        title = "Deye grid loss detected"
-        message = (
-            f"{grid_reason}. SOC {decision.battery_soc if decision.battery_soc is not None else 'unknown'}%, "
-            f"battery power {decision.battery_power_w:.0f}W, grid import {decision.grid_import_w:.0f}W, "
-            f"EV bypass {decision.ev_grid_bypass_required}, active slot {decision.active_slot}."
-        )
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {"notification_id": "deye_grid_loss_detected", "title": title, "message": message},
-            blocking=False,
-        )
-        notify_service = settings.grid_loss_notify_service.strip()
-        if not notify_service or notify_service == "persistent_notification":
-            return
-        domain, _, service = notify_service.partition(".")
-        if domain != "notify" or not service:
-            _LOGGER.warning("Invalid grid loss notify service %s", notify_service)
-            return
-        await self.hass.services.async_call(
-            domain,
-            service,
-            {"title": title, "message": message},
-            blocking=False,
-        )
 
     def _enabled_program_slots(self) -> tuple[str, ...]:
         slots = [str(item["program"]) for item in program_ranges(self.settings) if not item["disabled"]]

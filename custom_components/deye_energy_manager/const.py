@@ -209,7 +209,7 @@ FEATURE_DEFAULTS = {
     "ev_grid_bypass_enabled": False,
     "ev_solar_charging_enabled": False,
     "ev_cheap_grid_charging_enabled": True,
-    "grid_loss_notification_enabled": True,
+    "grid_loss_notification_enabled": False,
     "heat_control_enabled": False,
     "thermal_control_enabled": False,
     "direct_climate_control_enabled": False,

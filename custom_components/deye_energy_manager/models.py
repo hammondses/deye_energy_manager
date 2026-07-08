@@ -120,7 +120,7 @@ class EnergyManagerSettings:
     ev_fallback_hold_minutes: float = 15.0
     ev_bypass_program_power_w: float = 2000.0
     ev_restore_program_power_w: float = 12000.0
-    grid_loss_notification_enabled: bool = True
+    grid_loss_notification_enabled: bool = False
     grid_loss_voltage_threshold: float = 50.0
     grid_loss_notification_cooldown_minutes: float = 30.0
     grid_loss_notify_service: str = "notify.mobile_app_s26u"

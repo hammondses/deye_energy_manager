@@ -74,4 +74,8 @@ def migrate_options(options: dict[str, object], data: dict[str, object] | None =
         migrated_options["deye_program_start_times"] = PROG6_CHEAP_GRID_START_TIMES
         changed = True
 
+    if migrated_options.get("grid_loss_notification_enabled"):
+        migrated_options["grid_loss_notification_enabled"] = False
+        changed = True
+
     return migrated_options, changed

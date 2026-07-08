@@ -2008,6 +2008,13 @@ def test_grid_loss_notify_service_migrates_to_s26() -> None:
     assert options["grid_loss_notify_service"] == "notify.mobile_app_s26u"
 
 
+def test_grid_loss_integration_notification_migrates_off() -> None:
+    options, changed = migrate_options({"grid_loss_notification_enabled": True})
+
+    assert changed
+    assert options["grid_loss_notification_enabled"] is False
+
+
 def test_ev_fallback_hold_migrates_from_old_three_hour_default() -> None:
     options, changed = migrate_options({"ev_fallback_hold_minutes": 180.0})
 

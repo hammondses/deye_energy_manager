@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.29
+
+- Disable integration-owned grid-loss notifications by default and migrate saved installs to off, so Home Assistant restart/unavailable Modbus states do not create false outage alerts.
+- Stop treating unavailable/non-numeric grid-voltage state as grid loss inside the integration.
+- Remove the integration-side persistent/mobile grid-loss notification path; grid-loss alerting should be handled by a separate Home Assistant automation with proper startup/entity-availability guards.
+
 ## v0.5.28
 
 - Change the default Deye programme schedule to explicit row-order windows where Prog6 owns the cheap-grid period (`21:00 -> 07:00`), matching observed Sunsynk/Deye behaviour.
