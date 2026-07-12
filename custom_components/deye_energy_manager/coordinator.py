@@ -1236,9 +1236,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if decision.bedroom_heat_taper_recommended:
                 await self._direct_taper_bedroom_heat()
             if decision.overnight_protection_required:
-                await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, nonessential_only=True)
+                await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, nonessential_only=True, turn_off=True)
             elif decision.thermal_should_shed:
-                await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise)
+                await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, turn_off=True)
             elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
                 await self._direct_rotate_heat_load(decision)
             elif decision.thermal_load_to_add and (
@@ -1356,7 +1356,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self._schedule_runtime_save()
             return
 
-    async def _direct_shed_one_heat_load(self, preferred_name: str | None = None, nonessential_only: bool = False) -> None:
+    async def _direct_shed_one_heat_load(
+        self,
+        preferred_name: str | None = None,
+        nonessential_only: bool = False,
+        turn_off: bool = False,
+    ) -> None:
         owned_loads = []
         for load in self.heat_loads:
             if preferred_name and str(load.get("name", "")) != preferred_name:
@@ -1373,7 +1378,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
             if climate and self.hass.states.get(climate):
-                await self._normalise_or_turn_off_load(load)
+                if turn_off:
+                    await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+                else:
+                    await self._normalise_or_turn_off_load(load)
             if ownership and self.hass.states.get(ownership):
                 await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
             name = str(load.get("name", climate))
@@ -1417,7 +1425,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 continue
             climate = str(load.get("climate_entity", ""))
             if climate and self.hass.states.get(climate):
-                await self._normalise_or_turn_off_load(load)
+                await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
             if ownership and self.hass.states.get(ownership):
                 await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
             name = str(load.get("name", climate))

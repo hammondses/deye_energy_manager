@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.32
+
+- Turn heat loads off for battery-protection and emergency shed actions instead of restoring the normal 21 C target.
+- Prevent an overnight 17 C bedroom target from being raised to 21 C by a battery-discharge shed path.
+- Keep normal target restoration available for non-safety thermal rotation and manual normalisation workflows.
+
 ## v0.5.31
 
 - Keep manager-issued comfort targets owned during their confirmation window and compare later changes against the active lease target, not the higher solar-soak target.
