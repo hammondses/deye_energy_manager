@@ -618,13 +618,17 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 except (TypeError, ValueError):
                     current_temp = None
                     target_temp = None
+            lease = self._thermal_leases.get(name, {})
+            pending_until = lease.get("pending_confirmation_until")
+            pending_active = isinstance(pending_until, datetime) and pending_until > now
             configured_target = load.get("target_temp")
-            if ownership_state is not None and ownership_state.state == "on":
+            expected_target = lease.get("desired_temperature", configured_target)
+            if ownership_state is not None and ownership_state.state == "on" and not pending_active:
                 manually_off = climate_state is not None and climate_state.state == "off"
                 target_lowered = (
                     target_temp is not None
-                    and configured_target is not None
-                    and target_temp < float(configured_target) - 0.1
+                    and expected_target is not None
+                    and target_temp < float(expected_target) - 0.1
                 )
                 if manually_off or target_lowered:
                     self._block_heat_load(name, "manual off" if manually_off else "target lowered")
@@ -634,8 +638,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 self._heat_blocked_until.pop(name, None)
                 self._schedule_runtime_save()
                 blocked_until = None
-            lease = self._thermal_leases.get(name, {})
-            pending_until = lease.get("pending_confirmation_until")
             manual_until = lease.get("manual_override_until")
             if isinstance(manual_until, datetime) and manual_until <= now:
                 manual_until = None
@@ -647,7 +649,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             desired_hvac = lease.get("desired_hvac_mode")
             desired_temp = lease.get("desired_temperature")
             desired_fan = lease.get("desired_fan_mode")
-            pending_active = isinstance(pending_until, datetime) and pending_until > now
             desired_mismatch = (
                 bool(desired_hvac and climate_state is not None and climate_state.state not in {str(desired_hvac), *UNAVAILABLE})
                 or bool(desired_temp is not None and target_temp is not None and abs(target_temp - float(desired_temp)) > 0.4)

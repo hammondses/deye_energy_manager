@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.31
+
+- Keep manager-issued comfort targets owned during their confirmation window and compare later changes against the active lease target, not the higher solar-soak target.
+- Prevent a valid 21 C comfort action from being misclassified as a manual target reduction and blocked for the override cooldown.
+
 ## v0.5.30
 
 - Prevent direct thermal control from starting an arbitrary load when the decision selected no eligible export-soak candidate.
