@@ -640,6 +640,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if isinstance(manual_until, datetime) and manual_until <= now:
                 manual_until = None
                 lease["manual_override_until"] = None
+                if lease.get("owner") in {"manual", "external"}:
+                    lease["owner"] = "none"
+                    lease["lease_reason"] = "manual_override_expired"
                 self._schedule_runtime_save()
             desired_hvac = lease.get("desired_hvac_mode")
             desired_temp = lease.get("desired_temperature")
@@ -1237,7 +1240,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise)
             elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
                 await self._direct_rotate_heat_load(decision)
-            elif decision.thermal_action in {"morning_preheat", "overnight_dining_comfort", "underfloor_comfort", "comfort_heat"} or decision.thermal_allowed:
+            elif decision.thermal_load_to_add and (
+                decision.thermal_action in {"morning_preheat", "overnight_dining_comfort", "underfloor_comfort", "comfort_heat", "add_one"}
+            ):
                 await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
             return
         self.last_control_action = f"thermal actuation mode {mode} has no runtime actuator"
@@ -1282,23 +1287,32 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return None
 
     async def _direct_add_one_heat_load(self, preferred_name: str | None = None, decision: EnergyManagerDecision | None = None) -> None:
+        if decision is not None and not preferred_name:
+            self.last_control_action = "thermal hold: no eligible load selected"
+            return
+        effective_mode = decision.effective_thermal_mode if decision is not None else self._thermal_mode()
         for load in sorted(self.heat_loads, key=lambda item: int(item.get("priority", 999))):
             if preferred_name and str(load.get("name", "")) != preferred_name:
                 continue
             if not bool(load.get("enabled", True)):
                 continue
-            if self._thermal_mode() == "cooling" and not bool(load.get("supports_cooling", False)):
+            if effective_mode == "cooling" and not bool(load.get("supports_cooling", False)):
                 continue
-            if self._thermal_mode() == "heating" and not bool(load.get("supports_heating", True)):
+            if effective_mode == "heating" and not bool(load.get("supports_heating", True)):
                 continue
             climate = str(load.get("climate_entity", ""))
             ownership = str(load.get("ownership_entity", ""))
-            if not climate or self.hass.states.get(climate) is None:
+            climate_state = self.hass.states.get(climate) if climate else None
+            if climate_state is None or climate_state.state in UNAVAILABLE:
                 continue
             name = str(load.get("name", climate))
             if (blocked_until := self._heat_blocked_until.get(name)) and blocked_until > dt_util.now():
                 continue
             if ownership and (state := self.hass.states.get(ownership)) and state.state == "on":
+                continue
+            lease = self._thermal_leases.get(name, {})
+            manual_until = lease.get("manual_override_until")
+            if lease.get("owner") in {"manual", "external"} and isinstance(manual_until, datetime) and manual_until > dt_util.now():
                 continue
             hvac_mode = decision.thermal_target_hvac_mode if decision and decision.thermal_target_hvac_mode else self._hvac_mode()
             target = decision.thermal_target_temperature if decision and decision.thermal_target_temperature is not None else self._soak_target()
@@ -1377,7 +1391,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
     async def _direct_rotate_heat_load(self, decision: EnergyManagerDecision) -> None:
         await self._direct_shed_one_heat_load(decision.thermal_load_to_shed)
-        await self._direct_add_one_heat_load(decision.thermal_load_to_add)
+        await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
         now = dt_util.now()
         if decision.thermal_load_to_shed:
             self._thermal_last_rotated_at[decision.thermal_load_to_shed] = now
@@ -1457,7 +1471,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 name = str(load.get("name", climate))
                 now = dt_util.now()
                 self._thermal_last_action[name] = ("taper", self.last_control_action)
-                self._thermal_leases.setdefault(name, {})["last_manager_action_at"] = now
-                self._thermal_leases.setdefault(name, {})["pending_confirmation_until"] = now + timedelta(minutes=5)
+                lease = self._thermal_leases.setdefault(name, {})
+                lease["desired_temperature"] = self.settings.overnight_bedroom_taper_target_temp
+                lease["lease_reason"] = "overnight_bedroom_taper"
+                lease["last_manager_action_at"] = now
+                lease["pending_confirmation_until"] = now + timedelta(minutes=5)
                 self._schedule_runtime_save()
                 return

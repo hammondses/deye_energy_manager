@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.5.30
+
+- Prevent direct thermal control from starting an arbitrary load when the decision selected no eligible export-soak candidate.
+- Expire manual-override leases cleanly so previously blocked rooms can return to automatic control after their cooldown.
+- Preserve decision-specific HVAC mode, target, fan mode, and lease reason during thermal rotation, including automatic cooling decisions.
+- Reject unavailable climate entities before recording manager ownership, and keep manager-issued bedroom taper targets synchronized with runtime leases.
+- Exclude active manager-owned loads from comfort-add selection so an existing solar-soak target is not overwritten.
+
 ## v0.5.29
 
 - Disable integration-owned grid-loss notifications by default and migrate saved installs to off, so Home Assistant restart/unavailable Modbus states do not create false outage alerts.

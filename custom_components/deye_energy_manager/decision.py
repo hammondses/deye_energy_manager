@@ -792,14 +792,19 @@ def load_is_satisfied(load: HeatLoadState, settings: EnergyManagerSettings, mode
     return load.current_temp >= soak_target - settings.room_satisfied_delta_c
 
 
-def load_needs_soak(load: HeatLoadState, settings: EnergyManagerSettings, mode: str | None = None) -> bool:
+def load_needs_soak(
+    load: HeatLoadState,
+    settings: EnergyManagerSettings,
+    mode: str | None = None,
+    now: datetime | None = None,
+) -> bool:
     """Return whether a load still has useful thermal storage headroom."""
 
     if is_underfloor_load(load) and not load.allow_solar_soak:
         return False
     mode = mode or effective_thermal_mode(settings)
     soak_target, _normal_target = thermal_targets(settings, mode)
-    if load.blocked_until is not None or not load_supports_mode(load, mode):
+    if (load.blocked_until is not None and (now is None or load.blocked_until > now)) or not load_supports_mode(load, mode):
         return False
     if load.current_temp is None:
         return not load.solar_owned and not load.is_on
@@ -820,23 +825,35 @@ def satisfied_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSett
     ]
 
 
-def needy_heat_loads(loads: list[HeatLoadState], settings: EnergyManagerSettings, mode: str | None = None) -> list[HeatLoadState]:
+def needy_heat_loads(
+    loads: list[HeatLoadState],
+    settings: EnergyManagerSettings,
+    mode: str | None = None,
+    now: datetime | None = None,
+) -> list[HeatLoadState]:
     """Return off loads still materially away from soak target."""
 
     return [
         load
         for load in loads
-        if load.blocked_until is None
-        and load.owner not in {"manual", "external"}
-        and load.manual_override_until is None
+        if (load.blocked_until is None or (now is not None and load.blocked_until <= now))
+        and (
+            load.owner not in {"manual", "external"}
+            or (load.manual_override_until is not None and now is not None and load.manual_override_until <= now)
+        )
+        and (load.manual_override_until is None or (now is not None and load.manual_override_until <= now))
         and load.allow_solar_soak
         and not load.solar_owned
         and not load.is_on
-        and load_needs_soak(load, settings, mode)
+        and load_needs_soak(load, settings, mode, now)
     ]
 
 
-def comfort_heat_candidates(loads: list[HeatLoadState], settings: EnergyManagerSettings) -> list[HeatLoadState]:
+def comfort_heat_candidates(
+    loads: list[HeatLoadState],
+    settings: EnergyManagerSettings,
+    now: datetime | None = None,
+) -> list[HeatLoadState]:
     """Return loads cold enough for comfort heating."""
 
     return [
@@ -845,9 +862,14 @@ def comfort_heat_candidates(loads: list[HeatLoadState], settings: EnergyManagerS
         if load.enabled
         and load.supports_heating
         and not is_underfloor_load(load)
-        and load.blocked_until is None
-        and load.owner not in {"manual", "external"}
-        and load.manual_override_until is None
+        and (load.blocked_until is None or (now is not None and load.blocked_until <= now))
+        and (
+            load.owner not in {"manual", "external"}
+            or (load.manual_override_until is not None and now is not None and load.manual_override_until <= now)
+        )
+        and (load.manual_override_until is None or (now is not None and load.manual_override_until <= now))
+        and not load.solar_owned
+        and not load.is_on
         and load.current_temp is not None
         and load.current_temp < load_comfort_min_temp(load, settings)
     ]
@@ -1071,7 +1093,7 @@ def thermal_load_diagnostic(
     elif blocked_by_mode:
         blocked_reason = "unsupported_mode"
 
-    needs = load_needs_soak(load, settings, mode)
+    needs = load_needs_soak(load, settings, mode, inputs.now)
     satisfied = load_is_satisfied(load, settings, mode)
     active = load_is_active(load, mode)
     soak_fan_mode, normal_fan_mode = thermal_fan_modes(settings, mode)
@@ -1533,7 +1555,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     potential_soak_costs = [
         load_energy_cost_kwh(load, settings) + settings.solar_soak_required_battery_margin_kwh
-        for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode)
+        for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode, inputs.now)
         if cooldown_block_reason(load, settings, inputs.now, "add") is None
     ]
     smallest_soak_load_cost_kwh = min(potential_soak_costs) if potential_soak_costs else None
@@ -1567,7 +1589,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         )
     )
 
-    comfort_candidates = sorted(comfort_heat_candidates(inputs.heat_loads, settings), key=lambda load: load.priority)
+    comfort_candidates = sorted(comfort_heat_candidates(inputs.heat_loads, settings, inputs.now), key=lambda load: load.priority)
     comfort_heat_allowed = (
         settings.enabled
         and thermal_control_enabled
@@ -1744,7 +1766,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     add_candidates = sorted(
         [
             load
-            for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode)
+            for load in needy_heat_loads(inputs.heat_loads, settings, thermal_mode, inputs.now)
             if cooldown_block_reason(load, settings, inputs.now, "add") is None
             and (
                 (

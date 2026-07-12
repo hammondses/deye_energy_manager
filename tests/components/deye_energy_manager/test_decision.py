@@ -1686,6 +1686,73 @@ def test_per_load_diagnostic_explains_cooldown() -> None:
     assert "min rest" in str(diagnostic.attributes["blocked_reason"])
 
 
+def test_expired_manual_override_is_eligible_for_export_soak() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=95,
+            grid_power_w=-5000,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    current_temp=18,
+                    blocked_until=dt(11),
+                    manual_override_until=dt(11),
+                    owner="external",
+                    estimated_load_w=2000,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.thermal_load_to_add == "Office"
+    assert decision.thermal_action == "comfort_heat"
+
+
+def test_active_manual_override_remains_blocked_during_export_soak() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=95,
+            grid_power_w=-5000,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    current_temp=18,
+                    blocked_until=dt(13),
+                    manual_override_until=dt(13),
+                    owner="external",
+                    estimated_load_w=2000,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.thermal_load_to_add is None
+    assert decision.thermal_action == "hold"
+
+
+def test_comfort_heat_does_not_reselect_active_owned_load() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=95,
+            grid_power_w=-5000,
+            heat_loads=[
+                HeatLoadState(name="Owned", priority=1, current_temp=15, is_on=True, solar_owned=True),
+                HeatLoadState(name="Office", priority=2, current_temp=18, estimated_load_w=2000),
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+
+    assert decision.thermal_load_to_add == "Office"
+
+
 def test_auto_mode_chooses_heating_from_outdoor_temp() -> None:
     decision = decide(
         base_inputs(now=dt(12), outdoor_temperature=9.5),
