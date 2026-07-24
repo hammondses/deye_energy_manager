@@ -105,6 +105,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._thermal_last_action: dict[str, tuple[str, str]] = {}
         self._thermal_leases: dict[str, dict[str, object]] = {}
         self._paid_grid_import_since: datetime | None = None
+        self._last_cooling_write_at: datetime | None = None
         self._cheap_grid_session_date: str | None = None
         self._cheap_grid_charge_blocked_target_soc: float | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
@@ -292,6 +293,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             thermal_control_enabled=bool(options["thermal_control_enabled"] or options["heat_control_enabled"]),
             direct_climate_control_enabled=bool(options["direct_climate_control_enabled"]),
             pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
+            inverter_cooling_control_enabled=bool(options["inverter_cooling_control_enabled"]),
             export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
             return_to_normal_on_shed_enabled=bool(options["return_to_normal_on_shed_enabled"]),
             forecast_full_override_enabled=bool(options["forecast_full_override_enabled"]),
@@ -414,6 +416,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             emergency_shed_discharge_w=float(options.get("emergency_shed_discharge_w", options["thermal_emergency_shed_w"])),
             battery_capacity_kwh=float(options["battery_capacity_kwh"]),
             overnight_bedroom_taper_target_temp=float(options["overnight_bedroom_taper_target_temp"]),
+            cooling_target_temp_c=float(options["cooling_target_temp_c"]),
+            cooling_curve_idle_fan_pct=float(options["cooling_curve_idle_fan_pct"]),
+            cooling_curve_fan_pct_per_kw=float(options["cooling_curve_fan_pct_per_kw"]),
+            cooling_temperature_gain_pct_per_c=float(options["cooling_temperature_gain_pct_per_c"]),
+            cooling_min_active_fan_pct=float(options["cooling_min_active_fan_pct"]),
+            cooling_max_normal_fan_pct=float(options["cooling_max_normal_fan_pct"]),
+            cooling_emergency_temp_c=float(options["cooling_emergency_temp_c"]),
+            cooling_failsafe_fan_pct=float(options["cooling_failsafe_fan_pct"]),
         )
 
     def _legacy_thermal_actuation_mode(self, options: dict[str, object]) -> str:
@@ -474,6 +484,27 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return float(state.state)
         except (TypeError, ValueError):
             return None
+
+    def _cooling_fan_percentage(self) -> float | None:
+        entity_id = self.entity_map.get("inverter_cooling_fan")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return None
+        if state.state == "off":
+            return 0.0
+        try:
+            return float(state.attributes.get("percentage"))
+        except (TypeError, ValueError):
+            return None
+
+    def _cooling_temperature_valid(self, now: datetime) -> bool:
+        entity_id = self.entity_map.get("inverter_ac_temperature")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return bool(
+            state is not None
+            and state.state not in UNAVAILABLE
+            and (now - state.last_updated).total_seconds() <= 600
+        )
 
     def _entity_state_string(self, entity_id: str | None) -> str | None:
         state = self.hass.states.get(entity_id) if entity_id else None
@@ -776,6 +807,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
             cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,
+            inverter_ac_temperature_c=self._state_float("inverter_ac_temperature"),
+            inverter_dc_temperature_c=self._state_float("inverter_dc_temperature"),
+            inverter_pv_power_w=self._state_float("inverter_pv_power"),
+            inverter_ac_power_w=self._state_float("inverter_ac_power"),
+            cooling_fan_percentage=self._cooling_fan_percentage(),
+            cooling_temperature_valid=self._cooling_temperature_valid(now),
         )
         decision = decide(inputs, settings)
         self._update_cheap_grid_session_state(decision)
@@ -967,10 +1004,52 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if dt_util.utcnow() - self.started_at < timedelta(seconds=60):
                 return
             settings = self.settings
+            if settings.inverter_cooling_control_enabled:
+                await self._apply_inverter_cooling(decision)
             if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
                 await self._apply_deye_plan(build_deye_plan(decision, settings))
             if settings.heat_control_enabled or settings.thermal_control_enabled:
                 await self._apply_heat(decision)
+
+    async def _apply_inverter_cooling(self, decision: EnergyManagerDecision) -> None:
+        """Apply the gated external-fan recommendation without rapid reductions."""
+
+        entity_id = self.entity_map.get("inverter_cooling_fan")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return
+        current = self._cooling_fan_percentage()
+        desired = int(decision.cooling_recommended_fan_pct)
+        if current is not None and abs(current - desired) < 4.9:
+            return
+
+        now = dt_util.utcnow()
+        emergency = decision.cooling_raw_required_fan_pct >= 100.0
+        if self._last_cooling_write_at is not None and not emergency:
+            elapsed = now - self._last_cooling_write_at
+            if current is not None and desired < current and elapsed < timedelta(minutes=5):
+                return
+            if elapsed < timedelta(minutes=1):
+                return
+
+        if desired <= 0:
+            await self.hass.services.async_call(
+                "fan",
+                "turn_off",
+                {"entity_id": entity_id},
+                blocking=False,
+            )
+        else:
+            await self.hass.services.async_call(
+                "fan",
+                "set_percentage",
+                {"entity_id": entity_id, "percentage": desired},
+                blocking=False,
+            )
+        self._last_cooling_write_at = now
+        self.last_control_action = (
+            f"inverter cooling fan -> {desired}%: {decision.cooling_reason}"
+        )
 
     async def _call_number_set(self, entity_id: str, value: float, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
         if entity_id in PROG_CAPACITY_ENTITIES:

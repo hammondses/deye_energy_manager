@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.33
+
+- Add load-fed external inverter fan control targeting a steady AC temperature, with temperature feedback, slow fan-speed reductions, stale-temperature failsafe, and a 100% emergency path.
+- Keep automatic fan writes behind the new `inverter_cooling_control_enabled` gate, which defaults off.
+- Expose adjustable curve intercept, percentage-per-kW slope, temperature gain, target, normal limit, emergency temperature, and failsafe percentage.
+- Add recorder-friendly AC/DC temperature, PV/AC/battery power, effective throughput, actual fan speed, baseline, temperature trim, raw cooling need, recommended fan speed, and reason sensors for later curve fitting.
+
 ## v0.5.32
 
 - Turn heat loads off for battery-protection and emergency shed actions instead of restoring the normal 21 C target.

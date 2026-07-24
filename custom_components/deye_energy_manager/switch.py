@@ -26,6 +26,7 @@ SWITCHES = {
     "thermal_control_enabled": "Thermal control enabled",
     "direct_climate_control_enabled": "Direct climate control enabled",
     "pv_load_test_control_enabled": "PV load test control enabled",
+    "inverter_cooling_control_enabled": "Inverter cooling control enabled",
     "export_limited_mode_enabled": "Export limited mode enabled",
     "return_to_normal_on_shed_enabled": "Return to normal on shed enabled",
     "forecast_full_override_enabled": "Forecast full override enabled",

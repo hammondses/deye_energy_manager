@@ -24,6 +24,7 @@ class EnergyManagerSettings:
     thermal_control_enabled: bool = False
     direct_climate_control_enabled: bool = False
     pv_load_test_control_enabled: bool = False
+    inverter_cooling_control_enabled: bool = False
     export_limited_mode_enabled: bool = False
     return_to_normal_on_shed_enabled: bool = True
     forecast_full_override_enabled: bool = True
@@ -147,6 +148,14 @@ class EnergyManagerSettings:
     emergency_shed_discharge_w: float = 4000.0
     battery_capacity_kwh: float = 30.0
     overnight_bedroom_taper_target_temp: float = 18.0
+    cooling_target_temp_c: float = 43.0
+    cooling_curve_idle_fan_pct: float = 15.0
+    cooling_curve_fan_pct_per_kw: float = 3.5
+    cooling_temperature_gain_pct_per_c: float = 5.0
+    cooling_min_active_fan_pct: float = 10.0
+    cooling_max_normal_fan_pct: float = 70.0
+    cooling_emergency_temp_c: float = 48.0
+    cooling_failsafe_fan_pct: float = 50.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +256,12 @@ class EnergyManagerInputs:
     porsche_charging_ends: datetime | None = None
     manual_clear_ev_latch: bool = False
     cheap_grid_charge_blocked_target_soc: float | None = None
+    inverter_ac_temperature_c: float | None = None
+    inverter_dc_temperature_c: float | None = None
+    inverter_pv_power_w: float | None = None
+    inverter_ac_power_w: float | None = None
+    cooling_fan_percentage: float | None = None
+    cooling_temperature_valid: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,6 +434,32 @@ class EnergyManagerDecision:
     disabled_programs: list[str] = field(default_factory=list)
     logical_tariff_window: str = "unknown"
     program_schedule_warning: str = "none"
+    inverter_ac_temperature_c: float | None = None
+    inverter_dc_temperature_c: float | None = None
+    inverter_pv_power_w: float = 0.0
+    inverter_ac_power_w: float = 0.0
+    cooling_battery_power_w: float = 0.0
+    cooling_throughput_w: float = 0.0
+    cooling_actual_fan_pct: float | None = None
+    cooling_curve_baseline_pct: float = 0.0
+    cooling_temperature_error_c: float | None = None
+    cooling_temperature_trim_pct: float = 0.0
+    cooling_raw_required_fan_pct: float = 0.0
+    cooling_recommended_fan_pct: float = 0.0
+    cooling_reason: str = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class CoolingRecommendation:
+    """Pure inverter cooling recommendation and its curve components."""
+
+    throughput_w: float
+    baseline_pct: float
+    temperature_error_c: float | None
+    temperature_trim_pct: float
+    raw_required_pct: float
+    recommended_pct: float
+    reason: str
 
 
 @dataclass(slots=True)

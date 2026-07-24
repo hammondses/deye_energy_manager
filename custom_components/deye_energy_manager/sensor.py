@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -69,6 +69,19 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="thermal_export_margin_w", name="Thermal export margin", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.thermal_export_margin_w),
     DeyeSensorDescription(key="export_soak_reason", name="Export soak reason", value_fn=lambda d: d.export_soak_reason),
     DeyeSensorDescription(key="pv_power_now_w", name="PV power now", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.pv_power_now_w),
+    DeyeSensorDescription(key="inverter_ac_temperature", name="Inverter AC temperature", native_unit_of_measurement=UnitOfTemperature.CELSIUS, device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.inverter_ac_temperature_c),
+    DeyeSensorDescription(key="inverter_dc_temperature", name="Inverter DC temperature", native_unit_of_measurement=UnitOfTemperature.CELSIUS, device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.inverter_dc_temperature_c),
+    DeyeSensorDescription(key="cooling_pv_power", name="Cooling PV power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.inverter_pv_power_w),
+    DeyeSensorDescription(key="cooling_ac_power", name="Cooling AC power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.inverter_ac_power_w),
+    DeyeSensorDescription(key="cooling_battery_power", name="Cooling battery power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_battery_power_w),
+    DeyeSensorDescription(key="cooling_throughput", name="Cooling throughput", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_throughput_w),
+    DeyeSensorDescription(key="cooling_actual_fan_percentage", name="Cooling actual fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_actual_fan_pct),
+    DeyeSensorDescription(key="cooling_curve_baseline", name="Cooling curve baseline", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_curve_baseline_pct),
+    DeyeSensorDescription(key="cooling_temperature_error", name="Cooling temperature error", native_unit_of_measurement=UnitOfTemperature.CELSIUS, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_temperature_error_c),
+    DeyeSensorDescription(key="cooling_temperature_trim", name="Cooling temperature trim", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_temperature_trim_pct),
+    DeyeSensorDescription(key="cooling_raw_required_fan_percentage", name="Cooling raw required fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_raw_required_fan_pct),
+    DeyeSensorDescription(key="cooling_recommended_fan_percentage", name="Cooling recommended fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_recommended_fan_pct),
+    DeyeSensorDescription(key="cooling_reason", name="Cooling reason", value_fn=lambda d: d.cooling_reason),
     DeyeSensorDescription(key="expected_action", name="Expected action", value_fn=lambda d: d.expected_action),
     DeyeSensorDescription(key="thermal_expected_action", name="Thermal expected action", value_fn=lambda d: d.thermal_action),
     DeyeSensorDescription(key="thermal_action_reason", name="Thermal action reason", value_fn=lambda d: d.thermal_action_reason),
@@ -182,6 +195,26 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
                 "soc_age_minutes": decision.soc_age_minutes,
                 "last_good_soc": decision.last_good_soc,
                 "last_good_updated": decision.last_good_soc_updated.isoformat() if decision.last_good_soc_updated else None,
+            }
+        if self.entity_description.key == "cooling_recommended_fan_percentage":
+            decision = self.coordinator.data
+            if decision is None:
+                return None
+            settings = self.coordinator.settings
+            return {
+                "reason": decision.cooling_reason,
+                "raw_required_percentage": decision.cooling_raw_required_fan_pct,
+                "actual_percentage": decision.cooling_actual_fan_pct,
+                "throughput_w": decision.cooling_throughput_w,
+                "pv_power_w": decision.inverter_pv_power_w,
+                "ac_power_w": decision.inverter_ac_power_w,
+                "battery_power_w": decision.cooling_battery_power_w,
+                "ac_temperature_c": decision.inverter_ac_temperature_c,
+                "dc_temperature_c": decision.inverter_dc_temperature_c,
+                "curve_idle_percentage": settings.cooling_curve_idle_fan_pct,
+                "curve_percentage_per_kw": settings.cooling_curve_fan_pct_per_kw,
+                "target_temperature_c": settings.cooling_target_temp_c,
+                "temperature_gain_percentage_per_c": settings.cooling_temperature_gain_pct_per_c,
             }
         return None
 

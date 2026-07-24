@@ -1,6 +1,6 @@
 # Deye Energy Manager
 
-Home Assistant custom integration for Deye battery reserve planning, Solcast-aware grid charging, EV grid-bypass policy, thermal storage control, and diagnostics.
+Home Assistant custom integration for Deye battery reserve planning, Solcast-aware grid charging, EV grid-bypass policy, inverter cooling, thermal storage control, and diagnostics.
 
 The integration defaults to advisory/read-only behavior:
 
@@ -34,6 +34,7 @@ Actual writes are guarded by explicit toggles:
 - `switch.deye_energy_manager_thermal_control_enabled`
 - `switch.deye_energy_manager_heat_control_enabled`
 - `switch.deye_energy_manager_direct_climate_control_enabled`
+- `switch.deye_energy_manager_inverter_cooling_control_enabled`
 
 Leave these off until advisory sensors match the current automations.
 
@@ -70,12 +71,57 @@ Diagnostics:
 Options are split into sections in the integration UI:
 
 - Controls
+- Inverter Cooling
 - Thermal
 - EV
 - Battery
 - Managed Loads
 - Entity Mapping
 - Legacy
+
+## Inverter Cooling
+
+External inverter fan control uses a load-fed curve with AC-temperature feedback:
+
+```text
+baseline fan % = cooling_curve_idle_fan_pct
+               + cooling_throughput_kW * cooling_curve_fan_pct_per_kw
+
+required fan % = baseline fan %
+               + (AC temperature - cooling_target_temp_c)
+               * cooling_temperature_gain_pct_per_c
+```
+
+Cooling throughput is the highest absolute value of local PV input, inverter AC output, and battery power, avoiding double-counting the same energy through multiple conversion paths. Normal output is rounded to 5% steps. Increases are immediate, while reductions are limited to one 5% step and one write every five minutes. AC temperature at the emergency threshold commands 100%; a missing or stale AC temperature commands the configured failsafe percentage.
+
+Automatic fan writes remain off until `switch.deye_energy_manager_inverter_cooling_control_enabled` is enabled. Curve controls:
+
+- `number.deye_energy_manager_cooling_target_temperature`
+- `number.deye_energy_manager_cooling_curve_idle_fan`
+- `number.deye_energy_manager_cooling_curve_fan_per_kw`
+- `number.deye_energy_manager_cooling_temperature_gain`
+- `number.deye_energy_manager_cooling_minimum_active_fan`
+- `number.deye_energy_manager_cooling_maximum_normal_fan`
+- `number.deye_energy_manager_cooling_emergency_temperature`
+- `number.deye_energy_manager_cooling_failsafe_fan`
+
+Recorder-friendly correlation sensors:
+
+- `sensor.deye_energy_manager_inverter_ac_temperature`
+- `sensor.deye_energy_manager_inverter_dc_temperature`
+- `sensor.deye_energy_manager_cooling_pv_power`
+- `sensor.deye_energy_manager_cooling_ac_power`
+- `sensor.deye_energy_manager_cooling_battery_power`
+- `sensor.deye_energy_manager_cooling_throughput`
+- `sensor.deye_energy_manager_cooling_actual_fan_percentage`
+- `sensor.deye_energy_manager_cooling_curve_baseline`
+- `sensor.deye_energy_manager_cooling_temperature_error`
+- `sensor.deye_energy_manager_cooling_temperature_trim`
+- `sensor.deye_energy_manager_cooling_raw_required_fan_percentage`
+- `sensor.deye_energy_manager_cooling_recommended_fan_percentage`
+- `sensor.deye_energy_manager_cooling_reason`
+
+The default mappings use `sensor.deye_ac_temperature`, `sensor.deye_total_pv_power`, `sensor.deye_inverter_power`, `sensor.deye_battery_power`, and `fan.deye_external_fans_cooling_fans`. DC temperature is optional and can be selected under Entity Mapping.
 
 ## Thermal Storage
 

@@ -116,6 +116,14 @@ NUMBERS = (
     DeyeNumberDescription(key="battery_capacity_kwh", name="Battery capacity", native_min_value=1, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["battery_capacity_kwh"]),
     DeyeNumberDescription(key="overnight_bedroom_taper_target_temp", name="Overnight bedroom taper target", native_min_value=5, native_max_value=30, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["overnight_bedroom_taper_target_temp"]),
     DeyeNumberDescription(key="max_fallback_soc_age_minutes", name="Max fallback SOC age", native_min_value=0, native_step=5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["max_fallback_soc_age_minutes"]),
+    DeyeNumberDescription(key="cooling_target_temp_c", name="Cooling target temperature", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=35, native_max_value=47, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_target_temp_c"]),
+    DeyeNumberDescription(key="cooling_curve_idle_fan_pct", name="Cooling curve idle fan", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=50, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_curve_idle_fan_pct"]),
+    DeyeNumberDescription(key="cooling_curve_fan_pct_per_kw", name="Cooling curve fan per kW", native_unit_of_measurement="%/kW", native_min_value=0, native_max_value=10, native_step=0.1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_curve_fan_pct_per_kw"]),
+    DeyeNumberDescription(key="cooling_temperature_gain_pct_per_c", name="Cooling temperature gain", native_unit_of_measurement="%/°C", native_min_value=0, native_max_value=20, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_temperature_gain_pct_per_c"]),
+    DeyeNumberDescription(key="cooling_min_active_fan_pct", name="Cooling minimum active fan", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=50, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_min_active_fan_pct"]),
+    DeyeNumberDescription(key="cooling_max_normal_fan_pct", name="Cooling maximum normal fan", native_unit_of_measurement=PERCENTAGE, native_min_value=30, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_max_normal_fan_pct"]),
+    DeyeNumberDescription(key="cooling_emergency_temp_c", name="Cooling emergency temperature", native_unit_of_measurement=UnitOfTemperature.CELSIUS, native_min_value=45, native_max_value=55, native_step=0.5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_emergency_temp_c"]),
+    DeyeNumberDescription(key="cooling_failsafe_fan_pct", name="Cooling failsafe fan", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["cooling_failsafe_fan_pct"]),
 )
 
 

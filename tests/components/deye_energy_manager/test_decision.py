@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
-from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
+from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, inverter_cooling_recommendation, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
@@ -48,6 +48,83 @@ def test_forecast_tiers() -> None:
         assert decision.forecast_mode == mode
         assert decision.target_17_soc == target_17
         assert decision.grid_charge_target_soc == grid_target
+
+
+def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            battery_power_w=-6000,
+            essential_power_w=2000,
+            inverter_pv_power_w=10000,
+            inverter_ac_power_w=3000,
+            inverter_ac_temperature_c=43,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert recommendation.throughput_w == 10000
+    assert recommendation.baseline_pct == 50
+    assert recommendation.temperature_trim_pct == 0
+    assert recommendation.raw_required_pct == 50
+    assert recommendation.recommended_pct == 50
+
+
+def test_inverter_cooling_reduces_only_one_step_below_curve() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            essential_power_w=1000,
+            inverter_ac_temperature_c=35,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=50,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert recommendation.raw_required_pct == 10
+    assert recommendation.recommended_pct == 45
+
+
+def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
+    emergency = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_ac_temperature_c=48,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=20,
+        ),
+        EnergyManagerSettings(),
+    )
+    stale = inverter_cooling_recommendation(
+        base_inputs(
+            essential_power_w=100,
+            inverter_ac_temperature_c=30,
+            cooling_temperature_valid=False,
+            cooling_fan_percentage=20,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert emergency.raw_required_pct == 100
+    assert emergency.recommended_pct == 100
+    assert stale.raw_required_pct == 50
+    assert "failsafe" in stale.reason
+
+
+def test_inverter_cooling_turns_off_only_when_cool_and_idle() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            essential_power_w=100,
+            inverter_ac_power_w=100,
+            inverter_ac_temperature_c=30,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=5,
+        ),
+        EnergyManagerSettings(),
+    )
+
+    assert recommendation.raw_required_pct == 0
+    assert recommendation.recommended_pct == 0
 
 
 def test_time_slots_and_tariff_windows() -> None:

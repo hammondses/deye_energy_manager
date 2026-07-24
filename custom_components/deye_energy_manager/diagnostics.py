@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.5.14",
+        "version": "0.5.33",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -102,6 +102,22 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "power_w": decision.battery_power_w if decision else None,
             "charge_w": decision.battery_charge_w if decision else None,
             "discharge_w": decision.battery_discharge_w if decision else None,
+        },
+        "inverter_cooling": {
+            "control_enabled": coordinator.settings.inverter_cooling_control_enabled,
+            "ac_temperature_c": decision.inverter_ac_temperature_c if decision else None,
+            "dc_temperature_c": decision.inverter_dc_temperature_c if decision else None,
+            "pv_power_w": decision.inverter_pv_power_w if decision else None,
+            "ac_power_w": decision.inverter_ac_power_w if decision else None,
+            "battery_power_w": decision.cooling_battery_power_w if decision else None,
+            "throughput_w": decision.cooling_throughput_w if decision else None,
+            "actual_fan_pct": decision.cooling_actual_fan_pct if decision else None,
+            "curve_baseline_pct": decision.cooling_curve_baseline_pct if decision else None,
+            "temperature_error_c": decision.cooling_temperature_error_c if decision else None,
+            "temperature_trim_pct": decision.cooling_temperature_trim_pct if decision else None,
+            "raw_required_fan_pct": decision.cooling_raw_required_fan_pct if decision else None,
+            "recommended_fan_pct": decision.cooling_recommended_fan_pct if decision else None,
+            "reason": decision.cooling_reason if decision else None,
         },
         "entity_map": coordinator.entity_map,
         "managed_thermal_loads": coordinator.heat_loads,

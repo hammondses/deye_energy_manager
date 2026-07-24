@@ -23,6 +23,10 @@
         "title": "Controls",
         "description": "Top-level control gates and flexible-load priority."
       },
+      "cooling": {
+        "title": "Inverter cooling",
+        "description": "External fan control, load curve, temperature feedback, and safety limits."
+      },
       "thermal": {
         "title": "Thermal",
         "description": "Thermal storage mode, actuation, temperatures, thresholds, and rotation."

@@ -334,6 +334,37 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
+def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(
+                "inverter_cooling_control_enabled",
+                default=defaults.get("inverter_cooling_control_enabled", False),
+            ): selector.BooleanSelector(),
+            **{
+                vol.Required(key, default=defaults.get(key, NUMBER_DEFAULTS[key])): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        mode=selector.NumberSelectorMode.BOX,
+                        min=minimum,
+                        max=maximum,
+                        step=step,
+                    )
+                )
+                for key, minimum, maximum, step in (
+                    ("cooling_target_temp_c", 35, 47, 0.5),
+                    ("cooling_curve_idle_fan_pct", 0, 50, 1),
+                    ("cooling_curve_fan_pct_per_kw", 0, 10, 0.1),
+                    ("cooling_temperature_gain_pct_per_c", 0, 20, 0.5),
+                    ("cooling_min_active_fan_pct", 0, 50, 1),
+                    ("cooling_max_normal_fan_pct", 30, 100, 1),
+                    ("cooling_emergency_temp_c", 45, 55, 0.5),
+                    ("cooling_failsafe_fan_pct", 0, 100, 1),
+                )
+            },
+        }
+    )
+
+
 def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
     keys = [
         "forecast_safety_buffer_kwh",
@@ -439,7 +470,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         return self.async_show_menu(
             step_id="init",
-            menu_options=["controls", "thermal", "ev", "battery", "loads", "entities", "legacy"],
+            menu_options=["controls", "cooling", "thermal", "ev", "battery", "loads", "entities", "legacy"],
         )
 
     async def async_step_controls(self, user_input: dict[str, Any] | None = None):
@@ -453,6 +484,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             self._options.update(user_input)
             return self.async_create_entry(title="", data=self._options)
         return self.async_show_form(step_id="thermal", data_schema=_thermal_schema(self._options))
+
+    async def async_step_cooling(self, user_input: dict[str, Any] | None = None):
+        if user_input is not None:
+            self._options.update(user_input)
+            return self.async_create_entry(title="", data=self._options)
+        return self.async_show_form(step_id="cooling", data_schema=_cooling_schema(self._options))
 
     async def async_step_ev(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:

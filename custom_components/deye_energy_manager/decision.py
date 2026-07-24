@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 
-from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState, ThermalLoadDiagnostic
+from .models import CoolingRecommendation, DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState, ThermalLoadDiagnostic
 
 FORECAST_TIERS = [
     (32.0, ForecastTier("excellent", 35.0, 20.0, 75.0, 15.0, 90.0, 0.0)),
@@ -16,6 +16,79 @@ FORECAST_TIERS = [
 ]
 
 PROGRAM_ORDER = ("Prog1", "Prog2", "Prog3", "Prog4", "Prog5", "Prog6")
+
+
+def inverter_cooling_recommendation(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+) -> CoolingRecommendation:
+    """Return a load-fed fan curve with temperature feedback."""
+
+    throughput_w = max(
+        abs(inputs.inverter_pv_power_w or 0.0),
+        abs(inputs.inverter_ac_power_w or inputs.essential_power_w),
+        abs(inputs.battery_power_w),
+    )
+    baseline_pct = settings.cooling_curve_idle_fan_pct + (
+        throughput_w / 1000.0 * settings.cooling_curve_fan_pct_per_kw
+    )
+    baseline_pct = min(max(baseline_pct, 0.0), settings.cooling_max_normal_fan_pct)
+    temperature = inputs.inverter_ac_temperature_c
+    temperature_error_c = (
+        temperature - settings.cooling_target_temp_c
+        if temperature is not None and inputs.cooling_temperature_valid
+        else None
+    )
+
+    if temperature_error_c is None:
+        raw_pct = max(baseline_pct, settings.cooling_failsafe_fan_pct)
+        trim_pct = raw_pct - baseline_pct
+        reason = "AC temperature unavailable or stale; failsafe cooling"
+    elif temperature >= settings.cooling_emergency_temp_c:
+        raw_pct = 100.0
+        trim_pct = raw_pct - baseline_pct
+        reason = f"emergency cooling: AC temperature {temperature:.1f}C"
+    elif throughput_w < 500.0 and temperature < 32.0:
+        raw_pct = 0.0
+        trim_pct = -baseline_pct
+        reason = f"idle: throughput {throughput_w:.0f}W and AC temperature {temperature:.1f}C"
+    else:
+        trim_pct = max(
+            -10.0,
+            min(
+                20.0,
+                temperature_error_c * settings.cooling_temperature_gain_pct_per_c,
+            ),
+        )
+        raw_pct = baseline_pct + trim_pct
+        raw_pct = min(
+            max(raw_pct, settings.cooling_min_active_fan_pct),
+            settings.cooling_max_normal_fan_pct,
+        )
+        if temperature >= settings.cooling_emergency_temp_c - 1.0:
+            raw_pct = max(raw_pct, settings.cooling_max_normal_fan_pct)
+        reason = (
+            f"curve {baseline_pct:.1f}% + temperature trim {trim_pct:+.1f}% "
+            f"at {throughput_w:.0f}W/{temperature:.1f}C"
+        )
+
+    raw_pct = min(max(raw_pct, 0.0), 100.0)
+    raw_pct = min(100.0, float(int(raw_pct / 5.0 + 0.5) * 5))
+    current_pct = inputs.cooling_fan_percentage
+    if current_pct is None or raw_pct >= current_pct or raw_pct == 100.0:
+        recommended_pct = raw_pct
+    else:
+        recommended_pct = max(raw_pct, current_pct - 5.0)
+
+    return CoolingRecommendation(
+        throughput_w=throughput_w,
+        baseline_pct=round(baseline_pct, 1),
+        temperature_error_c=round(temperature_error_c, 2) if temperature_error_c is not None else None,
+        temperature_trim_pct=round(trim_pct, 1),
+        raw_required_pct=raw_pct,
+        recommended_pct=round(recommended_pct / 5.0) * 5.0,
+        reason=reason,
+    )
 
 
 def deye_capacity_percent(value: float) -> int:
@@ -1401,6 +1474,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     """Calculate the current energy-management decision."""
 
     settings = settings or EnergyManagerSettings()
+    cooling = inverter_cooling_recommendation(inputs, settings)
     tier = forecast_tier(inputs.forecast_tomorrow_kwh, settings)
     active_prog_range = active_program_range(inputs.now, settings)
     actual_active_prog = str(active_prog_range["program"])
@@ -1532,7 +1606,6 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         if export_soak_available
         else f"export soak unavailable: exporting {export_power_w:.0f}W < start {settings.thermal_export_start_w:.0f}W"
     )
-    curtailment_likely = (soc_known and soc >= settings.full_soak_min_soc) or export_soak_available
     passive_warming_likely = (
         settings.passive_warming_guard_enabled
         and bool(inputs.heat_loads)
@@ -2262,6 +2335,19 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         disabled_programs=disabled_programs(settings),
         logical_tariff_window=tariff_window(inputs.now),
         program_schedule_warning=program_schedule_warning(settings),
+        inverter_ac_temperature_c=inputs.inverter_ac_temperature_c,
+        inverter_dc_temperature_c=inputs.inverter_dc_temperature_c,
+        inverter_pv_power_w=inputs.inverter_pv_power_w or 0.0,
+        inverter_ac_power_w=inputs.inverter_ac_power_w or 0.0,
+        cooling_battery_power_w=abs(inputs.battery_power_w),
+        cooling_throughput_w=cooling.throughput_w,
+        cooling_actual_fan_pct=inputs.cooling_fan_percentage,
+        cooling_curve_baseline_pct=cooling.baseline_pct,
+        cooling_temperature_error_c=cooling.temperature_error_c,
+        cooling_temperature_trim_pct=cooling.temperature_trim_pct,
+        cooling_raw_required_fan_pct=cooling.raw_required_pct,
+        cooling_recommended_fan_pct=cooling.recommended_pct,
+        cooling_reason=cooling.reason,
     )
 
 
