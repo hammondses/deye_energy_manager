@@ -68,11 +68,11 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
     assert recommendation.baseline_pct == 50
     assert recommendation.temperature_trim_pct == 0
     assert recommendation.raw_required_pct == 50
-    assert recommendation.recommended_pct == 50
+    assert recommendation.recommended_pct == 45
 
 
-def test_inverter_cooling_reduces_only_one_step_below_curve() -> None:
-    recommendation = inverter_cooling_recommendation(
+def test_inverter_cooling_drops_immediately_but_ramps_up() -> None:
+    decrease = inverter_cooling_recommendation(
         base_inputs(
             essential_power_w=1000,
             inverter_ac_temperature_c=35,
@@ -81,9 +81,21 @@ def test_inverter_cooling_reduces_only_one_step_below_curve() -> None:
         ),
         EnergyManagerSettings(),
     )
+    increase = inverter_cooling_recommendation(
+        base_inputs(
+            essential_power_w=1000,
+            inverter_pv_power_w=10000,
+            inverter_ac_temperature_c=43,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=10,
+        ),
+        EnergyManagerSettings(),
+    )
 
-    assert recommendation.raw_required_pct == 10
-    assert recommendation.recommended_pct == 45
+    assert decrease.raw_required_pct == 10
+    assert decrease.recommended_pct == 10
+    assert increase.raw_required_pct == 50
+    assert increase.recommended_pct == 15
 
 
 def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:

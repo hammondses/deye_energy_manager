@@ -75,10 +75,10 @@ def inverter_cooling_recommendation(
     raw_pct = min(max(raw_pct, 0.0), 100.0)
     raw_pct = min(100.0, float(int(raw_pct / 5.0 + 0.5) * 5))
     current_pct = inputs.cooling_fan_percentage
-    if current_pct is None or raw_pct >= current_pct or raw_pct == 100.0:
+    if current_pct is None or raw_pct <= current_pct or raw_pct == 100.0:
         recommended_pct = raw_pct
     else:
-        recommended_pct = max(raw_pct, current_pct - 5.0)
+        recommended_pct = min(raw_pct, current_pct + 5.0)
 
     return CoolingRecommendation(
         throughput_w=throughput_w,

@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.35
+
+- Drop external fan speed straight to the current cooling requirement when load or temperature falls.
+- Ramp ordinary fan-speed increases by 5 percentage points per minute to avoid sudden noise, while retaining the immediate 100% emergency-temperature path.
+
 ## v0.5.34
 
 - Allow slow cooling ramp-down to continue when the fan reports a few percentage points below the requested speed, while still ignoring normal one-point PWM reporting noise.

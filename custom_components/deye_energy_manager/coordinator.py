@@ -1012,7 +1012,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._apply_heat(decision)
 
     async def _apply_inverter_cooling(self, decision: EnergyManagerDecision) -> None:
-        """Apply the gated external-fan recommendation without rapid reductions."""
+        """Apply the gated external-fan recommendation."""
 
         entity_id = self.entity_map.get("inverter_cooling_fan")
         state = self.hass.states.get(entity_id) if entity_id else None
@@ -1027,8 +1027,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         emergency = decision.cooling_raw_required_fan_pct >= 100.0
         if self._last_cooling_write_at is not None and not emergency:
             elapsed = now - self._last_cooling_write_at
-            if current is not None and desired < current and elapsed < timedelta(minutes=5):
-                return
             if elapsed < timedelta(minutes=1):
                 return
 
