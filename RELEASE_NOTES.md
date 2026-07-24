@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.34
+
+- Allow slow cooling ramp-down to continue when the fan reports a few percentage points below the requested speed, while still ignoring normal one-point PWM reporting noise.
+
 ## v0.5.33
 
 - Add load-fed external inverter fan control targeting a steady AC temperature, with temperature feedback, slow fan-speed reductions, stale-temperature failsafe, and a 100% emergency path.

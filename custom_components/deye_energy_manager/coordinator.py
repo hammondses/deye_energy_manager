@@ -1020,7 +1020,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return
         current = self._cooling_fan_percentage()
         desired = int(decision.cooling_recommended_fan_pct)
-        if current is not None and abs(current - desired) < 4.9:
+        if current is not None and abs(current - desired) < 2.0:
             return
 
         now = dt_util.utcnow()
