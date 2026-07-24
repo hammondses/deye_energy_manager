@@ -78,6 +78,7 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="cooling_actual_fan_percentage", name="Cooling actual fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_actual_fan_pct),
     DeyeSensorDescription(key="cooling_curve_baseline", name="Cooling curve baseline", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_curve_baseline_pct),
     DeyeSensorDescription(key="cooling_temperature_error", name="Cooling temperature error", native_unit_of_measurement=UnitOfTemperature.CELSIUS, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_temperature_error_c),
+    DeyeSensorDescription(key="cooling_temperature_trend", name="Cooling temperature trend", native_unit_of_measurement="°C/min", state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_temperature_trend_c_per_min),
     DeyeSensorDescription(key="cooling_temperature_trim", name="Cooling temperature trim", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_temperature_trim_pct),
     DeyeSensorDescription(key="cooling_raw_required_fan_percentage", name="Cooling raw required fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_raw_required_fan_pct),
     DeyeSensorDescription(key="cooling_recommended_fan_percentage", name="Cooling recommended fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_recommended_fan_pct),
@@ -210,11 +211,16 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
                 "ac_power_w": decision.inverter_ac_power_w,
                 "battery_power_w": decision.cooling_battery_power_w,
                 "ac_temperature_c": decision.inverter_ac_temperature_c,
+                "ac_temperature_trend_c_per_min": decision.cooling_temperature_trend_c_per_min,
+                "ac_temperature_sample_at": decision.cooling_temperature_sample_at.isoformat() if decision.cooling_temperature_sample_at else None,
+                "load_change_w": decision.cooling_load_change_w,
                 "dc_temperature_c": decision.inverter_dc_temperature_c,
                 "curve_idle_percentage": settings.cooling_curve_idle_fan_pct,
                 "curve_percentage_per_kw": settings.cooling_curve_fan_pct_per_kw,
                 "target_temperature_c": settings.cooling_target_temp_c,
                 "temperature_gain_percentage_per_c": settings.cooling_temperature_gain_pct_per_c,
+                "feedback_step_percentage": settings.cooling_feedback_step_pct,
+                "target_deadband_c": settings.cooling_target_deadband_c,
             }
         return None
 

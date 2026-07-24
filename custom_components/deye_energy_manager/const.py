@@ -337,6 +337,8 @@ NUMBER_DEFAULTS = {
     "cooling_curve_idle_fan_pct": 15.0,
     "cooling_curve_fan_pct_per_kw": 3.5,
     "cooling_temperature_gain_pct_per_c": 5.0,
+    "cooling_feedback_step_pct": 5.0,
+    "cooling_target_deadband_c": 1.0,
     "cooling_min_active_fan_pct": 10.0,
     "cooling_max_normal_fan_pct": 70.0,
     "cooling_emergency_temp_c": 48.0,

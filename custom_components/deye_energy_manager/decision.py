@@ -75,18 +75,46 @@ def inverter_cooling_recommendation(
     raw_pct = min(max(raw_pct, 0.0), 100.0)
     raw_pct = min(100.0, float(int(raw_pct / 5.0 + 0.5) * 5))
     current_pct = inputs.cooling_fan_percentage
-    if current_pct is None or raw_pct <= current_pct or raw_pct == 100.0:
+    trend = inputs.cooling_temperature_trend_c_per_min
+    load_increased = inputs.cooling_load_change_w >= 500.0
+    load_decreased = inputs.cooling_load_change_w <= -500.0
+    above_target = (
+        temperature_error_c is not None
+        and temperature_error_c > settings.cooling_target_deadband_c
+    )
+    still_rising = trend is not None and trend > 0.05
+    below_target = (
+        temperature_error_c is not None
+        and temperature_error_c < -settings.cooling_target_deadband_c
+    )
+    if current_pct is None or raw_pct == current_pct:
         recommended_pct = raw_pct
+    elif raw_pct < current_pct:
+        if above_target or still_rising:
+            recommended_pct = current_pct
+            reason += "; temperature high or rising, hold"
+        elif load_decreased or below_target:
+            recommended_pct = raw_pct
+            reason += "; load fell or temperature is below target, reduce"
+        else:
+            recommended_pct = current_pct
+            reason += "; inside target deadband, hold"
+    elif load_increased or trend is None or above_target or still_rising:
+        recommended_pct = min(raw_pct, current_pct + settings.cooling_feedback_step_pct)
+        reason += f"; feedback authorises +{settings.cooling_feedback_step_pct:g}%"
     else:
-        recommended_pct = min(raw_pct, current_pct + 5.0)
+        recommended_pct = current_pct
+        reason += "; temperature stable near target, hold"
 
     return CoolingRecommendation(
         throughput_w=throughput_w,
         baseline_pct=round(baseline_pct, 1),
         temperature_error_c=round(temperature_error_c, 2) if temperature_error_c is not None else None,
+        temperature_trend_c_per_min=round(trend, 3) if trend is not None else None,
+        load_change_w=round(inputs.cooling_load_change_w, 1),
         temperature_trim_pct=round(trim_pct, 1),
         raw_required_pct=raw_pct,
-        recommended_pct=round(recommended_pct / 5.0) * 5.0,
+        recommended_pct=round(recommended_pct),
         reason=reason,
     )
 
@@ -2344,6 +2372,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cooling_actual_fan_pct=inputs.cooling_fan_percentage,
         cooling_curve_baseline_pct=cooling.baseline_pct,
         cooling_temperature_error_c=cooling.temperature_error_c,
+        cooling_temperature_trend_c_per_min=cooling.temperature_trend_c_per_min,
+        cooling_temperature_sample_at=inputs.cooling_temperature_sample_at,
+        cooling_load_change_w=cooling.load_change_w,
         cooling_temperature_trim_pct=cooling.temperature_trim_pct,
         cooling_raw_required_fan_pct=cooling.raw_required_pct,
         cooling_recommended_fan_pct=cooling.recommended_pct,

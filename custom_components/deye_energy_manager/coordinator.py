@@ -106,6 +106,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._thermal_leases: dict[str, dict[str, object]] = {}
         self._paid_grid_import_since: datetime | None = None
         self._last_cooling_write_at: datetime | None = None
+        self._last_cooling_increase_sample_at: datetime | None = None
+        self._cooling_temperature_sample: tuple[datetime, float] | None = None
+        self._cooling_temperature_trend_c_per_min: float | None = None
+        self._previous_cooling_throughput_w: float | None = None
         self._cheap_grid_session_date: str | None = None
         self._cheap_grid_charge_blocked_target_soc: float | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
@@ -420,6 +424,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_curve_idle_fan_pct=float(options["cooling_curve_idle_fan_pct"]),
             cooling_curve_fan_pct_per_kw=float(options["cooling_curve_fan_pct_per_kw"]),
             cooling_temperature_gain_pct_per_c=float(options["cooling_temperature_gain_pct_per_c"]),
+            cooling_feedback_step_pct=float(options["cooling_feedback_step_pct"]),
+            cooling_target_deadband_c=float(options["cooling_target_deadband_c"]),
             cooling_min_active_fan_pct=float(options["cooling_min_active_fan_pct"]),
             cooling_max_normal_fan_pct=float(options["cooling_max_normal_fan_pct"]),
             cooling_emergency_temp_c=float(options["cooling_emergency_temp_c"]),
@@ -505,6 +511,30 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             and state.state not in UNAVAILABLE
             and (now - state.last_updated).total_seconds() <= 600
         )
+
+    def _cooling_temperature(self) -> tuple[float | None, datetime | None, float | None]:
+        """Return the current temperature sample and trend between distinct updates."""
+
+        entity_id = self.entity_map.get("inverter_ac_temperature")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return None, None, None
+        try:
+            temperature = float(state.state)
+        except (TypeError, ValueError):
+            return None, None, None
+
+        sample_at = state.last_updated
+        previous = self._cooling_temperature_sample
+        if previous is None or sample_at != previous[0]:
+            if previous is not None:
+                elapsed_minutes = (sample_at - previous[0]).total_seconds() / 60.0
+                if elapsed_minutes > 0:
+                    self._cooling_temperature_trend_c_per_min = (
+                        temperature - previous[1]
+                    ) / elapsed_minutes
+            self._cooling_temperature_sample = (sample_at, temperature)
+        return temperature, sample_at, self._cooling_temperature_trend_c_per_min
 
     def _entity_state_string(self, entity_id: str | None) -> str | None:
         state = self.hass.states.get(entity_id) if entity_id else None
@@ -762,6 +792,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         essential_power = self._state_float("essential_power") or 0.0
         ev_power = self._state_float("ev_power")
         settings = self.settings
+        battery_power_w = self._state_float("battery_power") or 0.0
+        inverter_ac_temperature_c, cooling_temperature_sample_at, cooling_temperature_trend = self._cooling_temperature()
+        inverter_pv_power_w = self._state_float("inverter_pv_power")
+        inverter_ac_power_w = self._state_float("inverter_ac_power")
+        cooling_throughput_w = max(
+            abs(inverter_pv_power_w or 0.0),
+            abs(inverter_ac_power_w or essential_power),
+            abs(battery_power_w),
+        )
+        cooling_load_change_w = (
+            cooling_throughput_w - self._previous_cooling_throughput_w
+            if self._previous_cooling_throughput_w is not None
+            else 0.0
+        )
         grid_power_w = self._state_float("grid_ct_power") or 0.0
         export_power_w = max(-grid_power_w, 0.0)
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
@@ -779,7 +823,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             soc_age_minutes=soc_age_minutes,
             last_good_soc=last_good_soc,
             last_good_soc_updated=last_good_updated,
-            battery_power_w=self._state_float("battery_power") or 0.0,
+            battery_power_w=battery_power_w,
             essential_power_w=essential_power,
             grid_power_w=grid_power_w,
             export_power_w=export_power_w,
@@ -807,12 +851,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
             cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,
-            inverter_ac_temperature_c=self._state_float("inverter_ac_temperature"),
+            inverter_ac_temperature_c=inverter_ac_temperature_c,
             inverter_dc_temperature_c=self._state_float("inverter_dc_temperature"),
-            inverter_pv_power_w=self._state_float("inverter_pv_power"),
-            inverter_ac_power_w=self._state_float("inverter_ac_power"),
+            inverter_pv_power_w=inverter_pv_power_w,
+            inverter_ac_power_w=inverter_ac_power_w,
             cooling_fan_percentage=self._cooling_fan_percentage(),
             cooling_temperature_valid=self._cooling_temperature_valid(now),
+            cooling_temperature_sample_at=cooling_temperature_sample_at,
+            cooling_temperature_trend_c_per_min=cooling_temperature_trend,
+            cooling_load_change_w=cooling_load_change_w,
         )
         decision = decide(inputs, settings)
         self._update_cheap_grid_session_state(decision)
@@ -820,6 +867,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._append_proposed_action(decision)
         self.previous_essential_power_w = essential_power
         self.previous_grid_power_w = grid_power_w
+        self._previous_cooling_throughput_w = cooling_throughput_w
         self.ev_latch_on = decision.ev_latch_active
         self.ev_hold_until = decision.ev_hold_until if decision.ev_latch_active else None
         return decision
@@ -1023,11 +1071,18 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if current is not None and abs(current - desired) < 2.0:
             return
 
-        now = dt_util.utcnow()
-        emergency = decision.cooling_raw_required_fan_pct >= 100.0
-        if self._last_cooling_write_at is not None and not emergency:
-            elapsed = now - self._last_cooling_write_at
-            if elapsed < timedelta(minutes=1):
+        if current is not None and desired > current:
+            sample_at = decision.cooling_temperature_sample_at
+            fresh_temperature = (
+                sample_at is not None
+                and sample_at != self._last_cooling_increase_sample_at
+            )
+            load_increased = decision.cooling_load_change_w >= 500.0
+            if (
+                self._last_cooling_write_at is not None
+                and not fresh_temperature
+                and not load_increased
+            ):
                 return
 
         if desired <= 0:
@@ -1044,7 +1099,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 {"entity_id": entity_id, "percentage": desired},
                 blocking=False,
             )
-        self._last_cooling_write_at = now
+        self._last_cooling_write_at = dt_util.utcnow()
+        if current is not None and desired > current:
+            self._last_cooling_increase_sample_at = decision.cooling_temperature_sample_at
         self.last_control_action = (
             f"inverter cooling fan -> {desired}%: {decision.cooling_reason}"
         )

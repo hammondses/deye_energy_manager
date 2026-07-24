@@ -71,7 +71,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
     assert recommendation.recommended_pct == 45
 
 
-def test_inverter_cooling_drops_immediately_but_ramps_up() -> None:
+def test_inverter_cooling_drops_immediately_but_uses_temperature_feedback_to_ramp_up() -> None:
     decrease = inverter_cooling_recommendation(
         base_inputs(
             essential_power_w=1000,
@@ -91,11 +91,56 @@ def test_inverter_cooling_drops_immediately_but_ramps_up() -> None:
         ),
         EnergyManagerSettings(),
     )
+    stable = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=10000,
+            inverter_ac_temperature_c=43,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=35,
+            cooling_temperature_trend_c_per_min=0,
+        ),
+        EnergyManagerSettings(),
+    )
+    rising = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=10000,
+            inverter_ac_temperature_c=43,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=35,
+            cooling_temperature_trend_c_per_min=0.2,
+        ),
+        EnergyManagerSettings(),
+    )
+    steady_at_target = inverter_cooling_recommendation(
+        base_inputs(
+            essential_power_w=1000,
+            inverter_ac_temperature_c=43,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=50,
+            cooling_temperature_trend_c_per_min=0,
+        ),
+        EnergyManagerSettings(),
+    )
+    load_fell = inverter_cooling_recommendation(
+        base_inputs(
+            essential_power_w=1000,
+            inverter_ac_temperature_c=43,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=50,
+            cooling_temperature_trend_c_per_min=0,
+            cooling_load_change_w=-1000,
+        ),
+        EnergyManagerSettings(),
+    )
 
     assert decrease.raw_required_pct == 10
     assert decrease.recommended_pct == 10
     assert increase.raw_required_pct == 50
     assert increase.recommended_pct == 15
+    assert stable.recommended_pct == 35
+    assert rising.recommended_pct == 40
+    assert steady_at_target.recommended_pct == 50
+    assert load_fell.recommended_pct == 20
 
 
 def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
@@ -118,7 +163,7 @@ def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
     )
 
     assert emergency.raw_required_pct == 100
-    assert emergency.recommended_pct == 100
+    assert emergency.recommended_pct == 25
     assert stale.raw_required_pct == 50
     assert "failsafe" in stale.reason
 

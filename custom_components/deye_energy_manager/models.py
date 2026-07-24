@@ -152,6 +152,8 @@ class EnergyManagerSettings:
     cooling_curve_idle_fan_pct: float = 15.0
     cooling_curve_fan_pct_per_kw: float = 3.5
     cooling_temperature_gain_pct_per_c: float = 5.0
+    cooling_feedback_step_pct: float = 5.0
+    cooling_target_deadband_c: float = 1.0
     cooling_min_active_fan_pct: float = 10.0
     cooling_max_normal_fan_pct: float = 70.0
     cooling_emergency_temp_c: float = 48.0
@@ -262,6 +264,9 @@ class EnergyManagerInputs:
     inverter_ac_power_w: float | None = None
     cooling_fan_percentage: float | None = None
     cooling_temperature_valid: bool = False
+    cooling_temperature_sample_at: datetime | None = None
+    cooling_temperature_trend_c_per_min: float | None = None
+    cooling_load_change_w: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +448,9 @@ class EnergyManagerDecision:
     cooling_actual_fan_pct: float | None = None
     cooling_curve_baseline_pct: float = 0.0
     cooling_temperature_error_c: float | None = None
+    cooling_temperature_trend_c_per_min: float | None = None
+    cooling_temperature_sample_at: datetime | None = None
+    cooling_load_change_w: float = 0.0
     cooling_temperature_trim_pct: float = 0.0
     cooling_raw_required_fan_pct: float = 0.0
     cooling_recommended_fan_pct: float = 0.0
@@ -456,6 +464,8 @@ class CoolingRecommendation:
     throughput_w: float
     baseline_pct: float
     temperature_error_c: float | None
+    temperature_trend_c_per_min: float | None
+    load_change_w: float
     temperature_trim_pct: float
     raw_required_pct: float
     recommended_pct: float

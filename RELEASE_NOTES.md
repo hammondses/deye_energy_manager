@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.36
+
+- Make fan-speed increases temperature-feedback driven: one proactive load step, then another step only on a fresh rising or above-target temperature sample.
+- Hold fan speed when temperature is stable near the 43 C target, drop immediately when cooling demand falls, and remove the 100% emergency jump.
+- Add adjustable feedback-step and target-deadband controls, plus a recorder-friendly cooling temperature-trend sensor and temperature sample/load-change telemetry.
+
 ## v0.5.35
 
 - Drop external fan speed straight to the current cooling requirement when load or temperature falls.

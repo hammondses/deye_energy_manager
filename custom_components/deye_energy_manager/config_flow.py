@@ -355,6 +355,8 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                     ("cooling_curve_idle_fan_pct", 0, 50, 1),
                     ("cooling_curve_fan_pct_per_kw", 0, 10, 0.1),
                     ("cooling_temperature_gain_pct_per_c", 0, 20, 0.5),
+                    ("cooling_feedback_step_pct", 1, 20, 1),
+                    ("cooling_target_deadband_c", 0, 5, 0.5),
                     ("cooling_min_active_fan_pct", 0, 50, 1),
                     ("cooling_max_normal_fan_pct", 30, 100, 1),
                     ("cooling_emergency_temp_c", 45, 55, 0.5),

@@ -92,7 +92,7 @@ required fan % = baseline fan %
                * cooling_temperature_gain_pct_per_c
 ```
 
-Cooling throughput is the highest absolute value of local PV input, inverter AC output, and battery power, avoiding double-counting the same energy through multiple conversion paths. Normal output is rounded to 5% steps. Increases are immediate, while reductions are limited to one 5% step and one write every five minutes. AC temperature at the emergency threshold commands 100%; a missing or stale AC temperature commands the configured failsafe percentage.
+Cooling throughput is the highest absolute value of local PV input, inverter AC output, and battery power, avoiding double-counting the same energy through multiple conversion paths. The curve is a cooling-demand ceiling, not a speed that must be chased. A load increase can authorise one proactive fan step; further increases require a fresh temperature sample that is still rising or above the target deadband. Stable temperature near target holds the current speed, while falling load or clearly below-target temperature can reduce speed immediately. The high-temperature threshold raises the demand ceiling to 100% but does not bypass the feedback ramp.
 
 Automatic fan writes remain off until `switch.deye_energy_manager_inverter_cooling_control_enabled` is enabled. Curve controls:
 
@@ -100,6 +100,8 @@ Automatic fan writes remain off until `switch.deye_energy_manager_inverter_cooli
 - `number.deye_energy_manager_cooling_curve_idle_fan`
 - `number.deye_energy_manager_cooling_curve_fan_per_kw`
 - `number.deye_energy_manager_cooling_temperature_gain`
+- `number.deye_energy_manager_cooling_feedback_step`
+- `number.deye_energy_manager_cooling_target_deadband`
 - `number.deye_energy_manager_cooling_minimum_active_fan`
 - `number.deye_energy_manager_cooling_maximum_normal_fan`
 - `number.deye_energy_manager_cooling_emergency_temperature`
@@ -116,6 +118,7 @@ Recorder-friendly correlation sensors:
 - `sensor.deye_energy_manager_cooling_actual_fan_percentage`
 - `sensor.deye_energy_manager_cooling_curve_baseline`
 - `sensor.deye_energy_manager_cooling_temperature_error`
+- `sensor.deye_energy_manager_cooling_temperature_trend`
 - `sensor.deye_energy_manager_cooling_temperature_trim`
 - `sensor.deye_energy_manager_cooling_raw_required_fan_percentage`
 - `sensor.deye_energy_manager_cooling_recommended_fan_percentage`
