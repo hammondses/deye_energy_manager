@@ -93,9 +93,12 @@ def inverter_cooling_recommendation(
         if above_target or still_rising:
             recommended_pct = current_pct
             reason += "; temperature high or rising, hold"
-        elif load_decreased or below_target:
+        elif load_decreased:
             recommended_pct = raw_pct
-            reason += "; load fell or temperature is below target, reduce"
+            reason += "; load fell, reduce"
+        elif below_target:
+            recommended_pct = max(raw_pct, current_pct - settings.cooling_feedback_step_pct)
+            reason += f"; feedback authorises -{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
             reason += "; inside target deadband, hold"

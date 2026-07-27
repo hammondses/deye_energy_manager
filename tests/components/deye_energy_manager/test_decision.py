@@ -71,7 +71,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
     assert recommendation.recommended_pct == 45
 
 
-def test_inverter_cooling_drops_immediately_but_uses_temperature_feedback_to_ramp_up() -> None:
+def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
     decrease = inverter_cooling_recommendation(
         base_inputs(
             essential_power_w=1000,
@@ -134,7 +134,7 @@ def test_inverter_cooling_drops_immediately_but_uses_temperature_feedback_to_ram
     )
 
     assert decrease.raw_required_pct == 10
-    assert decrease.recommended_pct == 10
+    assert decrease.recommended_pct == 45
     assert increase.raw_required_pct == 50
     assert increase.recommended_pct == 15
     assert stable.recommended_pct == 35

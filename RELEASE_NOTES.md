@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.37
+
+- Limit temperature-driven fan reductions to one feedback step per fresh temperature sample, preventing large drops followed by staircase recoveries.
+- Keep immediate reductions when inverter throughput genuinely falls, and allow at most one non-load-driven fan adjustment per temperature report.
+
 ## v0.5.36
 
 - Make fan-speed increases temperature-feedback driven: one proactive load step, then another step only on a fresh rising or above-target temperature sample.

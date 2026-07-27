@@ -106,7 +106,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._thermal_leases: dict[str, dict[str, object]] = {}
         self._paid_grid_import_since: datetime | None = None
         self._last_cooling_write_at: datetime | None = None
-        self._last_cooling_increase_sample_at: datetime | None = None
+        self._last_cooling_feedback_sample_at: datetime | None = None
         self._cooling_temperature_sample: tuple[datetime, float] | None = None
         self._cooling_temperature_trend_c_per_min: float | None = None
         self._previous_cooling_throughput_w: float | None = None
@@ -1071,17 +1071,25 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if current is not None and abs(current - desired) < 2.0:
             return
 
+        sample_at = decision.cooling_temperature_sample_at
+        fresh_temperature = (
+            sample_at is not None
+            and sample_at != self._last_cooling_feedback_sample_at
+        )
         if current is not None and desired > current:
-            sample_at = decision.cooling_temperature_sample_at
-            fresh_temperature = (
-                sample_at is not None
-                and sample_at != self._last_cooling_increase_sample_at
-            )
             load_increased = decision.cooling_load_change_w >= 500.0
             if (
                 self._last_cooling_write_at is not None
                 and not fresh_temperature
                 and not load_increased
+            ):
+                return
+        elif current is not None and desired < current:
+            load_decreased = decision.cooling_load_change_w <= -500.0
+            if (
+                self._last_cooling_write_at is not None
+                and not fresh_temperature
+                and not load_decreased
             ):
                 return
 
@@ -1100,8 +1108,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 blocking=False,
             )
         self._last_cooling_write_at = dt_util.utcnow()
-        if current is not None and desired > current:
-            self._last_cooling_increase_sample_at = decision.cooling_temperature_sample_at
+        if sample_at is not None:
+            self._last_cooling_feedback_sample_at = sample_at
         self.last_control_action = (
             f"inverter cooling fan -> {desired}%: {decision.cooling_reason}"
         )
