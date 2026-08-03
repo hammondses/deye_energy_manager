@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.38
+
+- Add an optional Home Assistant schedule/binary-sensor input for free-power periods.
+- During free power, target 100% grid battery charge and admit eligible managed thermal loads while preserving actuator gates, manual overrides, and discharge safety.
+- Return free-power-owned thermal loads to normal when the period ends.
+
 ## v0.5.37
 
 - Limit temperature-driven fan reductions to one feedback step per fresh temperature sample, preventing large drops followed by staircase recoveries.

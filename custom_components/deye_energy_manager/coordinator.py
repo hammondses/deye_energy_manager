@@ -482,6 +482,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return None
         return self._entity_float(entity_id)
 
+    def _state_on(self, key: str) -> bool:
+        entity_id = self.entity_map.get(key)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state is not None and state.state == "on"
+
     def _entity_float(self, entity_id: str) -> float | None:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
@@ -840,6 +845,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             outdoor_temperature=self._state_float("outdoor_temperature"),
             indoor_average_temperature=self._state_float("indoor_average_temperature"),
             home_occupied=self._home_occupied(),
+            free_power_active=self._state_on("free_power_active"),
             any_solar_owned_heat_load_on=self._any_owned_heat_on(),
             heat_loads=self._heat_load_states(),
             heat_available=bool(self.heat_loads),

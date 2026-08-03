@@ -50,6 +50,59 @@ def test_forecast_tiers() -> None:
         assert decision.grid_charge_target_soc == grid_target
 
 
+def test_free_power_prioritises_full_battery_charge_and_thermal_soak() -> None:
+    settings = EnergyManagerSettings(
+        deye_control_enabled=True,
+        grid_charge_control_enabled=True,
+        thermal_control_enabled=True,
+    )
+    load = HeatLoadState(
+        name="Office",
+        priority=1,
+        current_temp=18,
+        supports_heating=True,
+        estimated_load_w=1800,
+    )
+
+    decision = decide(base_inputs(now=dt(12), free_power_active=True, heat_loads=[load]), settings)
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.tariff_window == "free_power"
+    assert decision.grid_charge_required
+    assert decision.grid_charge_target_soc == 100
+    assert decision.thermal_load_to_add == "Office"
+    assert decision.thermal_policy_state == "free_power"
+    assert decision.thermal_lease_reason == "free_power"
+    assert plan.capacity_targets == {"Prog1": 100}
+    assert plan.charge_modes == {"Prog1": "Allow Grid"}
+    assert plan.grid_charge_enabled
+
+    ended = decide(
+        base_inputs(
+            now=dt(13),
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    lease_reason="free_power",
+                )
+            ],
+        ),
+        settings,
+    )
+    assert ended.thermal_should_shed
+    assert ended.thermal_load_to_shed == "Office"
+
+    ungated = decide(
+        base_inputs(now=dt(20), free_power_active=True, heat_loads=[load]),
+        EnergyManagerSettings(thermal_control_enabled=True),
+    )
+    assert not ungated.thermal_allowed
+
+
 def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
     recommendation = inverter_cooling_recommendation(
         base_inputs(

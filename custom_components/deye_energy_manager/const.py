@@ -62,6 +62,7 @@ DEFAULT_ENTITY_MAP = {
     "outdoor_temperature": "",
     "indoor_average_temperature": "",
     "home_occupancy": "",
+    "free_power_active": "input_boolean.free_power_active",
 }
 
 DEFAULT_HEAT_LOADS = [

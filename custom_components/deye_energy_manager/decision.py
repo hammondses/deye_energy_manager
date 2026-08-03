@@ -1518,10 +1518,16 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     soc_known = inputs.battery_soc is not None
     soc = inputs.battery_soc
     cheap_window = time_between(inputs.now, "21:00", "07:00")
+    effective_tariff_window = "free_power" if inputs.free_power_active else tariff_window(inputs.now)
     control_blocked = not settings.enabled
     thermal_mode = effective_thermal_mode(settings, inputs.now, inputs.outdoor_temperature)
     auto_reason = auto_mode_reason(settings, inputs.now, inputs.outdoor_temperature)
     thermal_control_enabled = settings.thermal_control_enabled or settings.heat_control_enabled
+    free_power_thermal_allowed = (
+        inputs.free_power_active
+        and settings.deye_control_enabled
+        and settings.grid_charge_control_enabled
+    )
     thermal_start_min_soc = settings.thermal_start_min_soc
     thermal_start_min_charge_w = settings.thermal_start_min_charge_w
     thermal_shed_discharge_w = settings.thermal_shed_discharge_w
@@ -1601,6 +1607,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         solar_arrived_reason,
         forecast_drain_blocked,
     ) = paid_grid_avoidance_state(inputs, settings, reserve_soc, battery_charge_w)
+    if inputs.free_power_active:
+        paid_grid_avoidance_required = False
+        forecast_drain_blocked = False
+        paid_time_reserve_reason = "paid grid avoidance suspended: free power active"
     if paid_grid_avoidance_required and discretionary_budget_kwh is not None:
         discretionary_budget_kwh = min(discretionary_budget_kwh, -settings.paid_grid_avoidance_buffer_kwh)
         discretionary_budget_positive = False
@@ -1672,15 +1682,16 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     forecast_soak_allowed = battery_target_reachable and discretionary_budget_fits_soak_load
     solar_soak_allowed = (
         not paid_grid_avoidance_required
-        and not passive_warming_likely
+        and (free_power_thermal_allowed or not passive_warming_likely)
         and battery_discharge_w < thermal_shed_discharge_w
-        and (forecast_soak_allowed or export_soak_available)
+        and (free_power_thermal_allowed or forecast_soak_allowed or export_soak_available)
     )
     full_send_soak_allowed = (
         not paid_grid_avoidance_required
-        and not passive_warming_likely
+        and (free_power_thermal_allowed or not passive_warming_likely)
         and (
             export_soak_available
+            or free_power_thermal_allowed
             or (
                 battery_target_reachable
                 and discretionary_budget_kwh is not None
@@ -1749,7 +1760,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_mode,
     )
 
-    thermal_time_allowed = time_between(inputs.now, "08:00", "17:00") or (
+    thermal_time_allowed = free_power_thermal_allowed or time_between(inputs.now, "08:00", "17:00") or (
         tier.mode in {"excellent", "good"}
         and time_between(inputs.now, "07:00", "17:00")
         and (forecast_override or expected_pv_power_w >= settings.thermal_keep_running_min_charge_w or export_soak_keep_available)
@@ -1759,6 +1770,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         or battery_charge_w >= thermal_start_min_charge_w
         or export_soak_available
         or forecast_override
+        or free_power_thermal_allowed
     )
     thermal_allowed = (
         settings.enabled
@@ -1787,12 +1799,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
     overnight_protection_required = (
         settings.enabled
+        and not inputs.free_power_active
         and inputs.any_solar_owned_heat_load_on
         and projected_soc_07 is not None
         and projected_soc_07 < morning_start_soc_target + settings.overnight_dining_soc_margin
     )
     bedroom_heat_taper_recommended = (
         settings.enabled
+        and not inputs.free_power_active
         and time_between(inputs.now, "21:00", "08:00")
         and any(load.solar_owned and load.is_on and "bedroom" in f"{load.name} {load.load_type}".lower() for load in inputs.heat_loads)
     )
@@ -1814,6 +1828,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     thermal_should_shed = (
         discharge_shed_required
+        or (
+            not inputs.free_power_active
+            and any(load.solar_owned and load.lease_reason == "free_power" for load in inputs.heat_loads)
+        )
         or (
             inputs.any_solar_owned_heat_load_on
             and (
@@ -1867,6 +1885,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         key=lambda load: load.priority,
         reverse=True,
     )
+    free_power_shed_candidates = sorted(
+        [load for load in inputs.heat_loads if load.solar_owned and load.lease_reason == "free_power"],
+        key=lambda load: load.priority,
+        reverse=True,
+    )
     add_candidates = sorted(
         [
             load
@@ -1878,12 +1901,15 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
                     and discretionary_budget_kwh >= load_energy_cost_kwh(load, settings) + settings.solar_soak_required_battery_margin_kwh
                 )
                 or load_fits_export(load, export_power_w, settings)
+                or free_power_thermal_allowed
             )
         ],
         key=lambda load: load.priority,
     )
     thermal_load_to_shed = (
-        shed_candidates[0].name
+        free_power_shed_candidates[0].name
+        if not inputs.free_power_active and free_power_shed_candidates
+        else shed_candidates[0].name
         if shed_candidates
         else overnight_dining_shed_candidates[0].name
         if overnight_dining_shed_candidates
@@ -1896,7 +1922,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     morning_preheat_load_to_add = preheat_candidates[0].name if morning_preheat_allowed else None
     comfort_load_to_add = comfort_candidates[0].name if comfort_heat_allowed else None
     solar_soak_load_to_add = add_candidates[0].name if add_candidates else None
-    thermal_load_to_add = morning_preheat_load_to_add or overnight_dining_load_to_add or underfloor_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
+    thermal_load_to_add = (
+        solar_soak_load_to_add
+        if free_power_thermal_allowed and thermal_allowed
+        else morning_preheat_load_to_add or overnight_dining_load_to_add or underfloor_load_to_add or comfort_load_to_add or (solar_soak_load_to_add if thermal_allowed else None)
+    )
     comfort_load = next((load for load in comfort_candidates if load.name == comfort_load_to_add), None)
     underfloor_load = next((load for load in inputs.heat_loads if load.name == underfloor_load_to_add), None)
     thermal_rotation_recommended = (
@@ -1941,6 +1971,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cheap_grid_reason,
     ) = cheap_grid_state(inputs, settings, tier, reserve_soc, ev_grid_bypass_required)
 
+    if inputs.free_power_active:
+        cheap_grid_preserve_required = False
+        cheap_grid_charge_required = True
+        cheap_grid_preserve_target_soc = 100.0
+        cheap_grid_charge_target_soc = 100.0
+        cheap_grid_mode = "free_power"
+        cheap_grid_reason = "free power active: prioritise grid charging battery to 100% and run eligible thermal loads"
+
     if cheap_grid_preserve_required or cheap_grid_charge_required or ev_grid_bypass_required:
         active_reserve_target_soc = max(
             active_reserve_target_soc,
@@ -1964,6 +2002,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_action = "shed_blocked_no_owned_loads"
     elif thermal_should_shed:
         thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
+    elif free_power_thermal_allowed and thermal_allowed and thermal_load_to_add:
+        thermal_action = "add_one"
     elif morning_preheat_allowed and thermal_load_to_add:
         thermal_action = "morning_preheat"
     elif overnight_dining_comfort_allowed and thermal_load_to_add:
@@ -1984,6 +2024,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         thermal_policy_state = "shed"
     elif paid_grid_avoidance_required:
         thermal_policy_state = "battery_priority"
+    elif free_power_thermal_allowed and thermal_allowed:
+        thermal_policy_state = "free_power"
     elif morning_preheat_allowed:
         thermal_policy_state = "morning_preheat"
     elif overnight_dining_comfort_allowed:
@@ -2031,7 +2073,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         target_temperature = settings.cool_soak_target_temp if thermal_mode == "cooling" else settings.heat_soak_target_temp
         target_fan_mode = settings.cool_soak_fan_mode if thermal_mode == "cooling" else settings.heat_soak_fan_mode
         target_hvac_mode = "cool" if thermal_mode == "cooling" else "heat"
-        lease_reason = "solar_soak"
+        lease_reason = "free_power" if free_power_thermal_allowed else "solar_soak"
 
     proposed_actions: list[str] = []
     reason_parts = []
@@ -2048,8 +2090,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     else:
         reason_parts.append(f"SOC unavailable: raw {inputs.raw_soc or 'missing'} and fallback stale")
     if thermal_allowed:
-        reason = "thermal_allowed=true"
-        reason += f": {export_soak_reason}" if export_soak_available else f": {energy_budget_reason}"
+        reason = "thermal_allowed=true: free power active" if free_power_thermal_allowed else "thermal_allowed=true"
+        if not free_power_thermal_allowed:
+            reason += f": {export_soak_reason}" if export_soak_available else f": {energy_budget_reason}"
         reason_parts.append(reason)
         thermal_reason_parts.append(reason)
     else:
@@ -2183,7 +2226,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     active_policy = "normal"
     post_cheap_restore_reason = "none"
-    if time_between(inputs.now, "07:00", "21:00"):
+    if inputs.free_power_active:
+        active_policy = "free_power"
+    elif time_between(inputs.now, "07:00", "21:00"):
         active_policy = "paid_time_discharge_enable"
         paid_discharge_target = paid_time_discharge_target_soc(soc, settings)
         if tariff_window(inputs.now) == "morning_solar_ramp":
@@ -2226,7 +2271,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         now=inputs.now,
         forecast_mode=tier.mode,
         active_slot=actual_active_prog,
-        tariff_window=tariff_window(inputs.now),
+        tariff_window=effective_tariff_window,
         target_17_soc=tier.target_17_soc,
         current_reserve_soc=reserve_soc,
         grid_charge_target_soc=effective_grid_charge_target_soc,
@@ -2439,6 +2484,14 @@ def build_deye_plan(decision: EnergyManagerDecision, settings: EnergyManagerSett
             mode = "preserve"
             policy = "cheap_grid_preserve"
             reason = decision.cheap_grid_reason
+
+    if decision.tariff_window == "free_power" and decision.grid_charge_required:
+        capacities[decision.active_slot] = 100.0
+        charges[decision.active_slot] = "Allow Grid"
+        mode = "free_power"
+        policy = "free_power"
+        reason = decision.cheap_grid_reason
+        grid_charge_enabled = True
 
     if settings.ev_control_enabled:
         value = settings.ev_bypass_program_power_w if decision.ev_grid_bypass_required else settings.ev_restore_program_power_w

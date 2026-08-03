@@ -245,6 +245,7 @@ class EnergyManagerInputs:
     outdoor_temperature: float | None = None
     indoor_average_temperature: float | None = None
     home_occupied: bool | None = None
+    free_power_active: bool = False
     any_solar_owned_heat_load_on: bool = False
     heat_loads: list[HeatLoadState] = field(default_factory=list)
     heat_available: bool = False

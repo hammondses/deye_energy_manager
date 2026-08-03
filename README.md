@@ -2,6 +2,12 @@
 
 Home Assistant custom integration for Deye battery reserve planning, Solcast-aware grid charging, EV grid-bypass policy, inverter cooling, thermal storage control, and diagnostics.
 
+## Free power periods
+
+Create a Home Assistant Schedule helper for the provider's free-power hour, then select that helper as the optional `free_power_active` entity in the integration's **Entities** options. While the helper is on, the manager targets 100% grid battery charge and starts eligible managed thermal loads. When it turns off, normal policy resumes and free-power-owned thermal loads are returned to normal.
+
+Actual writes still require the existing gates: Deye and grid-charge control for battery charging; thermal control, direct actuation mode, and direct climate control for heating. Manual climate overrides and battery-discharge shed protection remain active.
+
 The integration defaults to advisory/read-only behavior:
 
 - `switch.deye_energy_manager_enabled`: on
