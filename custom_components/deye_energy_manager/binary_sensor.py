@@ -47,6 +47,8 @@ BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="emergency_shed_all_required", name="Emergency shed all required", value_fn=lambda d: d.emergency_shed_all_required),
     DeyeBinarySensorDescription(key="overnight_protection_required", name="Overnight protection required", value_fn=lambda d: d.overnight_protection_required),
     DeyeBinarySensorDescription(key="bedroom_heat_taper_recommended", name="Bedroom heat taper recommended", value_fn=lambda d: d.bedroom_heat_taper_recommended),
+    DeyeBinarySensorDescription(key="bedroom_night_heating_active", name="Bedroom night heating active", value_fn=lambda d: d.bedroom_night_heating_active),
+    DeyeBinarySensorDescription(key="bedroom_night_heating_should_disarm", name="Bedroom night heating should disarm", value_fn=lambda d: d.bedroom_night_heating_should_disarm),
     DeyeBinarySensorDescription(key="grid_charge_required", name="Grid charge required", value_fn=lambda d: d.grid_charge_required),
     DeyeBinarySensorDescription(key="cheap_grid_preserve_required", name="Cheap grid preserve required", value_fn=lambda d: d.cheap_grid_preserve_required),
     DeyeBinarySensorDescription(key="cheap_grid_topup_required", name="Cheap grid topup required", value_fn=lambda d: d.cheap_grid_topup_required),

@@ -525,6 +525,7 @@ def cheap_grid_state(
     )
     heavy_required = (
         settings.cheap_grid_charge_enabled
+        and not settings.bedroom_night_heating_armed
         and soc is not None
         and soc < heavy_target - 1.0
         and (
@@ -536,6 +537,7 @@ def cheap_grid_state(
     )
     topup_required = (
         settings.cheap_grid_charge_enabled
+        and not settings.bedroom_night_heating_armed
         and soc is not None
         and soc < morning_target - 1.0
         and not heavy_required
@@ -544,7 +546,7 @@ def cheap_grid_state(
         and not charge_blocked_by_latch
     )
     charge_target = heavy_target if heavy_required else morning_target
-    preserve_required = settings.cheap_grid_preserve_enabled
+    preserve_required = settings.cheap_grid_preserve_enabled or settings.bedroom_night_heating_armed
     preserve_target = min(100.0, soc + 1.0) if ev_grid_bypass_required and soc is not None else morning_target
 
     if ev_charge_saturated:
@@ -587,9 +589,10 @@ def cheap_grid_state(
         mode = "preserve"
         soc_text = f"SOC {soc:.0f}% at/above target" if soc is not None and soc >= morning_target - 1.0 else "SOC unavailable or below target"
         latch_text = f"; charge latch held at {blocked_target:.0f}%" if charge_blocked_by_latch and blocked_target is not None else ""
+        bedroom_text = "; bedroom night heating armed, battery charging suppressed" if settings.bedroom_night_heating_armed else ""
         reason = (
             f"cheap_grid_preserve: {soc_text}; 7am target {morning_target:.0f}%; "
-            f"using grid for house load, not charging battery{latch_text}"
+            f"using grid for house load, not charging battery{bedroom_text}{latch_text}"
         )
     elif not settings.cheap_grid_preserve_enabled and not settings.cheap_grid_charge_enabled:
         mode = "disabled"
@@ -601,6 +604,38 @@ def cheap_grid_state(
         else:
             reason = f"cheap_grid idle: SOC {soc:.0f}% >= preserve target {preserve_target:.0f}%"
     return preserve_required, topup_required or heavy_required, preserve_target, charge_target, mode, reason
+
+
+def bedroom_night_heating_state(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+    morning_start_soc_target: float,
+    solar_has_arrived: bool,
+) -> tuple[bool, bool, str]:
+    """Return active/disarm state for an explicitly armed bedroom night."""
+
+    if not settings.bedroom_night_heating_armed:
+        return False, False, "bedroom night heating disarmed"
+    if not settings.enabled:
+        return False, False, "bedroom night heating blocked: manager disabled"
+    if not time_between(inputs.now, "17:00", "12:00"):
+        return False, True, "bedroom night heating disarm: 12:00 cutoff reached"
+
+    paid_import_w = max(inputs.paid_grid_import_w if inputs.paid_grid_import_w is not None else inputs.grid_power_w, 0.0)
+    if time_between(inputs.now, "07:00", "12:00") and paid_import_w >= settings.paid_grid_import_threshold_w:
+        return False, True, f"bedroom night heating disarm: paid grid import {paid_import_w:.0f}W"
+    if time_between(inputs.now, "09:00", "12:00") and not solar_has_arrived and (
+        inputs.battery_soc is None or inputs.battery_soc <= morning_start_soc_target
+    ):
+        soc_text = "unavailable" if inputs.battery_soc is None else f"{inputs.battery_soc:.0f}%"
+        return False, True, (
+            f"bedroom night heating disarm: 09:00 recovery unsafe; SOC {soc_text}, "
+            f"morning target {morning_start_soc_target:.0f}%, solar not arrived"
+        )
+    return True, False, (
+        f"bedroom night heating active at {settings.overnight_bedroom_taper_target_temp:.1f}C; "
+        f"morning reserve {morning_start_soc_target:.0f}%"
+    )
 
 
 def hours_until_time(now: datetime, target: str) -> float:
@@ -1611,6 +1646,11 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         paid_grid_avoidance_required = False
         forecast_drain_blocked = False
         paid_time_reserve_reason = "paid grid avoidance suspended: free power active"
+    (
+        bedroom_night_heating_active,
+        bedroom_night_heating_should_disarm,
+        bedroom_night_heating_reason,
+    ) = bedroom_night_heating_state(inputs, settings, morning_start_soc_target, solar_has_arrived)
     if paid_grid_avoidance_required and discretionary_budget_kwh is not None:
         discretionary_budget_kwh = min(discretionary_budget_kwh, -settings.paid_grid_avoidance_buffer_kwh)
         discretionary_budget_positive = False
@@ -2189,6 +2229,12 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     if bedroom_heat_taper_recommended:
         proposed_actions.append("taper_bedroom_heat")
         reason_parts.append(f"bedroom_heat_taper_recommended=true: target {settings.overnight_bedroom_taper_target_temp:.1f}C")
+    if bedroom_night_heating_should_disarm:
+        proposed_actions.append("disarm_bedroom_night_heating")
+        reason_parts.append(bedroom_night_heating_reason)
+    elif bedroom_night_heating_active:
+        proposed_actions.append("hold_bedroom_night_heating")
+        reason_parts.append(bedroom_night_heating_reason)
     if thermal_rotation_recommended:
         proposed_actions.append("rotate_heat_load")
         proposed_actions.append("rotate_thermal_load")
@@ -2368,6 +2414,9 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         emergency_shed_all_required=thermal_should_emergency_shed,
         overnight_protection_required=overnight_protection_required,
         bedroom_heat_taper_recommended=bedroom_heat_taper_recommended,
+        bedroom_night_heating_active=bedroom_night_heating_active,
+        bedroom_night_heating_should_disarm=bedroom_night_heating_should_disarm,
+        bedroom_night_heating_reason=bedroom_night_heating_reason,
         projected_soc_08=projected_soc,
         morning_start_soc_target=morning_start_soc_target,
         evening_peak_soc_target=evening_peak_soc_target,

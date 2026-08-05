@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.39
+
+- Add a persisted `Bedroom night heating armed` switch that holds the managed bedroom at the configurable night target, independently of general thermal control.
+- Shed other managed heating while armed, allow free-power operation to take priority, and restore bedroom-only heating afterward.
+- Use reserve-only cheap-grid passthrough while armed, suppress battery top-up, and disarm on sustained paid morning import, unsafe 09:00 recovery, or the 12:00 cutoff.
+
 ## v0.5.38
 
 - Add an optional Home Assistant schedule/binary-sensor input for free-power periods.

@@ -332,7 +332,7 @@ NUMBER_DEFAULTS = {
     "manual_override_cooldown_min": 60.0,
     "emergency_shed_discharge_w": 4000.0,
     "battery_capacity_kwh": 30.0,
-    "overnight_bedroom_taper_target_temp": 18.0,
+    "overnight_bedroom_taper_target_temp": 17.0,
     "max_fallback_soc_age_minutes": 360.0,
     "cooling_target_temp_c": 43.0,
     "cooling_curve_idle_fan_pct": 15.0,

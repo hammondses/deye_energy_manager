@@ -74,6 +74,12 @@ Diagnostics:
 
 `grid_charge_required` means active battery charging. `cheap_grid_preserve_required` means reserve-only battery preservation. `cheap_grid_mode` is one of `off`, `preserve`, `top_up_to_morning_target`, `heavy_grid_charge`, or `disabled`.
 
+## Bedroom Night Heating
+
+`switch.deye_energy_manager_bedroom_night_heating_armed` starts a persisted bedroom-only night session without enabling general thermal control. While armed, the manager turns off the other configured thermal loads, holds the bedroom at `number.deye_energy_manager_overnight_bedroom_taper_target` (17 C by default), and suppresses cheap-grid battery charging in favour of reserve-only grid passthrough. Free-power mode remains higher priority.
+
+The session disarms after sustained paid grid import between 07:00 and 12:00, at 09:00 when solar has not arrived and SOC is at or below the calculated morning target, or unconditionally at 12:00.
+
 Options are split into sections in the integration UI:
 
 - Controls

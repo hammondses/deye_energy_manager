@@ -23,6 +23,7 @@ class EnergyManagerSettings:
     heat_control_enabled: bool = False
     thermal_control_enabled: bool = False
     direct_climate_control_enabled: bool = False
+    bedroom_night_heating_armed: bool = False
     pv_load_test_control_enabled: bool = False
     inverter_cooling_control_enabled: bool = False
     export_limited_mode_enabled: bool = False
@@ -147,7 +148,7 @@ class EnergyManagerSettings:
     manual_override_cooldown_min: float = 60.0
     emergency_shed_discharge_w: float = 4000.0
     battery_capacity_kwh: float = 30.0
-    overnight_bedroom_taper_target_temp: float = 18.0
+    overnight_bedroom_taper_target_temp: float = 17.0
     cooling_target_temp_c: float = 43.0
     cooling_curve_idle_fan_pct: float = 15.0
     cooling_curve_fan_pct_per_kw: float = 3.5
@@ -397,6 +398,9 @@ class EnergyManagerDecision:
     emergency_shed_all_required: bool
     overnight_protection_required: bool
     bedroom_heat_taper_recommended: bool
+    bedroom_night_heating_active: bool
+    bedroom_night_heating_should_disarm: bool
+    bedroom_night_heating_reason: str
     projected_soc_08: float | None
     morning_start_soc_target: float
     evening_peak_soc_target: float

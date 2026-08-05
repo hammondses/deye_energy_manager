@@ -397,6 +397,47 @@ def test_cheap_grid_preserve_is_separate_from_grid_charge() -> None:
     assert "using grid for house load" in decision.cheap_grid_reason
 
 
+def test_armed_bedroom_uses_reserve_only_and_suppresses_battery_topup() -> None:
+    settings = EnergyManagerSettings(
+        bedroom_night_heating_armed=True,
+        cheap_grid_preserve_enabled=True,
+        cheap_grid_charge_enabled=True,
+        grid_charge_control_enabled=True,
+    )
+    decision = decide(base_inputs(now=dt(22), battery_soc=10, forecast_tomorrow_kwh=20), settings)
+    plan = build_deye_plan(decision, settings)
+
+    assert decision.bedroom_night_heating_active
+    assert not decision.bedroom_night_heating_should_disarm
+    assert decision.cheap_grid_preserve_required
+    assert not decision.cheap_grid_topup_required
+    assert not decision.grid_charge_required
+    assert plan.charge_modes[decision.active_slot] == "No Grid or Gen"
+    assert not plan.grid_charge_enabled
+
+
+def test_armed_bedroom_disarms_on_bad_morning_or_noon_cutoff() -> None:
+    settings = EnergyManagerSettings(bedroom_night_heating_armed=True)
+
+    bad_morning = decide(base_inputs(now=dt(9), battery_soc=20, forecast_tomorrow_kwh=20), settings)
+    assert bad_morning.bedroom_night_heating_should_disarm
+    assert "09:00 recovery unsafe" in bad_morning.bedroom_night_heating_reason
+
+    good_morning = decide(base_inputs(now=dt(9), battery_soc=80, forecast_tomorrow_kwh=20), settings)
+    assert good_morning.bedroom_night_heating_active
+
+    paid_import = decide(
+        base_inputs(now=dt(7, 30), battery_soc=80, paid_grid_import_w=600, forecast_tomorrow_kwh=20),
+        settings,
+    )
+    assert paid_import.bedroom_night_heating_should_disarm
+    assert "paid grid import" in paid_import.bedroom_night_heating_reason
+
+    noon = decide(base_inputs(now=dt(12), battery_soc=80), settings)
+    assert noon.bedroom_night_heating_should_disarm
+    assert "12:00 cutoff" in noon.bedroom_night_heating_reason
+
+
 def test_cheap_grid_topup_only_charges_to_morning_target() -> None:
     settings = EnergyManagerSettings(
         cheap_grid_preserve_enabled=True,

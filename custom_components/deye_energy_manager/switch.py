@@ -46,7 +46,9 @@ SWITCHES = {
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(DeyeFeatureSwitch(coordinator, key, name) for key, name in SWITCHES.items())
+    async_add_entities(
+        [*(DeyeFeatureSwitch(coordinator, key, name) for key, name in SWITCHES.items()), BedroomNightHeatingSwitch(coordinator)]
+    )
 
 
 class DeyeFeatureSwitch(DeyeEnergyManagerEntity, SwitchEntity):
@@ -65,3 +67,22 @@ class DeyeFeatureSwitch(DeyeEnergyManagerEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_option(self._key, False)
+
+
+class BedroomNightHeatingSwitch(DeyeEnergyManagerEntity, SwitchEntity):
+    """Runtime arm switch for bedroom-only night heating."""
+
+    _attr_icon = "mdi:radiator"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "bedroom_night_heating_armed", "Bedroom night heating armed")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.bedroom_night_heating_armed
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_bedroom_night_heating(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_bedroom_night_heating(False)

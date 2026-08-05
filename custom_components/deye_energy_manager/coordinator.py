@@ -104,6 +104,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._thermal_last_rotated_at: dict[str, datetime] = {}
         self._thermal_last_action: dict[str, tuple[str, str]] = {}
         self._thermal_leases: dict[str, dict[str, object]] = {}
+        self.bedroom_night_heating_armed = False
+        self._bedroom_night_setup_applied = False
         self._paid_grid_import_since: datetime | None = None
         self._last_cooling_write_at: datetime | None = None
         self._last_cooling_feedback_sample_at: datetime | None = None
@@ -183,6 +185,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 for name, value in raw_leases.items()
                 if isinstance(value, dict)
             }
+        self.bedroom_night_heating_armed = bool(data.get("bedroom_night_heating_armed", False))
 
     def _datetime_map(self, raw: object) -> dict[str, datetime]:
         """Return a string to datetime map from stored JSON data."""
@@ -232,6 +235,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "thermal_last_rotated_at": self._serialize_datetime_map(self._thermal_last_rotated_at),
             "thermal_last_action": {name: [action, reason] for name, (action, reason) in self._thermal_last_action.items()},
             "thermal_leases": {name: self._serialize_lease(lease) for name, lease in self._thermal_leases.items()},
+            "bedroom_night_heating_armed": self.bedroom_night_heating_armed,
         }
 
     def _serialize_datetime_map(self, values: dict[str, datetime]) -> dict[str, str]:
@@ -296,6 +300,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             heat_control_enabled=bool(options["heat_control_enabled"]),
             thermal_control_enabled=bool(options["thermal_control_enabled"] or options["heat_control_enabled"]),
             direct_climate_control_enabled=bool(options["direct_climate_control_enabled"]),
+            bedroom_night_heating_armed=self.bedroom_night_heating_armed,
             pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
             inverter_cooling_control_enabled=bool(options["inverter_cooling_control_enabled"]),
             export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
@@ -1030,6 +1035,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.last_control_action = "EV latch cleared manually"
         await self.async_request_refresh()
 
+    async def async_set_bedroom_night_heating(self, armed: bool) -> None:
+        """Arm or disarm the persisted bedroom-only night policy."""
+
+        self.bedroom_night_heating_armed = armed
+        self._bedroom_night_setup_applied = False
+        self._schedule_runtime_save()
+        if not armed and self.settings.direct_climate_control_enabled:
+            await self._direct_stop_bedroom_night_heating("disarmed manually")
+        await self.async_request_refresh()
+
     async def async_force_ev_grid_bypass(self, required: bool) -> None:
         """Force EV grid bypass start/restore once."""
 
@@ -1062,7 +1077,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._apply_inverter_cooling(decision)
             if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
                 await self._apply_deye_plan(build_deye_plan(decision, settings))
-            if settings.heat_control_enabled or settings.thermal_control_enabled:
+            await self._apply_bedroom_night_heating(decision)
+            if (settings.heat_control_enabled or settings.thermal_control_enabled) and (
+                not decision.bedroom_night_heating_active or decision.tariff_window == "free_power"
+            ):
                 await self._apply_heat(decision)
 
     async def _apply_inverter_cooling(self, decision: EnergyManagerDecision) -> None:
@@ -1396,6 +1414,33 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return
         self.last_control_action = f"thermal actuation mode {mode} has no runtime actuator"
 
+    async def _apply_bedroom_night_heating(self, decision: EnergyManagerDecision) -> None:
+        """Apply the independently armed bedroom-only comfort policy."""
+
+        if decision.bedroom_night_heating_should_disarm:
+            self.bedroom_night_heating_armed = False
+            self._bedroom_night_setup_applied = False
+            self._schedule_runtime_save()
+            if self.settings.direct_climate_control_enabled:
+                await self._direct_stop_bedroom_night_heating(decision.bedroom_night_heating_reason)
+            return
+        if not decision.bedroom_night_heating_active:
+            return
+        if decision.tariff_window == "free_power":
+            self._bedroom_night_setup_applied = False
+            return
+        if not self.settings.direct_climate_control_enabled:
+            self.last_control_action = "bedroom night heating blocked: direct climate control disabled"
+            return
+        if not self._bedroom_night_setup_applied:
+            await self._direct_shed_all_heat_loads(
+                "bedroom night heating armed",
+                include_unowned=True,
+                exclude_bedroom=True,
+            )
+        await self._direct_set_bedroom_night_heating()
+        self._bedroom_night_setup_applied = True
+
     def _thermal_mode(self) -> str:
         return "heating" if self.settings.thermal_mode == "auto" else self.settings.thermal_mode
 
@@ -1563,8 +1608,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
             self.last_control_action = reason
 
-    async def _direct_shed_all_heat_loads(self, reason: str, include_unowned: bool = False) -> None:
+    async def _direct_shed_all_heat_loads(
+        self,
+        reason: str,
+        include_unowned: bool = False,
+        exclude_bedroom: bool = False,
+    ) -> None:
         for load in self.heat_loads:
+            if exclude_bedroom and str(load.get("slug", "")) == "bedroom":
+                continue
             if include_unowned and bool(load.get("never_emergency_shed", False)):
                 continue
             ownership = str(load.get("ownership_entity", ""))
@@ -1585,7 +1637,78 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 "last_manager_action_at": dt_util.now(),
                 "pending_confirmation_until": dt_util.now() + timedelta(minutes=5),
             }
-        self.last_control_action = f"direct emergency shed all heat loads: {reason}"
+        self.last_control_action = f"direct shed all heat loads: {reason}"
+        self._schedule_runtime_save()
+
+    async def _direct_set_bedroom_night_heating(self) -> None:
+        """Hold the configured bedroom climate at the night target."""
+
+        load = next((item for item in self.heat_loads if str(item.get("slug", "")) == "bedroom"), None)
+        if load is None:
+            self.last_control_action = "bedroom night heating blocked: bedroom load unavailable"
+            return
+        climate = str(load.get("climate_entity", ""))
+        state = self.hass.states.get(climate) if climate else None
+        if state is None or state.state in UNAVAILABLE:
+            self.last_control_action = "bedroom night heating blocked: bedroom climate unavailable"
+            return
+        target = self.settings.overnight_bedroom_taper_target_temp
+        name = str(load.get("name", climate))
+        changed = self._thermal_leases.get(name, {}).get("lease_reason") != "bedroom_night_heating"
+        if state.state != "heat":
+            await self.hass.services.async_call(
+                "climate", "set_hvac_mode", {"entity_id": climate, "hvac_mode": "heat"}, blocking=False
+            )
+            changed = True
+        if abs(float(state.attributes.get("temperature", 0.0) or 0.0) - target) >= 0.1:
+            await self.hass.services.async_call(
+                "climate", "set_temperature", {"entity_id": climate, "temperature": target}, blocking=False
+            )
+            changed = True
+        ownership = str(load.get("ownership_entity", ""))
+        ownership_state = self.hass.states.get(ownership) if ownership else None
+        if ownership_state is not None and ownership_state.state != "on":
+            await self.hass.services.async_call("input_boolean", "turn_on", {"entity_id": ownership}, blocking=False)
+            changed = True
+        if not changed:
+            return
+        now = dt_util.now()
+        self._thermal_leases[name] = {
+            "owner": "deye_energy_manager",
+            "lease_reason": "bedroom_night_heating",
+            "lease_started_at": now,
+            "lease_until": now + timedelta(hours=18),
+            "desired_hvac_mode": "heat",
+            "desired_temperature": target,
+            "last_manager_action_at": now,
+            "pending_confirmation_until": now + timedelta(minutes=5),
+        }
+        self._thermal_last_action[name] = ("add", f"bedroom night heating {target:.1f}C")
+        self.last_control_action = f"bedroom night heating active at {target:.1f}C"
+        self._schedule_runtime_save()
+
+    async def _direct_stop_bedroom_night_heating(self, reason: str) -> None:
+        """Turn off the bedroom climate and clear its manager lease."""
+
+        load = next((item for item in self.heat_loads if str(item.get("slug", "")) == "bedroom"), None)
+        if load is None:
+            return
+        climate = str(load.get("climate_entity", ""))
+        if climate and self.hass.states.get(climate):
+            await self.hass.services.async_call("climate", "turn_off", {"entity_id": climate}, blocking=False)
+        ownership = str(load.get("ownership_entity", ""))
+        if ownership and self.hass.states.get(ownership):
+            await self.hass.services.async_call("input_boolean", "turn_off", {"entity_id": ownership}, blocking=False)
+        now = dt_util.now()
+        name = str(load.get("name", climate))
+        self._thermal_leases[name] = {
+            "owner": "none",
+            "lease_reason": "bedroom_night_heating_ended",
+            "last_manager_action_at": now,
+            "pending_confirmation_until": now + timedelta(minutes=5),
+        }
+        self._thermal_last_action[name] = ("shed", reason)
+        self.last_control_action = reason
         self._schedule_runtime_save()
 
     async def _normalise_or_turn_off_load(self, load: dict[str, object]) -> None:
