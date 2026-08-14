@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.5.41
+
+- Use `sensor.evcharger_status_connector` as the authoritative charging-state signal.
+- Stop the EV charger and restore normal inverter power immediately when connector status reports `SuspendedEV`.
+- Stop any still-active overnight EV transaction when the cheap-grid window ends.
+- Prevent completed sessions from repeatedly re-arming the inverter bypass while charger telemetry catches up.
+
 ## v0.5.40
 
 - Use the TIMXON charge-control switch as the authoritative EV charging signal, including low-current charging.

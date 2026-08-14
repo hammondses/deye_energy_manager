@@ -868,6 +868,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_power_w=ev_power,
             ev_charge_requested=self._state_optional_on("ev_charge_control"),
             ev_current_a=ev_current,
+            ev_connector_status=self._state_string("ev_connector_status"),
             ev_low_since=self.ev_low_since,
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),
@@ -1086,6 +1087,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             settings = self.settings
             if settings.inverter_cooling_control_enabled:
                 await self._apply_inverter_cooling(decision)
+            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_stop":
+                await self._call_switch(
+                    self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
+                    False,
+                    reason=decision.ev_decision_reason,
+                )
             if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
                 await self._apply_deye_plan(build_deye_plan(decision, settings))
             await self._apply_bedroom_night_heating(decision)

@@ -61,6 +61,7 @@ DEFAULT_ENTITY_MAP = {
     "ev_power": "",
     "ev_charge_control": "switch.evcharger_charge_control",
     "ev_current": "sensor.evcharger_current_import",
+    "ev_connector_status": "sensor.evcharger_status_connector",
     "outdoor_temperature": "",
     "indoor_average_temperature": "",
     "home_occupancy": "",

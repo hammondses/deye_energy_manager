@@ -1405,7 +1405,9 @@ def ev_decision(
 
     charge_control_available = inputs.ev_charge_requested is not None
     charge_control_detected = inputs.ev_charge_requested is True
-    current_detected = inputs.ev_current_a is not None and inputs.ev_current_a > 0.5
+    connector_status = (inputs.ev_connector_status or "").lower()
+    connector_charging = connector_status == "charging"
+    connector_suspended_by_ev = connector_status == "suspendedev"
     power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
     jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w
     high_load_detected = inputs.ev_power_w is None and cheap_window and inputs.essential_power_w > 6500.0
@@ -1424,7 +1426,7 @@ def ev_decision(
         porsche_status_detected and inputs.ev_latch_on
     )
     ev_charging_detected = (
-        charge_control_detected and (current_detected or not inputs.ev_latch_on)
+        charge_control_detected and (connector_charging or not inputs.ev_latch_on)
         if charge_control_available
         else legacy_charging_detected
     )
@@ -1474,16 +1476,8 @@ def ev_decision(
         or porsche_status_or_end_stopped
         or hold_expired_low
     )
-    charge_control_stopped = (
-        not charge_control_detected
-        or (
-            inputs.ev_latch_on
-            and inputs.ev_current_a is not None
-            and not current_detected
-            and inputs.ev_low_since is not None
-            and (inputs.now - inputs.ev_low_since) >= timedelta(minutes=2)
-        )
-    )
+    charge_control_done = charge_control_detected and connector_suspended_by_ev
+    charge_control_stopped = not charge_control_detected or charge_control_done
     ev_stop = (
         inputs.manual_clear_ev_latch
         or failsafe_0700
@@ -1521,7 +1515,9 @@ def ev_decision(
     )
 
     action = "none"
-    if ev_stop and inputs.ev_latch_on:
+    if charge_control_detected and (charge_control_done or failsafe_0700):
+        action = "ev_charger_stop"
+    elif ev_stop and inputs.ev_latch_on:
         action = "ev_grid_bypass_restore"
     elif ev_grid_bypass_required and not inputs.ev_latch_on:
         action = "ev_grid_bypass_start"
@@ -1530,10 +1526,14 @@ def ev_decision(
     elif ev_solar_charge_allowed:
         action = "allow_solar_charge"
 
-    if charge_control_detected and current_detected:
-        reason = f"EV charging confirmed: charger control on at {inputs.ev_current_a:.1f}A"
+    if charge_control_done:
+        reason = "EV charging complete: connector status SuspendedEV"
+    elif charge_control_detected and failsafe_0700:
+        reason = "EV cheap-grid window ended: stop charger and restore inverter"
+    elif charge_control_detected and connector_charging:
+        reason = "EV charging confirmed: connector status Charging"
     elif charge_control_detected:
-        reason = "EV charging requested; waiting for charger current"
+        reason = "EV charging requested; waiting for connector status Charging"
     elif power_detected:
         reason = f"EV charging detected: EV power {inputs.ev_power_w:.0f}W > {settings.ev_active_load_threshold_w:.0f}W"
     elif jump_detected:
