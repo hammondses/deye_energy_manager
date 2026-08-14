@@ -254,6 +254,8 @@ class EnergyManagerInputs:
     ev_latch_on: bool = False
     ev_hold_until: datetime | None = None
     ev_power_w: float | None = None
+    ev_charge_requested: bool | None = None
+    ev_current_a: float | None = None
     ev_low_since: datetime | None = None
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None

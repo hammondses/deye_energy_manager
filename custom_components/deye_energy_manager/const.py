@@ -59,6 +59,8 @@ DEFAULT_ENTITY_MAP = {
     "porsche_charging_ends": "sensor.cayenne_e_hybrid_my24_charging_ends",
     "porsche_charging_power": "sensor.cayenne_e_hybrid_my24_charging_power",
     "ev_power": "",
+    "ev_charge_control": "switch.evcharger_charge_control",
+    "ev_current": "sensor.evcharger_current_import",
     "outdoor_temperature": "",
     "indoor_average_temperature": "",
     "home_occupancy": "",

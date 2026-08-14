@@ -492,6 +492,13 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         state = self.hass.states.get(entity_id) if entity_id else None
         return state is not None and state.state == "on"
 
+    def _state_optional_on(self, key: str) -> bool | None:
+        entity_id = self.entity_map.get(key)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in UNAVAILABLE:
+            return None
+        return state.state == "on"
+
     def _entity_float(self, entity_id: str) -> float | None:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in UNAVAILABLE:
@@ -801,6 +808,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         now = dt_util.now()
         essential_power = self._state_float("essential_power") or 0.0
         ev_power = self._state_float("ev_power")
+        ev_current = self._state_float("ev_current")
         settings = self.settings
         battery_power_w = self._state_float("battery_power") or 0.0
         inverter_ac_temperature_c, cooling_temperature_sample_at, cooling_temperature_trend = self._cooling_temperature()
@@ -821,7 +829,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, settings)
         resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
-        if ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w:
+        ev_idle = ev_current <= 0.5 if ev_current is not None else ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w
+        if ev_idle:
             self.ev_low_since = self.ev_low_since or now
         else:
             self.ev_low_since = None
@@ -857,6 +866,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_latch_on=self.ev_latch_on,
             ev_hold_until=self.ev_hold_until,
             ev_power_w=ev_power,
+            ev_charge_requested=self._state_optional_on("ev_charge_control"),
+            ev_current_a=ev_current,
             ev_low_since=self.ev_low_since,
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),

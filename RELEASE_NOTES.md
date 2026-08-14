@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.40
+
+- Use the TIMXON charge-control switch as the authoritative EV charging signal, including low-current charging.
+- Restore normal inverter programme power as soon as charger control turns off.
+- Preserve the configured 2000 W inverter safety cap while overnight EV charging is active.
+
 ## v0.5.39
 
 - Add a persisted `Bedroom night heating armed` switch that holds the managed bedroom at the configurable night target, independently of general thermal control.

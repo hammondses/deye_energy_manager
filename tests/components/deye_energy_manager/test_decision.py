@@ -961,6 +961,41 @@ def test_ev_power_sensor_detects_charging() -> None:
     assert decision.ev_expected_action == "ev_grid_bypass_start"
 
 
+def test_charger_control_and_current_are_authoritative() -> None:
+    settings = EnergyManagerSettings(ev_control_enabled=True, ev_grid_bypass_enabled=True)
+    charging = decide(
+        base_inputs(
+            now=dt(22),
+            ev_charge_requested=True,
+            ev_current_a=1.0,
+            porsche_soc=100,
+            porsche_charging_status="charging_completed",
+        ),
+        settings,
+    )
+    assert charging.ev_grid_bypass_required
+    assert "1.0A" in charging.ev_decision_reason
+
+    starting = decide(
+        base_inputs(now=dt(22), ev_charge_requested=True, ev_current_a=0),
+        settings,
+    )
+    assert starting.ev_grid_bypass_required
+
+    paused = decide(
+        base_inputs(now=dt(22), ev_latch_on=True, ev_charge_requested=True, ev_current_a=0, ev_low_since=dt(21, 59)),
+        settings,
+    )
+    assert paused.ev_grid_bypass_required
+
+    stopped = decide(
+        base_inputs(now=dt(22), ev_latch_on=True, ev_charge_requested=True, ev_current_a=0, ev_low_since=dt(21, 57)),
+        settings,
+    )
+    assert not stopped.ev_grid_bypass_required
+    assert stopped.ev_expected_action == "ev_grid_bypass_restore"
+
+
 def test_ev_power_sensor_stop_restores_latch() -> None:
     decision = decide(
         base_inputs(now=dt(22), ev_latch_on=True, ev_power_w=100, ev_low_since=dt(21, 55)),
