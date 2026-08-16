@@ -1519,7 +1519,9 @@ def ev_decision(
     )
 
     action = "none"
-    if charge_control_detected and (charge_control_done or failsafe_0700):
+    if charge_control_detected and (
+        charge_control_done or (failsafe_0700 and not settings.ev_solar_charging_enabled)
+    ):
         action = "ev_charger_stop"
     elif ev_stop and inputs.ev_latch_on:
         action = "ev_grid_bypass_restore"

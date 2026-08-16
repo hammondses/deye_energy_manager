@@ -1029,6 +1029,17 @@ def test_charger_control_and_connector_status_are_authoritative() -> None:
     assert not morning_cutoff.ev_grid_bypass_required
     assert morning_cutoff.ev_expected_action == "ev_charger_stop"
 
+    solar_handoff = decide(
+        base_inputs(now=dt(7), ev_latch_on=True, ev_charge_requested=True, ev_current_a=16),
+        EnergyManagerSettings(
+            ev_control_enabled=True,
+            ev_grid_bypass_enabled=True,
+            ev_solar_charging_enabled=True,
+        ),
+    )
+    assert not solar_handoff.ev_grid_bypass_required
+    assert solar_handoff.ev_expected_action == "ev_grid_bypass_restore"
+
 
 def test_ev_power_sensor_stop_restores_latch() -> None:
     decision = decide(

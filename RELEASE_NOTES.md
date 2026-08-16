@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.43
+
+- Hand an overnight EV session to daytime solar control at 07:00 without ending the plugged-in OCPP transaction.
+- Restore normal inverter power while the solar controller pauses charging at 0 A until usable surplus is available.
+
 ## v0.5.42
 
 - Allow daytime solar-current modulation to ride through brief `SuspendedEV` connector transitions without the manager stopping the charger.
