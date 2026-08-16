@@ -1476,7 +1476,11 @@ def ev_decision(
         or porsche_status_or_end_stopped
         or hold_expired_low
     )
-    charge_control_done = charge_control_detected and connector_suspended_by_ev
+    charge_control_done = (
+        charge_control_detected
+        and connector_suspended_by_ev
+        and not (settings.ev_solar_charging_enabled and not cheap_window)
+    )
     charge_control_stopped = not charge_control_detected or charge_control_done
     ev_stop = (
         inputs.manual_clear_ev_latch

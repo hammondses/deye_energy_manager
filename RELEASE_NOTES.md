@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.42
+
+- Allow daytime solar-current modulation to ride through brief `SuspendedEV` connector transitions without the manager stopping the charger.
+
 ## v0.5.41
 
 - Use `sensor.evcharger_status_connector` as the authoritative charging-state signal.
