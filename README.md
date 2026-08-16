@@ -309,6 +309,8 @@ Cheap-grid EV bypass uses the TIMXON charge-control switch plus measured charger
 
 EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power. The non-zero bypass cap leaves a limited inverter allowance if grid power is lost while the car is connected. Grid loss is detected from the configured Deye grid-voltage entity and can send persistent plus `notify.*` alerts.
 
+Daytime EV permission waits for the house battery to recover to its derived 07:00 target and for the remaining-PV budget to cover the daily battery target, expected house load, and safety buffers. A charger controller can then allocate both exported power and battery-bound DC solar to the EV, allowing AC EV charging and DC battery charging to run together; permission is withdrawn as soon as the forecast budget is no longer sufficient.
+
 ## Diagnostics And Tuning
 
 The integration exposes one thermal status sensor per managed load, for example:

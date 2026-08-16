@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.44
+
+- Allow forecast-backed solar EV charging only after the house battery reaches its derived 07:00 recovery target.
+- Feed battery-bound DC solar and grid export into the EV current budget so AC EV charging can run alongside battery charging without importing or discharging the battery.
+
 ## v0.5.43
 
 - Hand an overnight EV session to daytime solar control at 07:00 without ending the plugged-in OCPP transaction.

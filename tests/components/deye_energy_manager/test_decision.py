@@ -1245,6 +1245,20 @@ def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     assert decision.ev_expected_action == "allow_solar_charge"
 
 
+def test_ev_solar_charge_waits_for_derived_morning_battery_target() -> None:
+    decision = decide(
+        base_inputs(now=dt(8), battery_soc=20, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=35),
+        EnergyManagerSettings(
+            ev_control_enabled=True,
+            ev_solar_charging_enabled=True,
+            flexible_load_priority="ev_before_thermal",
+        ),
+    )
+
+    assert decision.morning_start_soc_target >= 30
+    assert not decision.ev_solar_charge_allowed
+
+
 def test_daytime_solar_modulation_ignores_suspended_ev_transition() -> None:
     decision = decide(
         base_inputs(

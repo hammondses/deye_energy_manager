@@ -1391,6 +1391,7 @@ def ev_decision(
     inputs: EnergyManagerInputs,
     settings: EnergyManagerSettings,
     cheap_window: bool,
+    battery_recovered: bool,
     battery_priority_satisfied: bool,
     forecast_override: bool,
 ) -> tuple[bool, bool, bool, bool, str, str, float | None, datetime | None]:
@@ -1513,6 +1514,7 @@ def ev_decision(
         settings.enabled
         and settings.ev_control_enabled
         and settings.ev_solar_charging_enabled
+        and battery_recovered
         and battery_priority_satisfied
         and forecast_override
         and settings.flexible_load_priority in {"ev_before_thermal", "battery_first"}
@@ -1551,7 +1553,7 @@ def ev_decision(
     elif ev_grid_bypass_required and inputs.ev_latch_on:
         reason = "EV bypass latch holding from previous detection"
     elif ev_solar_charge_allowed:
-        reason = "EV solar charge allowed: battery priority satisfied and forecast override active"
+        reason = "EV solar charge allowed: morning battery reserve recovered and forecast budget available"
     else:
         reason = "EV idle"
 
@@ -2025,7 +2027,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ev_action,
         ev_detected_power_w,
         ev_hold_until,
-    ) = ev_decision(inputs, settings, cheap_window, battery_priority_satisfied, forecast_override)
+    ) = ev_decision(
+        inputs,
+        settings,
+        cheap_window,
+        soc_known and soc >= morning_start_soc_target,
+        battery_priority_satisfied,
+        forecast_override,
+    )
     if not discretionary_budget_positive and ev_solar_charge_allowed:
         ev_solar_charge_allowed = False
         ev_reason = f"EV solar charge blocked: {energy_budget_reason}"
