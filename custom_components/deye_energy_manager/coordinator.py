@@ -35,7 +35,7 @@ from .const import (
     PROG_POWER_ENTITIES,
     TEXT_DEFAULTS,
 )
-from .decision import build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, resolved_ev_power_w, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, cheap_grid_mirror_programs, cooling_load_collapsed, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, resolved_ev_power_w, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -1136,7 +1136,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ):
                 return
         elif current is not None and desired < current:
-            load_decreased = decision.cooling_load_change_w <= -500.0
+            load_decreased = cooling_load_collapsed(
+                decision.cooling_throughput_w,
+                decision.cooling_load_change_w,
+            )
             if (
                 self._last_cooling_write_at is not None
                 and not fresh_temperature

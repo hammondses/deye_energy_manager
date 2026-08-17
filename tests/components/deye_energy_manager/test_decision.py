@@ -191,6 +191,17 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
         ),
         EnergyManagerSettings(),
     )
+    sunny_dip = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=9000,
+            inverter_ac_temperature_c=40,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=70,
+            cooling_temperature_trend_c_per_min=0,
+            cooling_load_change_w=-1000,
+        ),
+        EnergyManagerSettings(),
+    )
 
     assert decrease.raw_required_pct == 10
     assert decrease.recommended_pct == 45
@@ -200,6 +211,8 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
     assert rising.recommended_pct == 40
     assert steady_at_target.recommended_pct == 50
     assert load_fell.recommended_pct == 20
+    assert sunny_dip.raw_required_pct == 35
+    assert sunny_dip.recommended_pct == 65
 
 
 def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:

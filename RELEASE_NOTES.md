@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.46
+
+- Hold high fan speed through ordinary high-PV fluctuations, reserving immediate fan reductions for genuine throughput collapses of at least 50%.
+
 ## v0.5.45
 
 - Derive EV charging power from charger current and voltage when no dedicated EV power entity is mapped, preventing EV consumption from inflating the rolling background-house-load estimate and repeatedly withdrawing solar charging permission.

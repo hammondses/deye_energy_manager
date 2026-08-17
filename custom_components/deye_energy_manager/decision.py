@@ -32,6 +32,13 @@ def resolved_ev_power_w(
     return max(current_a, 0.0) * max(voltage_v, 0.0)
 
 
+def cooling_load_collapsed(throughput_w: float, load_change_w: float) -> bool:
+    """Return whether inverter throughput fell far enough for an immediate fan reduction."""
+
+    previous_throughput_w = max(throughput_w - load_change_w, 0.0)
+    return load_change_w <= -500.0 and throughput_w <= previous_throughput_w * 0.5
+
+
 def inverter_cooling_recommendation(
     inputs: EnergyManagerInputs,
     settings: EnergyManagerSettings,
@@ -91,7 +98,7 @@ def inverter_cooling_recommendation(
     current_pct = inputs.cooling_fan_percentage
     trend = inputs.cooling_temperature_trend_c_per_min
     load_increased = inputs.cooling_load_change_w >= 500.0
-    load_decreased = inputs.cooling_load_change_w <= -500.0
+    load_decreased = cooling_load_collapsed(throughput_w, inputs.cooling_load_change_w)
     above_target = (
         temperature_error_c is not None
         and temperature_error_c > settings.cooling_target_deadband_c
