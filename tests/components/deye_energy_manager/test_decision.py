@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
 from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, inverter_cooling_recommendation, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
-from custom_components.deye_energy_manager.decision import resolve_soc_value
+from custom_components.deye_energy_manager.decision import resolve_soc_value, resolved_ev_power_w
 from custom_components.deye_energy_manager.migration import migrate_options
 from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
@@ -18,6 +18,12 @@ TZ = ZoneInfo("Pacific/Auckland")
 
 def dt(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 7, 1, hour, minute, tzinfo=TZ)
+
+
+def test_ev_power_falls_back_to_current_times_voltage() -> None:
+    assert resolved_ev_power_w(None, 31.0, 240.0) == 7440.0
+    assert resolved_ev_power_w(7100.0, 31.0, 240.0) == 7100.0
+    assert resolved_ev_power_w(None, None, 240.0) is None
 
 
 def base_inputs(**overrides: object) -> EnergyManagerInputs:

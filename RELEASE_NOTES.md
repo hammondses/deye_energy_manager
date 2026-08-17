@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.45
+
+- Derive EV charging power from charger current and voltage when no dedicated EV power entity is mapped, preventing EV consumption from inflating the rolling background-house-load estimate and repeatedly withdrawing solar charging permission.
+
 ## v0.5.44
 
 - Allow forecast-backed solar EV charging only after the house battery reaches its derived 07:00 recovery target.

@@ -18,6 +18,20 @@ FORECAST_TIERS = [
 PROGRAM_ORDER = ("Prog1", "Prog2", "Prog3", "Prog4", "Prog5", "Prog6")
 
 
+def resolved_ev_power_w(
+    measured_power_w: float | None,
+    current_a: float | None,
+    voltage_v: float | None,
+) -> float | None:
+    """Return measured EV power, or derive it from charger current and voltage."""
+
+    if measured_power_w is not None:
+        return max(measured_power_w, 0.0)
+    if current_a is None or voltage_v is None:
+        return None
+    return max(current_a, 0.0) * max(voltage_v, 0.0)
+
+
 def inverter_cooling_recommendation(
     inputs: EnergyManagerInputs,
     settings: EnergyManagerSettings,

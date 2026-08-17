@@ -35,7 +35,7 @@ from .const import (
     PROG_POWER_ENTITIES,
     TEXT_DEFAULTS,
 )
-from .decision import build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, resolved_ev_power_w, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -610,7 +610,13 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 return True
         return False
 
-    def _update_base_load_estimate(self, now: datetime, essential_power_w: float, settings: EnergyManagerSettings) -> float:
+    def _update_base_load_estimate(
+        self,
+        now: datetime,
+        essential_power_w: float,
+        ev_power_w: float | None,
+        settings: EnergyManagerSettings,
+    ) -> float:
         """Update and return rolling background house load estimate."""
 
         discretionary_w = 0.0
@@ -619,16 +625,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             state = self.hass.states.get(ownership) if ownership else None
             if state and state.state == "on":
                 discretionary_w += float(load.get("estimated_load_w", 0.0) or 0.0)
-        ev_power = self._state_float("ev_power")
-        if ev_power is not None and ev_power >= settings.ev_active_load_threshold_w:
-            discretionary_w += ev_power
+        if ev_power_w is not None and ev_power_w >= settings.ev_active_load_threshold_w:
+            discretionary_w += ev_power_w
         essential_jump_w = (
             essential_power_w - self.previous_essential_power_w
             if self.previous_essential_power_w is not None
             else None
         )
         inferred_ev_without_power_sensor = (
-            ev_power is None
+            ev_power_w is None
             and (
                 self.ev_latch_on
                 or (
@@ -807,7 +812,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     def _calculate(self) -> EnergyManagerDecision:
         now = dt_util.now()
         essential_power = self._state_float("essential_power") or 0.0
-        ev_power = self._state_float("ev_power")
+        ev_power = resolved_ev_power_w(
+            self._state_float("ev_power"),
+            self._state_float("ev_current"),
+            self._state_float("ev_voltage"),
+        )
         ev_current = self._state_float("ev_current")
         settings = self.settings
         battery_power_w = self._state_float("battery_power") or 0.0
@@ -827,7 +836,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         grid_power_w = self._state_float("grid_ct_power") or 0.0
         export_power_w = max(-grid_power_w, 0.0)
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
-        base_load_estimate = self._update_base_load_estimate(now, essential_power, settings)
+        base_load_estimate = self._update_base_load_estimate(now, essential_power, ev_power, settings)
         resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
         ev_idle = ev_current <= 0.5 if ev_current is not None else ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w
         if ev_idle:
