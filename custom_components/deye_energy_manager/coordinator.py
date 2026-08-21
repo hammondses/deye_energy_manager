@@ -87,6 +87,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_latch_on = False
         self.ev_hold_until: datetime | None = None
         self.ev_low_since: datetime | None = None
+        self.ev_manual_charging_override = False
         self.last_control_action = "none"
         self._apply_lock = asyncio.Lock()
         self._last_written: dict[str, object] = {}
@@ -186,6 +187,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 if isinstance(value, dict)
             }
         self.bedroom_night_heating_armed = bool(data.get("bedroom_night_heating_armed", False))
+        self.ev_manual_charging_override = bool(data.get("ev_manual_charging_override", False))
 
     def _datetime_map(self, raw: object) -> dict[str, datetime]:
         """Return a string to datetime map from stored JSON data."""
@@ -236,6 +238,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "thermal_last_action": {name: [action, reason] for name, (action, reason) in self._thermal_last_action.items()},
             "thermal_leases": {name: self._serialize_lease(lease) for name, lease in self._thermal_leases.items()},
             "bedroom_night_heating_armed": self.bedroom_night_heating_armed,
+            "ev_manual_charging_override": self.ev_manual_charging_override,
         }
 
     def _serialize_datetime_map(self, values: dict[str, datetime]) -> dict[str, str]:
@@ -398,6 +401,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_fallback_hold_minutes=float(options["ev_fallback_hold_minutes"]),
             ev_bypass_program_power_w=float(options["ev_bypass_program_power_w"]),
             ev_restore_program_power_w=float(options["ev_restore_program_power_w"]),
+            ev_manual_target_soc=float(options["ev_manual_target_soc"]),
             grid_loss_notification_enabled=bool(options["grid_loss_notification_enabled"]),
             grid_loss_voltage_threshold=float(options["grid_loss_voltage_threshold"]),
             grid_loss_notification_cooldown_minutes=float(options["grid_loss_notification_cooldown_minutes"]),
@@ -879,6 +883,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_current_a=ev_current,
             ev_connector_status=self._state_string("ev_connector_status"),
             ev_low_since=self.ev_low_since,
+            ev_manual_charging_override=self.ev_manual_charging_override,
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
@@ -961,7 +966,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 and settings.direct_climate_control_enabled
             )
         if subsystem == "ev":
-            return settings.ev_control_enabled and settings.ev_grid_bypass_enabled
+            return settings.ev_control_enabled
         return False
 
     def _blocked_reason(self, subsystem: str) -> str | None:
@@ -1066,6 +1071,26 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self._direct_stop_bedroom_night_heating("disarmed manually")
         await self.async_request_refresh()
 
+    async def async_set_ev_manual_charging_override(self, enabled: bool) -> None:
+        """Start or stop a persisted manual charge-to-target session."""
+
+        if enabled and (not self.settings.enabled or not self.settings.ev_control_enabled):
+            self.last_control_action = "manual EV charging blocked: EV control disabled"
+            await self.async_request_refresh()
+            return
+        self.ev_manual_charging_override = enabled
+        self._schedule_runtime_save()
+        if not enabled:
+            async with self._apply_lock:
+                await self._call_switch(
+                    self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
+                    False,
+                    reason="manual EV charging override turned off",
+                    force=True,
+                )
+                await self._apply_deye_plan(self._manual_restore_deye_plan(), force=True, override_gates=True)
+        await self.async_request_refresh()
+
     async def async_force_ev_grid_bypass(self, required: bool) -> None:
         """Force EV grid bypass start/restore once."""
 
@@ -1096,12 +1121,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             settings = self.settings
             if settings.inverter_cooling_control_enabled:
                 await self._apply_inverter_cooling(decision)
+            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_start":
+                await self._call_script(
+                    self.entity_map.get("ev_start_script", "script.timxon_ev_charger_start"),
+                    reason=decision.ev_decision_reason,
+                )
             if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_stop":
                 await self._call_switch(
                     self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
                     False,
                     reason=decision.ev_decision_reason,
                 )
+                if decision.ev_soc_cutoff_reached and self.ev_manual_charging_override:
+                    self.ev_manual_charging_override = False
+                    self._schedule_runtime_save()
             if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
                 await self._apply_deye_plan(build_deye_plan(decision, settings))
             await self._apply_bedroom_night_heating(decision)
@@ -1243,6 +1276,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         )
         self._last_written[entity_id] = on
         self._record_deye_write(entity_id, on, reason)
+        return True
+
+    async def _call_script(self, entity_id: str, *, reason: str = "") -> bool:
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE:
+            self.last_control_action = f"EV start blocked: {entity_id} unavailable"
+            return False
+        await self.hass.services.async_call(
+            "script",
+            "turn_on",
+            {"entity_id": entity_id},
+            blocking=False,
+        )
+        self.last_control_action = reason or f"started {entity_id}"
         return True
 
     def _suppress_deye_write(self, entity_id: str, desired: object, *, emergency: bool) -> bool:

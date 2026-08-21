@@ -1415,7 +1415,7 @@ def ev_decision(
     battery_recovered: bool,
     battery_priority_satisfied: bool,
     forecast_override: bool,
-) -> tuple[bool, bool, bool, bool, str, str, float | None, datetime | None]:
+) -> tuple[bool, bool, bool, bool, str, str, float | None, float, bool, datetime | None]:
     """Return EV detection, bypass, solar permission, latch, reason, action, power, hold."""
 
     essential_jump_w = None
@@ -1430,6 +1430,13 @@ def ev_decision(
     connector_status = (inputs.ev_connector_status or "").lower()
     connector_charging = connector_status == "charging"
     connector_suspended_by_ev = connector_status == "suspendedev"
+    connector_can_start = connector_status in {"preparing", "charging", "suspendedev", "suspendedevse"}
+    active_target_soc = (
+        min(max(settings.ev_manual_target_soc, 50.0), 100.0)
+        if inputs.ev_manual_charging_override
+        else 80.0
+    )
+    soc_cutoff_reached = inputs.porsche_soc is not None and inputs.porsche_soc >= active_target_soc
     power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
     jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w
     high_load_detected = inputs.ev_power_w is None and cheap_window and inputs.essential_power_w > 6500.0
@@ -1469,7 +1476,6 @@ def ev_decision(
     )
     load_drop_stopped = essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w
     grid_drop_stopped = grid_jump_w is not None and grid_jump_w <= -settings.ev_stop_load_drop_w
-    soc_stopped = inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0
     porsche_status_or_end_stopped = (
         inputs.ev_latch_on
         and not power_detected
@@ -1488,13 +1494,13 @@ def ev_decision(
         and inputs.essential_power_w < 2500.0
         and (inputs.ev_power_w is None or inputs.ev_power_w < settings.ev_active_load_threshold_w)
     )
-    failsafe_0700 = inputs.ev_latch_on and not cheap_window
+    failsafe_0700 = inputs.ev_latch_on and not cheap_window and not inputs.ev_manual_charging_override
     legacy_ev_stop = (
         low_power_stopped
         or inferred_low_load_stopped
         or load_drop_stopped
         or grid_drop_stopped
-        or soc_stopped
+        or soc_cutoff_reached
         or porsche_status_or_end_stopped
         or hold_expired_low
     )
@@ -1503,11 +1509,25 @@ def ev_decision(
         and connector_suspended_by_ev
         and not (settings.ev_solar_charging_enabled and not cheap_window)
     )
-    charge_control_stopped = not charge_control_detected or charge_control_done
+    charge_control_stopped = (
+        (not charge_control_detected and not inputs.ev_manual_charging_override)
+        or charge_control_done
+    )
     ev_stop = (
-        inputs.manual_clear_ev_latch
+        soc_cutoff_reached
+        or inputs.manual_clear_ev_latch
         or failsafe_0700
         or (charge_control_stopped if charge_control_available else legacy_ev_stop)
+    )
+
+    manual_start_requested = (
+        settings.enabled
+        and settings.ev_control_enabled
+        and inputs.ev_manual_charging_override
+        and inputs.porsche_soc is not None
+        and not soc_cutoff_reached
+        and not charge_control_detected
+        and connector_can_start
     )
 
     ev_grid_bypass_required = (
@@ -1517,7 +1537,7 @@ def ev_decision(
         and settings.ev_cheap_grid_charging_enabled
         and cheap_window
         and not ev_stop
-        and (inputs.ev_latch_on or ev_charging_detected)
+        and (inputs.ev_manual_charging_override or inputs.ev_latch_on or ev_charging_detected)
     )
     ev_latch_active = ev_grid_bypass_required
 
@@ -1535,6 +1555,8 @@ def ev_decision(
         settings.enabled
         and settings.ev_control_enabled
         and settings.ev_solar_charging_enabled
+        and not inputs.ev_manual_charging_override
+        and not soc_cutoff_reached
         and battery_recovered
         and battery_priority_satisfied
         and forecast_override
@@ -1542,7 +1564,11 @@ def ev_decision(
     )
 
     action = "none"
-    if charge_control_detected and (
+    if soc_cutoff_reached and (charge_control_detected or inputs.ev_manual_charging_override):
+        action = "ev_charger_stop"
+    elif manual_start_requested:
+        action = "ev_charger_start"
+    elif charge_control_detected and (
         charge_control_done or (failsafe_0700 and not settings.ev_solar_charging_enabled)
     ):
         action = "ev_charger_stop"
@@ -1555,7 +1581,18 @@ def ev_decision(
     elif ev_solar_charge_allowed:
         action = "allow_solar_charge"
 
-    if charge_control_done:
+    if soc_cutoff_reached:
+        mode = "manual" if inputs.ev_manual_charging_override else "normal"
+        reason = f"EV {mode} SOC cutoff reached: Porsche {inputs.porsche_soc:.0f}% >= {active_target_soc:.0f}% target"
+    elif inputs.ev_manual_charging_override and inputs.porsche_soc is None:
+        reason = "EV manual charging blocked: Porsche SOC unavailable"
+    elif inputs.ev_manual_charging_override and not connector_can_start and not charge_control_detected:
+        reason = f"EV manual charging waiting: connector status {inputs.ev_connector_status or 'unavailable'}"
+    elif manual_start_requested:
+        reason = f"EV manual charging start requested to {active_target_soc:.0f}%"
+    elif inputs.ev_manual_charging_override and charge_control_detected:
+        reason = f"EV manual charging active to {active_target_soc:.0f}%"
+    elif charge_control_done:
         reason = "EV charging complete: connector status SuspendedEV"
     elif charge_control_detected and failsafe_0700:
         reason = "EV cheap-grid window ended: stop charger and restore inverter"
@@ -1586,6 +1623,8 @@ def ev_decision(
         reason,
         action,
         inputs.ev_power_w,
+        active_target_soc,
+        soc_cutoff_reached,
         hold_until,
     )
 
@@ -2047,6 +2086,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ev_reason,
         ev_action,
         ev_detected_power_w,
+        ev_active_target_soc,
+        ev_soc_cutoff_reached,
         ev_hold_until,
     ) = ev_decision(
         inputs,
@@ -2500,6 +2541,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ev_decision_reason=ev_reason,
         ev_expected_action=ev_action,
         ev_detected_power_w=ev_detected_power_w,
+        ev_active_target_soc=ev_active_target_soc,
+        ev_soc_cutoff_reached=ev_soc_cutoff_reached,
         pre_peak_preserve_required=pre_peak_preserve_required,
         control_blocked=control_blocked,
         expected_action=expected_action,

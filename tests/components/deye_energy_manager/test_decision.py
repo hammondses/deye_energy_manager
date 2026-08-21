@@ -9,7 +9,7 @@ from custom_components.deye_energy_manager import decision as decision_module
 from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
 from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, inverter_cooling_recommendation, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value, resolved_ev_power_w
-from custom_components.deye_energy_manager.migration import migrate_options
+from custom_components.deye_energy_manager.migration import migrate_options, migrate_porsche_entity_map
 from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
 
@@ -24,6 +24,43 @@ def test_ev_power_falls_back_to_current_times_voltage() -> None:
     assert resolved_ev_power_w(None, 31.0, 240.0) == 7440.0
     assert resolved_ev_power_w(7100.0, 31.0, 240.0) == 7100.0
     assert resolved_ev_power_w(None, None, 240.0) is None
+
+
+def test_missing_legacy_cayenne_entities_migrate_to_available_taycan_entities() -> None:
+    entity_map = {
+        "porsche_soc": "sensor.cayenne_e_hybrid_my24_state_of_charge",
+        "porsche_charging_status": "sensor.cayenne_e_hybrid_my24_charging_status",
+        "porsche_charging_ends": "sensor.cayenne_e_hybrid_my24_charging_ends",
+        "porsche_charging_power": "sensor.cayenne_e_hybrid_my24_charging_power",
+    }
+    available = {
+        "sensor.taycan_4s_state_of_charge",
+        "sensor.taycan_4s_charging_status",
+        "sensor.taycan_4s_charging_ends",
+        "sensor.taycan_4s_charging_power",
+    }
+
+    migrated, changed = migrate_porsche_entity_map(entity_map, available)
+
+    assert changed
+    assert migrated["porsche_soc"] == "sensor.taycan_4s_state_of_charge"
+    assert migrated["porsche_charging_status"] == "sensor.taycan_4s_charging_status"
+    assert migrated["porsche_charging_ends"] == "sensor.taycan_4s_charging_ends"
+    assert migrated["porsche_charging_power"] == "sensor.taycan_4s_charging_power"
+
+
+def test_available_legacy_cayenne_entity_mapping_is_preserved() -> None:
+    entity_map = {"porsche_soc": "sensor.cayenne_e_hybrid_my24_state_of_charge"}
+    migrated, changed = migrate_porsche_entity_map(
+        entity_map,
+        {
+            "sensor.cayenne_e_hybrid_my24_state_of_charge",
+            "sensor.taycan_4s_state_of_charge",
+        },
+    )
+
+    assert not changed
+    assert migrated == entity_map
 
 
 def base_inputs(**overrides: object) -> EnergyManagerInputs:
@@ -961,7 +998,7 @@ def test_ev_start_and_stop_rules() -> None:
         base_inputs(now=dt(22), ev_latch_on=True, essential_power_w=2000, previous_essential_power_w=8600),
         settings,
     ).ev_grid_mode_required
-    assert not decide(base_inputs(now=dt(22), ev_latch_on=True, porsche_soc=99), settings).ev_grid_mode_required
+    assert not decide(base_inputs(now=dt(22), ev_latch_on=True, porsche_soc=80), settings).ev_grid_mode_required
     assert not decide(base_inputs(now=dt(7), ev_latch_on=True), settings).ev_grid_mode_required
     assert not decide(
         base_inputs(now=dt(3), ev_latch_on=True, ev_hold_until=dt(3) - timedelta(minutes=1), essential_power_w=2400),
@@ -988,7 +1025,7 @@ def test_charger_control_and_connector_status_are_authoritative() -> None:
             ev_charge_requested=True,
             ev_current_a=1.0,
             ev_connector_status="Charging",
-            porsche_soc=100,
+            porsche_soc=50,
             porsche_charging_status="charging_completed",
         ),
         settings,
@@ -1058,6 +1095,114 @@ def test_charger_control_and_connector_status_are_authoritative() -> None:
     )
     assert not solar_handoff.ev_grid_bypass_required
     assert solar_handoff.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_normal_ev_charging_has_hard_80_percent_soc_cutoff() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_solar_charging_enabled=True,
+    )
+    below_target = decide(
+        base_inputs(
+            now=dt(12),
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=79,
+        ),
+        settings,
+    )
+    at_target = decide(
+        base_inputs(
+            now=dt(12),
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=80,
+        ),
+        settings,
+    )
+
+    assert below_target.ev_active_target_soc == 80
+    assert not below_target.ev_soc_cutoff_reached
+    assert below_target.ev_expected_action != "ev_charger_stop"
+    assert at_target.ev_active_target_soc == 80
+    assert at_target.ev_soc_cutoff_reached
+    assert at_target.ev_expected_action == "ev_charger_stop"
+    assert not at_target.ev_solar_charge_allowed
+    assert "normal SOC cutoff" in at_target.ev_decision_reason
+
+
+def test_manual_ev_override_starts_and_stops_at_selected_soc() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_manual_target_soc=90,
+    )
+    starting = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=False,
+            ev_connector_status="Preparing",
+            porsche_soc=82,
+        ),
+        settings,
+    )
+    reached = decide(
+        base_inputs(
+            now=dt(23),
+            ev_latch_on=True,
+            ev_manual_charging_override=True,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=90,
+        ),
+        settings,
+    )
+
+    assert starting.ev_active_target_soc == 90
+    assert starting.ev_expected_action == "ev_charger_start"
+    assert starting.ev_grid_bypass_required
+    assert not starting.ev_soc_cutoff_reached
+    assert reached.ev_soc_cutoff_reached
+    assert reached.ev_expected_action == "ev_charger_stop"
+    assert not reached.ev_grid_bypass_required
+    assert "manual SOC cutoff" in reached.ev_decision_reason
+
+
+def test_manual_ev_override_owns_session_across_0700_and_requires_soc() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_solar_charging_enabled=True,
+        ev_manual_target_soc=95,
+    )
+    after_cheap_window = decide(
+        base_inputs(
+            now=dt(7),
+            ev_latch_on=True,
+            ev_manual_charging_override=True,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=90,
+        ),
+        settings,
+    )
+    soc_unavailable = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=False,
+            ev_connector_status="Preparing",
+            porsche_soc=None,
+        ),
+        settings,
+    )
+
+    assert after_cheap_window.ev_expected_action != "ev_charger_stop"
+    assert not after_cheap_window.ev_solar_charge_allowed
+    assert soc_unavailable.ev_expected_action != "ev_charger_start"
+    assert "SOC unavailable" in soc_unavailable.ev_decision_reason
 
 
 def test_ev_power_sensor_stop_restores_latch() -> None:

@@ -316,6 +316,9 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("ev_grid_bypass_enabled", default=defaults.get("ev_grid_bypass_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_solar_charging_enabled", default=defaults.get("ev_solar_charging_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_cheap_grid_charging_enabled", default=defaults.get("ev_cheap_grid_charging_enabled", True)): selector.BooleanSelector(),
+            vol.Required("ev_manual_target_soc", default=defaults.get("ev_manual_target_soc", NUMBER_DEFAULTS["ev_manual_target_soc"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=50, max=100, step=1, unit_of_measurement="%")
+            ),
             vol.Required("grid_loss_notification_enabled", default=defaults.get("grid_loss_notification_enabled", FEATURE_DEFAULTS["grid_loss_notification_enabled"])): selector.BooleanSelector(),
             vol.Required("grid_loss_notify_service", default=defaults.get("grid_loss_notify_service", TEXT_DEFAULTS["grid_loss_notify_service"])): selector.TextSelector(),
             vol.Required("grid_loss_voltage_threshold", default=defaults.get("grid_loss_voltage_threshold", NUMBER_DEFAULTS["grid_loss_voltage_threshold"])): selector.NumberSelector(

@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.47
+
+- Enforce an 80% Taycan SOC cutoff for normal EV charging, including active OCPP charge-control sessions and solar charging.
+- Add a persisted manual charging override with an adjustable stop SOC, automatic TIMXON start/stop, and automatic override clearing when the selected target is reached.
+- Expose the active EV target and SOC-cutoff status for dashboards, and default Porsche mappings to the Taycan 4S entities.
+
 ## v0.5.46
 
 - Hold high fan speed through ordinary high-PV fluctuations, reserving immediate fan reductions for genuine throughput collapses of at least 50%.

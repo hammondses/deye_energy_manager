@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from .const import DOMAIN, PLATFORMS
-from .migration import migrate_options
+from .const import CONF_ENTITY_MAP, DOMAIN, PLATFORMS
+from .migration import migrate_options, migrate_porsche_entity_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +44,14 @@ def _migrate_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Apply lightweight option migrations before entities are registered."""
 
     options, changed = migrate_options(dict(entry.options), dict(entry.data))
+    entity_map = dict(options.get(CONF_ENTITY_MAP, entry.data.get(CONF_ENTITY_MAP, {})))
+    entity_map, entity_map_changed = migrate_porsche_entity_map(
+        entity_map,
+        {state.entity_id for state in hass.states.async_all()},
+    )
+    if entity_map_changed:
+        options[CONF_ENTITY_MAP] = entity_map
+        changed = True
     if changed:
         hass.config_entries.async_update_entry(entry, options=options)
 

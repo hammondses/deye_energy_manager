@@ -129,6 +129,7 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="ev_decision_reason", name="EV decision reason", value_fn=lambda d: d.ev_decision_reason),
     DeyeSensorDescription(key="ev_expected_action", name="EV expected action", value_fn=lambda d: d.ev_expected_action),
     DeyeSensorDescription(key="ev_detected_power_w", name="EV detected power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_detected_power_w),
+    DeyeSensorDescription(key="ev_active_target_soc", name="EV active target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_active_target_soc),
     DeyeSensorDescription(key="recent_proposed_actions", name="Recent proposed actions", value_fn=lambda d: d.expected_action),
 )
 

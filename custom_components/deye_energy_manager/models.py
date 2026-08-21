@@ -122,6 +122,7 @@ class EnergyManagerSettings:
     ev_fallback_hold_minutes: float = 15.0
     ev_bypass_program_power_w: float = 2000.0
     ev_restore_program_power_w: float = 12000.0
+    ev_manual_target_soc: float = 90.0
     grid_loss_notification_enabled: bool = False
     grid_loss_voltage_threshold: float = 50.0
     grid_loss_notification_cooldown_minutes: float = 30.0
@@ -258,6 +259,7 @@ class EnergyManagerInputs:
     ev_current_a: float | None = None
     ev_connector_status: str | None = None
     ev_low_since: datetime | None = None
+    ev_manual_charging_override: bool = False
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None
     porsche_charging_ends: datetime | None = None
@@ -426,6 +428,8 @@ class EnergyManagerDecision:
     ev_decision_reason: str
     ev_expected_action: str
     ev_detected_power_w: float | None
+    ev_active_target_soc: float
+    ev_soc_cutoff_reached: bool
     pre_peak_preserve_required: bool
     control_blocked: bool
     expected_action: str

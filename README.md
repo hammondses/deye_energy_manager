@@ -304,12 +304,18 @@ EV support is native to the integration and disabled by default.
 - `number.deye_energy_manager_ev_active_load_threshold`
 - `number.deye_energy_manager_ev_stopped_load_threshold`
 - `number.deye_energy_manager_ev_restore_program_power`
+- `switch.deye_energy_manager_ev_manual_charging_override`
+- `number.deye_energy_manager_ev_manual_target_soc`
+- `sensor.deye_energy_manager_ev_active_target_soc`
+- `binary_sensor.deye_energy_manager_ev_soc_cutoff_reached`
 
 Cheap-grid EV bypass uses the TIMXON charge-control switch plus measured charger current first, including low-current charging, then falls back to an optional EV power sensor, essential-load jumps/high load, and Porsche signals. When enabled during the cheap window, it caps the active Deye programme power at `number.deye_energy_manager_ev_bypass_program_power`, default `2000W`; when EV charging stops, it restores programme power to `ev_restore_program_power_w`.
 
 EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power. The non-zero bypass cap leaves a limited inverter allowance if grid power is lost while the car is connected. Grid loss is detected from the configured Deye grid-voltage entity and can send persistent plus `notify.*` alerts.
 
 Daytime EV permission waits for the house battery to recover to its derived 07:00 target and for the remaining-PV budget to cover the daily battery target, expected house load, and safety buffers. A charger controller can then allocate both exported power and battery-bound DC solar to the EV, allowing AC EV charging and DC battery charging to run together; permission is withdrawn as soon as the forecast budget is no longer sufficient.
+
+Normal charging is hard-stopped when the configured Porsche SOC reaches 80%. For an occasional overnight or top-up charge above that limit, set `EV manual target SOC` and turn on `EV manual charging override`. The integration starts the existing TIMXON charging script only while the connector is plugged in and Porsche SOC is available, owns the session across the 07:00 boundary, stops at the selected target, restores the normal Deye programme, and clears the override automatically. Turning the override off stops the session immediately. Daytime solar-current modulation should yield while the override is on and resume when it turns off.
 
 ## Diagnostics And Tuning
 
