@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.48
+
+- Require the daytime window, observed solar arrival, and no material battery discharge before allowing forecast-backed solar EV charging.
+
 ## v0.5.47
 
 - Enforce an 80% Taycan SOC cutoff for normal EV charging, including active OCPP charge-control sessions and solar charging.

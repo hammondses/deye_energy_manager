@@ -1397,7 +1397,13 @@ def test_ev_bypass_uses_limited_program_power_not_zero() -> None:
 
 def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     decision = decide(
-        base_inputs(now=dt(12), battery_soc=90, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=22),
+        base_inputs(
+            now=dt(12),
+            battery_soc=90,
+            battery_power_w=-2000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=22,
+        ),
         EnergyManagerSettings(
             ev_control_enabled=True,
             ev_solar_charging_enabled=True,
@@ -1407,6 +1413,55 @@ def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
 
     assert decision.ev_solar_charge_allowed
     assert decision.ev_expected_action == "allow_solar_charge"
+
+
+def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_solar_charging_enabled=True,
+        flexible_load_priority="ev_before_thermal",
+        cheap_grid_preserve_soc=20,
+        daily_battery_target_soc=80,
+    )
+    before_daytime = decide(
+        base_inputs(
+            now=dt(6, 59),
+            battery_soc=90,
+            battery_power_w=-2000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+        ),
+        settings,
+    )
+    no_solar = decide(
+        base_inputs(
+            now=dt(7),
+            battery_soc=20,
+            pv_power_now_w=24,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=55,
+        ),
+        settings,
+    )
+    discharging = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=90,
+            battery_power_w=4000,
+            pv_power_now_w=6000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+        ),
+        settings,
+    )
+
+    assert not before_daytime.ev_solar_charge_allowed
+    assert no_solar.morning_start_soc_target == 20
+    assert no_solar.discretionary_energy_budget_kwh > 0
+    assert not no_solar.solar_arrived
+    assert not no_solar.ev_solar_charge_allowed
+    assert discharging.solar_arrived
+    assert not discharging.ev_solar_charge_allowed
 
 
 def test_ev_solar_charge_waits_for_derived_morning_battery_target() -> None:
@@ -1428,6 +1483,7 @@ def test_daytime_solar_modulation_ignores_suspended_ev_transition() -> None:
         base_inputs(
             now=dt(12),
             battery_soc=90,
+            battery_power_w=-2000,
             forecast_tomorrow_kwh=35,
             forecast_remaining_today_kwh=22,
             ev_charge_requested=True,

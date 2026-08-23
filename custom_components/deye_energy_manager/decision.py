@@ -1415,6 +1415,7 @@ def ev_decision(
     battery_recovered: bool,
     battery_priority_satisfied: bool,
     forecast_override: bool,
+    solar_has_arrived: bool,
 ) -> tuple[bool, bool, bool, bool, str, str, float | None, float, bool, datetime | None]:
     """Return EV detection, bypass, solar permission, latch, reason, action, power, hold."""
 
@@ -1555,11 +1556,14 @@ def ev_decision(
         settings.enabled
         and settings.ev_control_enabled
         and settings.ev_solar_charging_enabled
+        and not cheap_window
         and not inputs.ev_manual_charging_override
         and not soc_cutoff_reached
         and battery_recovered
         and battery_priority_satisfied
         and forecast_override
+        and solar_has_arrived
+        and inputs.battery_power_w < settings.thermal_shed_discharge_w
         and settings.flexible_load_priority in {"ev_before_thermal", "battery_first"}
     )
 
@@ -1611,7 +1615,13 @@ def ev_decision(
     elif ev_grid_bypass_required and inputs.ev_latch_on:
         reason = "EV bypass latch holding from previous detection"
     elif ev_solar_charge_allowed:
-        reason = "EV solar charge allowed: morning battery reserve recovered and forecast budget available"
+        reason = "EV solar charge allowed: solar arrived, morning battery reserve recovered, and forecast budget available"
+    elif settings.ev_solar_charging_enabled and cheap_window:
+        reason = "EV solar charge blocked: outside daytime window"
+    elif settings.ev_solar_charging_enabled and not solar_has_arrived:
+        reason = "EV solar charge blocked: solar has not arrived"
+    elif settings.ev_solar_charging_enabled and inputs.battery_power_w >= settings.thermal_shed_discharge_w:
+        reason = f"EV solar charge blocked: battery discharging {inputs.battery_power_w:.0f}W"
     else:
         reason = "EV idle"
 
@@ -2096,6 +2106,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         soc_known and soc >= morning_start_soc_target,
         battery_priority_satisfied,
         forecast_override,
+        solar_has_arrived,
     )
     if not discretionary_budget_positive and ev_solar_charge_allowed:
         ev_solar_charge_allowed = False
