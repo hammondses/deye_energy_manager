@@ -305,6 +305,7 @@ NUMBER_DEFAULTS = {
     "room_satisfied_delta_c": 0.7,
     "room_resume_delta_c": 1.5,
     "forecast_full_confidence_buffer_kwh": 3.0,
+    "ev_solar_start_min_pv_w": 1800.0,
     "ev_start_load_jump_w": 5000.0,
     "ev_stop_load_drop_w": 6000.0,
     "ev_active_load_threshold_w": 1000.0,

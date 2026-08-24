@@ -299,6 +299,7 @@ EV support is native to the integration and disabled by default.
 - `switch.deye_energy_manager_ev_grid_bypass_enabled`
 - `switch.deye_energy_manager_ev_solar_charging_enabled`
 - `switch.deye_energy_manager_ev_cheap_grid_charging_enabled`
+- `number.deye_energy_manager_ev_solar_start_minimum_pv`
 - `number.deye_energy_manager_ev_start_load_jump`
 - `number.deye_energy_manager_ev_stop_load_drop`
 - `number.deye_energy_manager_ev_active_load_threshold`
@@ -313,7 +314,7 @@ Cheap-grid EV bypass uses the TIMXON charge-control switch plus measured charger
 
 EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power. The non-zero bypass cap leaves a limited inverter allowance if grid power is lost while the car is connected. Grid loss is detected from the configured Deye grid-voltage entity and can send persistent plus `notify.*` alerts.
 
-Daytime EV permission waits for observed solar arrival with no material battery discharge, for the house battery to recover to its derived 07:00 target, and for the remaining-PV budget to cover the daily battery target, expected house load, and safety buffers. A charger controller can then allocate both exported power and battery-bound DC solar to the EV, allowing AC EV charging and DC battery charging to run together; permission is withdrawn as soon as those conditions are no longer met.
+Daytime EV permission requires at least 1.8kW of actual PV before starting, observed solar arrival with no material battery discharge, the house battery recovered to its derived 07:00 target, and enough remaining-PV budget for the daily battery target, expected house load, and safety buffers. The startup PV floor is adjustable with `EV solar start minimum PV`. Genuine solar arrival is retained while an EV session is active so the car's own load does not consume its permission; permission is withdrawn after two continuous minutes of material battery discharge or grid import.
 
 Normal charging is hard-stopped when the configured Porsche SOC reaches 80%. For an occasional overnight or top-up charge above that limit, set `EV manual target SOC` and turn on `EV manual charging override`. The integration starts the existing TIMXON charging script only while the connector is plugged in and Porsche SOC is available, owns the session across the 07:00 boundary, stops at the selected target, restores the normal Deye programme, and clears the override automatically. Turning the override off stops the session immediately. Daytime solar-current modulation should yield while the override is on and resume when it turns off.
 

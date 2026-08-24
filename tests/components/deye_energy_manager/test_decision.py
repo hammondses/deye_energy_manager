@@ -1401,6 +1401,7 @@ def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
             now=dt(12),
             battery_soc=90,
             battery_power_w=-2000,
+            pv_power_now_w=3000,
             forecast_tomorrow_kwh=35,
             forecast_remaining_today_kwh=22,
         ),
@@ -1437,7 +1438,8 @@ def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() ->
         base_inputs(
             now=dt(7),
             battery_soc=20,
-            pv_power_now_w=24,
+            battery_power_w=-109,
+            pv_power_now_w=575,
             forecast_tomorrow_kwh=35,
             forecast_remaining_today_kwh=55,
         ),
@@ -1454,6 +1456,17 @@ def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() ->
         ),
         settings,
     )
+    weak_pv = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=90,
+            battery_power_w=-2000,
+            pv_power_now_w=1700,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+        ),
+        settings,
+    )
 
     assert not before_daytime.ev_solar_charge_allowed
     assert no_solar.morning_start_soc_target == 20
@@ -1462,6 +1475,56 @@ def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() ->
     assert not no_solar.ev_solar_charge_allowed
     assert discharging.solar_arrived
     assert not discharging.ev_solar_charge_allowed
+    assert weak_pv.solar_arrived
+    assert not weak_pv.ev_solar_charge_allowed
+    assert "1800W startup minimum" in weak_pv.ev_decision_reason
+
+
+def test_active_ev_session_latches_solar_until_power_deficit_is_sustained() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_solar_charging_enabled=True,
+        flexible_load_priority="ev_before_thermal",
+    )
+    transient = decide(
+        base_inputs(
+            now=dt(12, 1),
+            battery_soc=90,
+            battery_power_w=1400,
+            grid_power_w=700,
+            paid_grid_import_w=0,
+            pv_power_now_w=575,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            ev_solar_arrived_latched=True,
+            ev_power_deficit_since=dt(12),
+        ),
+        settings,
+    )
+    sustained = decide(
+        base_inputs(
+            now=dt(12, 2),
+            battery_soc=90,
+            battery_power_w=1400,
+            grid_power_w=700,
+            paid_grid_import_w=0,
+            pv_power_now_w=575,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            ev_solar_arrived_latched=True,
+            ev_power_deficit_since=dt(12),
+        ),
+        settings,
+    )
+
+    assert not transient.solar_arrived
+    assert transient.ev_solar_charge_allowed
+    assert not sustained.ev_solar_charge_allowed
+    assert "sustained battery discharge" in sustained.ev_decision_reason
 
 
 def test_ev_solar_charge_waits_for_derived_morning_battery_target() -> None:

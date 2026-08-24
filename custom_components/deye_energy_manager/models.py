@@ -114,6 +114,7 @@ class EnergyManagerSettings:
     room_satisfied_delta_c: float = 0.7
     room_resume_delta_c: float = 1.5
     forecast_full_confidence_buffer_kwh: float = 3.0
+    ev_solar_start_min_pv_w: float = 1800.0
     ev_start_load_jump_w: float = 5000.0
     ev_stop_load_drop_w: float = 6000.0
     ev_active_load_threshold_w: float = 1000.0
@@ -259,6 +260,8 @@ class EnergyManagerInputs:
     ev_current_a: float | None = None
     ev_connector_status: str | None = None
     ev_low_since: datetime | None = None
+    ev_solar_arrived_latched: bool = False
+    ev_power_deficit_since: datetime | None = None
     ev_manual_charging_override: bool = False
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None

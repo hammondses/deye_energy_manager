@@ -87,6 +87,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_latch_on = False
         self.ev_hold_until: datetime | None = None
         self.ev_low_since: datetime | None = None
+        self.ev_solar_arrived_latched = False
+        self.ev_power_deficit_since: datetime | None = None
         self.ev_manual_charging_override = False
         self.last_control_action = "none"
         self._apply_lock = asyncio.Lock()
@@ -393,6 +395,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             room_satisfied_delta_c=float(options["room_satisfied_delta_c"]),
             room_resume_delta_c=float(options["room_resume_delta_c"]),
             forecast_full_confidence_buffer_kwh=float(options["forecast_full_confidence_buffer_kwh"]),
+            ev_solar_start_min_pv_w=float(options["ev_solar_start_min_pv_w"]),
             ev_start_load_jump_w=float(options["ev_start_load_jump_w"]),
             ev_stop_load_drop_w=float(options["ev_stop_load_drop_w"]),
             ev_active_load_threshold_w=float(options["ev_active_load_threshold_w"]),
@@ -838,6 +841,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             else 0.0
         )
         grid_power_w = self._state_float("grid_ct_power") or 0.0
+        ev_charge_requested = self._state_optional_on("ev_charge_control")
+        ev_connector_status = self._state_string("ev_connector_status")
+        power_deficit = (
+            battery_power_w >= settings.thermal_shed_discharge_w
+            or grid_power_w >= settings.paid_grid_import_threshold_w
+        )
+        if ev_charge_requested is True and power_deficit:
+            self.ev_power_deficit_since = self.ev_power_deficit_since or now
+        else:
+            self.ev_power_deficit_since = None
         export_power_w = max(-grid_power_w, 0.0)
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, ev_power, settings)
@@ -879,10 +892,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_latch_on=self.ev_latch_on,
             ev_hold_until=self.ev_hold_until,
             ev_power_w=ev_power,
-            ev_charge_requested=self._state_optional_on("ev_charge_control"),
+            ev_charge_requested=ev_charge_requested,
             ev_current_a=ev_current,
-            ev_connector_status=self._state_string("ev_connector_status"),
+            ev_connector_status=ev_connector_status,
             ev_low_since=self.ev_low_since,
+            ev_solar_arrived_latched=self.ev_solar_arrived_latched,
+            ev_power_deficit_since=self.ev_power_deficit_since,
             ev_manual_charging_override=self.ev_manual_charging_override,
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),
@@ -899,6 +914,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_load_change_w=cooling_load_change_w,
         )
         decision = decide(inputs, settings)
+        if decision.solar_arrived and decision.ev_solar_charge_allowed:
+            self.ev_solar_arrived_latched = True
+        elif (
+            not settings.enabled
+            or not settings.ev_solar_charging_enabled
+            or time_between(now, "21:00", "07:00")
+            or (ev_connector_status or "").lower() == "available"
+        ):
+            self.ev_solar_arrived_latched = False
         self._update_cheap_grid_session_state(decision)
         self._update_load_diagnostics(inputs, settings, decision)
         self._append_proposed_action(decision)

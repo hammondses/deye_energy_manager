@@ -301,6 +301,7 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
     ev_keys = [
+        "ev_solar_start_min_pv_w",
         "ev_start_load_jump_w",
         "ev_stop_load_drop_w",
         "ev_active_load_threshold_w",

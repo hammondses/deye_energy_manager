@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.49
+
+- Require 1.8kW of actual PV before starting a solar EV session, reject tiny battery-charge blips as solar arrival, latch genuine solar arrival while active, and require a sustained two-minute import or battery-discharge deficit before withdrawing permission.
+
 ## v0.5.48
 
 - Require the daytime window, observed solar arrival, and no material battery discharge before allowing forecast-backed solar EV charging.

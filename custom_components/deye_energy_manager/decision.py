@@ -363,14 +363,11 @@ def solar_arrived(
     """Return whether real solar has arrived, not just forecast solar."""
 
     pv_now = inputs.pv_power_now_w or 0.0
-    grid_import_w = max(inputs.grid_power_w, 0.0)
     pv_surplus_w = pv_now - inputs.essential_power_w
     if battery_charge_w >= settings.solar_arrived_charge_threshold_w:
         return True, f"battery charging {battery_charge_w:.0f}W >= {settings.solar_arrived_charge_threshold_w:.0f}W"
     if pv_surplus_w >= settings.solar_arrived_pv_surplus_threshold_w:
         return True, f"PV surplus {pv_surplus_w:.0f}W >= {settings.solar_arrived_pv_surplus_threshold_w:.0f}W"
-    if grid_import_w <= settings.paid_grid_import_threshold_w and battery_charge_w > 0:
-        return True, f"grid import {grid_import_w:.0f}W low and battery charging"
     return False, "PV has not arrived strongly enough"
 
 
@@ -1432,6 +1429,20 @@ def ev_decision(
     connector_charging = connector_status == "charging"
     connector_suspended_by_ev = connector_status == "suspendedev"
     connector_can_start = connector_status in {"preparing", "charging", "suspendedev", "suspendedevse"}
+    solar_ready = solar_has_arrived or (charge_control_detected and inputs.ev_solar_arrived_latched)
+    pv_now_w = inputs.pv_power_now_w or 0.0
+    pv_start_ready = charge_control_detected or pv_now_w >= settings.ev_solar_start_min_pv_w
+    power_deficit = (
+        inputs.battery_power_w >= settings.thermal_shed_discharge_w
+        or inputs.grid_power_w >= settings.paid_grid_import_threshold_w
+    )
+    sustained_power_deficit = power_deficit and (
+        not charge_control_detected
+        or (
+            inputs.ev_power_deficit_since is not None
+            and inputs.now - inputs.ev_power_deficit_since >= timedelta(minutes=2)
+        )
+    )
     active_target_soc = (
         min(max(settings.ev_manual_target_soc, 50.0), 100.0)
         if inputs.ev_manual_charging_override
@@ -1562,8 +1573,9 @@ def ev_decision(
         and battery_recovered
         and battery_priority_satisfied
         and forecast_override
-        and solar_has_arrived
-        and inputs.battery_power_w < settings.thermal_shed_discharge_w
+        and solar_ready
+        and pv_start_ready
+        and not sustained_power_deficit
         and settings.flexible_load_priority in {"ev_before_thermal", "battery_first"}
     )
 
@@ -1600,6 +1612,11 @@ def ev_decision(
         reason = "EV charging complete: connector status SuspendedEV"
     elif charge_control_detected and failsafe_0700:
         reason = "EV cheap-grid window ended: stop charger and restore inverter"
+    elif settings.ev_solar_charging_enabled and sustained_power_deficit:
+        reason = (
+            f"EV solar charge blocked: sustained battery discharge {max(inputs.battery_power_w, 0.0):.0f}W, "
+            f"grid import {max(inputs.grid_power_w, 0.0):.0f}W"
+        )
     elif charge_control_detected and connector_charging:
         reason = "EV charging confirmed: connector status Charging"
     elif charge_control_detected:
@@ -1618,10 +1635,13 @@ def ev_decision(
         reason = "EV solar charge allowed: solar arrived, morning battery reserve recovered, and forecast budget available"
     elif settings.ev_solar_charging_enabled and cheap_window:
         reason = "EV solar charge blocked: outside daytime window"
-    elif settings.ev_solar_charging_enabled and not solar_has_arrived:
+    elif settings.ev_solar_charging_enabled and not solar_ready:
         reason = "EV solar charge blocked: solar has not arrived"
-    elif settings.ev_solar_charging_enabled and inputs.battery_power_w >= settings.thermal_shed_discharge_w:
-        reason = f"EV solar charge blocked: battery discharging {inputs.battery_power_w:.0f}W"
+    elif settings.ev_solar_charging_enabled and not pv_start_ready:
+        reason = (
+            f"EV solar charge blocked: PV {pv_now_w:.0f}W < "
+            f"{settings.ev_solar_start_min_pv_w:.0f}W startup minimum"
+        )
     else:
         reason = "EV idle"
 
