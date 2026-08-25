@@ -88,7 +88,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_hold_until: datetime | None = None
         self.ev_low_since: datetime | None = None
         self.ev_solar_arrived_latched = False
-        self.ev_power_deficit_since: datetime | None = None
         self.ev_manual_charging_override = False
         self.last_control_action = "none"
         self._apply_lock = asyncio.Lock()
@@ -843,14 +842,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         grid_power_w = self._state_float("grid_ct_power") or 0.0
         ev_charge_requested = self._state_optional_on("ev_charge_control")
         ev_connector_status = self._state_string("ev_connector_status")
-        power_deficit = (
-            battery_power_w >= settings.thermal_shed_discharge_w
-            or grid_power_w >= settings.paid_grid_import_threshold_w
-        )
-        if ev_charge_requested is True and power_deficit:
-            self.ev_power_deficit_since = self.ev_power_deficit_since or now
-        else:
-            self.ev_power_deficit_since = None
         export_power_w = max(-grid_power_w, 0.0)
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, ev_power, settings)
@@ -897,7 +888,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_connector_status=ev_connector_status,
             ev_low_since=self.ev_low_since,
             ev_solar_arrived_latched=self.ev_solar_arrived_latched,
-            ev_power_deficit_since=self.ev_power_deficit_since,
             ev_manual_charging_override=self.ev_manual_charging_override,
             porsche_soc=self._state_float("porsche_soc"),
             porsche_charging_status=self._state_string("porsche_charging_status"),

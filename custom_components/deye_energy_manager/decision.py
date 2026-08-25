@@ -1436,13 +1436,7 @@ def ev_decision(
         inputs.battery_power_w >= settings.thermal_shed_discharge_w
         or inputs.grid_power_w >= settings.paid_grid_import_threshold_w
     )
-    sustained_power_deficit = power_deficit and (
-        not charge_control_detected
-        or (
-            inputs.ev_power_deficit_since is not None
-            and inputs.now - inputs.ev_power_deficit_since >= timedelta(minutes=2)
-        )
-    )
+    startup_power_deficit = power_deficit and not charge_control_detected
     active_target_soc = (
         min(max(settings.ev_manual_target_soc, 50.0), 100.0)
         if inputs.ev_manual_charging_override
@@ -1575,7 +1569,7 @@ def ev_decision(
         and forecast_override
         and solar_ready
         and pv_start_ready
-        and not sustained_power_deficit
+        and not startup_power_deficit
         and settings.flexible_load_priority in {"ev_before_thermal", "battery_first"}
     )
 
@@ -1612,9 +1606,9 @@ def ev_decision(
         reason = "EV charging complete: connector status SuspendedEV"
     elif charge_control_detected and failsafe_0700:
         reason = "EV cheap-grid window ended: stop charger and restore inverter"
-    elif settings.ev_solar_charging_enabled and sustained_power_deficit:
+    elif settings.ev_solar_charging_enabled and startup_power_deficit:
         reason = (
-            f"EV solar charge blocked: sustained battery discharge {max(inputs.battery_power_w, 0.0):.0f}W, "
+            f"EV solar charge blocked: battery discharge {max(inputs.battery_power_w, 0.0):.0f}W, "
             f"grid import {max(inputs.grid_power_w, 0.0):.0f}W"
         )
     elif charge_control_detected and connector_charging:

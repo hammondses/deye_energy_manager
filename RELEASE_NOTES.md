@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.50
+
+- Keep an active solar EV charging session alive through cloud-driven import or battery discharge so current can fall to the charger's 6A minimum without repeatedly resetting the vehicle session. Startup still requires genuine solar and no material power deficit, and battery/forecast/daytime safety gates remain enforced.
+
 ## v0.5.49
 
 - Require 1.8kW of actual PV before starting a solar EV session, reject tiny battery-charge blips as solar arrival, latch genuine solar arrival while active, and require a sustained two-minute import or battery-discharge deficit before withdrawing permission.

@@ -261,7 +261,6 @@ class EnergyManagerInputs:
     ev_connector_status: str | None = None
     ev_low_since: datetime | None = None
     ev_solar_arrived_latched: bool = False
-    ev_power_deficit_since: datetime | None = None
     ev_manual_charging_override: bool = False
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None

@@ -1480,7 +1480,7 @@ def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() ->
     assert "1800W startup minimum" in weak_pv.ev_decision_reason
 
 
-def test_active_ev_session_latches_solar_until_power_deficit_is_sustained() -> None:
+def test_active_ev_session_latches_solar_through_cloud_power_deficit() -> None:
     settings = EnergyManagerSettings(
         ev_control_enabled=True,
         ev_solar_charging_enabled=True,
@@ -1499,11 +1499,10 @@ def test_active_ev_session_latches_solar_until_power_deficit_is_sustained() -> N
             ev_charge_requested=True,
             ev_connector_status="Charging",
             ev_solar_arrived_latched=True,
-            ev_power_deficit_since=dt(12),
         ),
         settings,
     )
-    sustained = decide(
+    prolonged = decide(
         base_inputs(
             now=dt(12, 2),
             battery_soc=90,
@@ -1516,15 +1515,14 @@ def test_active_ev_session_latches_solar_until_power_deficit_is_sustained() -> N
             ev_charge_requested=True,
             ev_connector_status="Charging",
             ev_solar_arrived_latched=True,
-            ev_power_deficit_since=dt(12),
         ),
         settings,
     )
 
     assert not transient.solar_arrived
     assert transient.ev_solar_charge_allowed
-    assert not sustained.ev_solar_charge_allowed
-    assert "sustained battery discharge" in sustained.ev_decision_reason
+    assert prolonged.ev_solar_charge_allowed
+    assert prolonged.ev_decision_reason == "EV charging confirmed: connector status Charging"
 
 
 def test_ev_solar_charge_waits_for_derived_morning_battery_target() -> None:
