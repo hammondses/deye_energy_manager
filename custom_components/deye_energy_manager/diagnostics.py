@@ -18,7 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data[DOMAIN][entry.entry_id]
     decision = coordinator.data
     return {
-        "version": "0.5.33",
+        "version": "0.5.51",
         "entry": {"entry_id": entry.entry_id, "title": entry.title, "domain": entry.domain},
         "options": _redact(dict(entry.options)),
         "enabled_controls": {
@@ -90,6 +90,20 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "hold_until": decision.ev_hold_until.isoformat() if decision and decision.ev_hold_until else None,
             "reason": decision.ev_decision_reason if decision else None,
             "expected_action": decision.ev_expected_action if decision else None,
+        },
+        "taycan_soc": {
+            "effective_soc": coordinator.effective_taycan_soc,
+            "source": coordinator.taycan_soc_source,
+            "age_minutes": coordinator.taycan_soc_age_minutes,
+            "wican_enabled": coordinator.wican_soc_enabled,
+            "local_soc": coordinator.wican.soc,
+            "local_updated": coordinator.wican.updated_at.isoformat() if coordinator.wican.updated_at else None,
+            "local_raw": coordinator.wican.raw,
+            "last_trigger": coordinator.wican.last_trigger,
+            "last_result": coordinator.wican.last_result,
+            "last_error": coordinator.wican.last_error,
+            "last_success_energy_kwh": coordinator.wican.last_success_energy_kwh,
+            "energy_until_next_query_kwh": coordinator.wican_energy_until_next_query,
         },
         "battery": {
             "soc": decision.battery_soc if decision else None,

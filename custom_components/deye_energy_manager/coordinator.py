@@ -11,6 +11,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -39,12 +40,14 @@ from .decision import build_deye_plan, cheap_grid_mirror_programs, cooling_load_
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
+from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
 _LOGGER = logging.getLogger(__name__)
 
 UNAVAILABLE = {"unknown", "unavailable", None}
 SOC_CACHE_STORAGE_VERSION = 1
 THERMAL_RUNTIME_STORAGE_VERSION = 1
+WICAN_STORAGE_VERSION = 1
 THERMAL_RUNTIME_DATETIME_FIELDS = {
     "lease_started_at",
     "lease_until",
@@ -82,6 +85,13 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             THERMAL_RUNTIME_STORAGE_VERSION,
             f"{DOMAIN}_{entry.entry_id}_thermal_runtime",
         )
+        self._wican_store: Store[dict[str, object]] = Store(
+            hass,
+            WICAN_STORAGE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_wican_soc",
+        )
+        self.wican = WicanSocState()
+        self._wican_query_lock = asyncio.Lock()
         self._last_good_soc: float | None = None
         self._last_good_soc_updated: datetime | None = None
         self.ev_latch_on = False
@@ -89,6 +99,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_low_since: datetime | None = None
         self.ev_solar_arrived_latched = False
         self.ev_manual_charging_override = False
+        self.effective_taycan_soc: float | None = None
+        self.taycan_soc_source = "unavailable"
+        self.taycan_soc_age_minutes: float | None = None
         self.last_control_action = "none"
         self._apply_lock = asyncio.Lock()
         self._last_written: dict[str, object] = {}
@@ -147,6 +160,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             updated = dt_util.as_local(updated)
         self._last_good_soc = soc
         self._last_good_soc_updated = updated
+
+    async def async_load_stored_wican_soc(self) -> None:
+        """Restore WiCAN result and event state without querying the vehicle."""
+
+        self.wican = WicanSocState.restore(await self._wican_store.async_load())
+
+    def _schedule_wican_save(self) -> None:
+        self._wican_store.async_delay_save(self.wican.payload, 1)
 
     def _set_last_good_soc(self, soc: float, updated: datetime) -> None:
         """Update persisted last-known-good SOC cache."""
@@ -465,9 +486,110 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return thermal_mode
 
     @callback
-    def _handle_state_change(self, _event) -> None:
+    def _handle_state_change(self, event) -> None:
+        self._handle_wican_event(event)
         self.async_set_updated_data(self._calculate())
         self.hass.async_create_task(self.async_apply_decision())
+
+    def _handle_wican_event(self, event) -> None:
+        """Observe only charger state events; timer refreshes never enter here."""
+
+        entity_id = str(event.data.get("entity_id", ""))
+        relevant = {
+            self.entity_map.get("ev_connector_status"),
+            self.entity_map.get("ev_current"),
+            self.entity_map.get("ev_power"),
+            self.entity_map.get("ev_energy_session"),
+        }
+        if not entity_id or entity_id not in relevant:
+            return
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        if new_state is None or (old_state is not None and old_state.state == new_state.state):
+            return
+
+        connector_entity = self.entity_map.get("ev_connector_status")
+        current_entity = self.entity_map.get("ev_current")
+        power_entity = self.entity_map.get("ev_power")
+        connector_now = self._state_string("ev_connector_status")
+        current_now = self._state_float("ev_current")
+        power_now = self._state_float("ev_power")
+        connected_now = connector_connected(connector_now)
+        charging_now = charging_active(connector_now, current_now, power_now)
+
+        if old_state is not None:
+            connector_old = str(old_state.state) if entity_id == connector_entity else connector_now
+            current_old = self._wican_float(old_state.state) if entity_id == current_entity else current_now
+            power_old = self._wican_float(old_state.state) if entity_id == power_entity else power_now
+            self.wican.connector_connected = connector_connected(connector_old)
+            self.wican.charging_active = charging_active(connector_old, current_old, power_old)
+
+        identity = f"{entity_id}:{getattr(new_state, 'last_updated', '')}:{new_state.state}"
+        energy = self._state_float("ev_energy_session")
+        trigger = self.wican.automatic_trigger(
+            event_identity=identity,
+            connected=connected_now,
+            charging=charging_now,
+            energy_kwh=energy,
+            threshold_kwh=self.wican_energy_threshold_kwh,
+            enabled=self.wican_soc_enabled,
+        )
+        self._schedule_wican_save()
+        if trigger:
+            self.hass.async_create_task(self.async_query_wican_soc(trigger, automatic=True))
+
+    @staticmethod
+    def _wican_float(value: object) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed == parsed else None
+
+    @property
+    def wican_soc_enabled(self) -> bool:
+        return bool(self.entry.options.get("wican_soc_enabled", FEATURE_DEFAULTS["wican_soc_enabled"]))
+
+    @property
+    def wican_energy_threshold_kwh(self) -> float:
+        return float(self.entry.options.get("wican_soc_energy_threshold_kwh", NUMBER_DEFAULTS["wican_soc_energy_threshold_kwh"]))
+
+    @property
+    def wican_energy_until_next_query(self) -> float | None:
+        return self.wican.energy_until_next_query(self._state_float("ev_energy_session"), self.wican_energy_threshold_kwh)
+
+    async def async_query_wican_soc(self, trigger: str = "manual", *, automatic: bool = False) -> None:
+        """Perform exactly one SOC_D HTTP request, without retries."""
+
+        now = dt_util.utcnow()
+        if self._wican_query_lock.locked():
+            return
+        if automatic and self.wican.last_attempt_at and now - self.wican.last_attempt_at < timedelta(seconds=5):
+            return
+        async with self._wican_query_lock:
+            self.wican.last_attempt_at = now
+            self.wican.last_trigger = trigger
+            self._schedule_wican_save()
+            base_url = str(self.entry.options.get("wican_base_url", TEXT_DEFAULTS["wican_base_url"])).strip().rstrip("/")
+            try:
+                if not base_url.startswith(("http://", "https://")):
+                    raise ValueError("WiCAN base URL must use HTTP or HTTPS")
+                async with asyncio.timeout(5):
+                    async with async_get_clientsession(self.hass).post(
+                        f"{base_url}/autopid/test_pid",
+                        json=WICAN_SOC_REQUEST,
+                    ) as response:
+                        if response.status != 200:
+                            raise ValueError(f"WiCAN HTTP {response.status}")
+                        data = await response.json(content_type=None)
+                soc, raw = parse_wican_soc_response(data)
+                self.wican.record_success(soc, raw, now, trigger, self._state_float("ev_energy_session"))
+            except (TimeoutError, ValueError, TypeError, OSError) as err:
+                self.wican.record_failure(trigger, str(err), self._state_float("ev_energy_session"))
+            except Exception as err:  # aiohttp and JSON decoder errors are non-fatal
+                self.wican.record_failure(trigger, f"{type(err).__name__}: {err}", self._state_float("ev_energy_session"))
+            self._schedule_wican_save()
+        await self.async_request_refresh()
 
     @callback
     def _handle_time_interval(self, _now) -> None:
@@ -575,6 +697,28 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if state is None or state.state in UNAVAILABLE:
             return None
         return dt_util.parse_datetime(state.state)
+
+    def _resolve_taycan_soc(self, now: datetime) -> float | None:
+        """Resolve the SOC used by the existing EV policy."""
+
+        cloud_entity = self.entity_map.get("porsche_soc")
+        cloud_state = self.hass.states.get(cloud_entity) if cloud_entity else None
+        cloud_soc = self._entity_float(cloud_entity) if cloud_entity else None
+        cloud_updated = cloud_state.last_changed if cloud_state is not None else None
+        local_soc = self.wican.soc if self.wican_soc_enabled else None
+        local_updated = self.wican.updated_at if self.wican_soc_enabled else None
+        resolved, source, age = resolve_taycan_soc(
+            local_soc,
+            local_updated,
+            cloud_soc,
+            cloud_updated,
+            now,
+            float(self.entry.options.get("wican_soc_fresh_minutes", NUMBER_DEFAULTS["wican_soc_fresh_minutes"])),
+        )
+        self.effective_taycan_soc = resolved
+        self.taycan_soc_source = source
+        self.taycan_soc_age_minutes = age
+        return resolved
 
     def _resolve_soc(self, now: datetime, settings: EnergyManagerSettings) -> tuple[float | None, str | None, str, float | None, float | None, datetime | None]:
         primary_entity = self.entity_map.get("primary_soc_entity") or self.entity_map.get("battery_soc")
@@ -846,6 +990,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, ev_power, settings)
         resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
+        taycan_soc = self._resolve_taycan_soc(now)
         ev_idle = ev_current <= 0.5 if ev_current is not None else ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w
         if ev_idle:
             self.ev_low_since = self.ev_low_since or now
@@ -889,7 +1034,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_low_since=self.ev_low_since,
             ev_solar_arrived_latched=self.ev_solar_arrived_latched,
             ev_manual_charging_override=self.ev_manual_charging_override,
-            porsche_soc=self._state_float("porsche_soc"),
+            porsche_soc=taycan_soc,
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
             cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,

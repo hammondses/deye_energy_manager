@@ -63,6 +63,7 @@ DEFAULT_ENTITY_MAP = {
     "ev_current": "sensor.evcharger_current_import",
     "ev_voltage": "sensor.evcharger_voltage",
     "ev_connector_status": "sensor.evcharger_status_connector",
+    "ev_energy_session": "sensor.evcharger_energy_session",
     "ev_start_script": "script.timxon_ev_charger_start",
     "outdoor_temperature": "",
     "indoor_average_temperature": "",
@@ -240,6 +241,7 @@ FEATURE_DEFAULTS = {
     "underfloor_allow_paid_grid": False,
     "dynamic_base_load_estimate_enabled": True,
     "auto_mode_month_fallback_enabled": True,
+    "wican_soc_enabled": False,
 }
 
 NUMBER_DEFAULTS = {
@@ -314,6 +316,8 @@ NUMBER_DEFAULTS = {
     "ev_fallback_hold_minutes": 15.0,
     "ev_bypass_program_power_w": 2000.0,
     "ev_restore_program_power_w": 12000.0,
+    "wican_soc_energy_threshold_kwh": 1.0,
+    "wican_soc_fresh_minutes": 60.0,
     "ev_manual_target_soc": 90.0,
     "grid_loss_voltage_threshold": 50.0,
     "grid_loss_notification_cooldown_minutes": 30.0,
@@ -355,6 +359,7 @@ NUMBER_DEFAULTS = {
 
 TEXT_DEFAULTS = {
     "grid_loss_notify_service": "notify.mobile_app_s26u",
+    "wican_base_url": "http://192.168.10.75",
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]

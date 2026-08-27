@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.51
+
+- Add optional event-driven local WiCAN Taycan SOC using one SOC_D request on connector, charge-start/stop, session-energy threshold, or manual-refresh events only. Automatic acquisition is disabled by default; failures never retry until another genuine event.
+- Persist the complete last local result and trigger baseline, prefer fresh local SOC over Porsche Connect for the existing charging cutoff, and expose source, age, result/error, and next-query diagnostics.
+
 ## v0.5.50
 
 - Keep an active solar EV charging session alive through cloud-driven import or battery discharge so current can fall to the charger's 6A minimum without repeatedly resetting the vehicle session. Startup still requires genuine solar and no material power deficit, and battery/forecast/daytime safety gates remain enforced.

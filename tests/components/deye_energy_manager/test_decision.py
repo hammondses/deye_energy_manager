@@ -1132,6 +1132,23 @@ def test_normal_ev_charging_has_hard_80_percent_soc_cutoff() -> None:
     assert "normal SOC cutoff" in at_target.ev_decision_reason
 
 
+def test_effective_local_soc_drives_existing_ev_cutoff() -> None:
+    """The coordinator passes resolved local SOC through the existing Porsche field."""
+
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=80,
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_solar_charging_enabled=True),
+    )
+
+    assert decision.ev_soc_cutoff_reached
+    assert decision.ev_expected_action == "ev_charger_stop"
+
+
 def test_manual_ev_override_starts_and_stops_at_selected_soc() -> None:
     settings = EnergyManagerSettings(
         ev_control_enabled=True,

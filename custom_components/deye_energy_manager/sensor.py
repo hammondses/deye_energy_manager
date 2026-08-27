@@ -130,6 +130,15 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="ev_expected_action", name="EV expected action", value_fn=lambda d: d.ev_expected_action),
     DeyeSensorDescription(key="ev_detected_power_w", name="EV detected power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_detected_power_w),
     DeyeSensorDescription(key="ev_active_target_soc", name="EV active target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_active_target_soc),
+    DeyeSensorDescription(key="effective_taycan_soc", name="Effective Taycan SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_taycan_soc", name="WiCAN Taycan SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: None),
+    DeyeSensorDescription(key="taycan_soc_source", name="Taycan SOC source", value_fn=lambda d: None),
+    DeyeSensorDescription(key="taycan_soc_age_minutes", name="Taycan SOC age minutes", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_update", name="WiCAN SOC last update", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_trigger", name="WiCAN SOC last trigger", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_result", name="WiCAN SOC last result", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_error", name="WiCAN SOC last error", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_energy_until_next_query", name="WiCAN SOC energy until next query", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: None),
     DeyeSensorDescription(key="recent_proposed_actions", name="Recent proposed actions", value_fn=lambda d: d.expected_action),
 )
 
@@ -172,12 +181,37 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
             return len(self.coordinator._deye_write_events)
         if self.entity_description.key == "recent_proposed_actions":
             return self.coordinator.recent_proposed_actions[-1]["proposed_action"] if self.coordinator.recent_proposed_actions else "none"
+        coordinator_values = {
+            "effective_taycan_soc": self.coordinator.effective_taycan_soc,
+            "wican_taycan_soc": self.coordinator.wican.soc,
+            "taycan_soc_source": self.coordinator.taycan_soc_source,
+            "taycan_soc_age_minutes": self.coordinator.taycan_soc_age_minutes,
+            "wican_soc_last_update": self.coordinator.wican.updated_at,
+            "wican_soc_last_trigger": self.coordinator.wican.last_trigger,
+            "wican_soc_last_result": self.coordinator.wican.last_result,
+            "wican_soc_last_error": self.coordinator.wican.last_error,
+            "wican_soc_energy_until_next_query": self.coordinator.wican_energy_until_next_query,
+        }
+        if self.entity_description.key in coordinator_values:
+            return coordinator_values[self.entity_description.key]
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
         if self.entity_description.key == "recent_proposed_actions":
             return {"entries": list(self.coordinator.recent_proposed_actions)}
+        if self.entity_description.key in {"effective_taycan_soc", "wican_taycan_soc", "taycan_soc_source"}:
+            return {
+                "local_soc": self.coordinator.wican.soc,
+                "local_updated": self.coordinator.wican.updated_at.isoformat() if self.coordinator.wican.updated_at else None,
+                "local_raw": self.coordinator.wican.raw,
+                "source": self.coordinator.taycan_soc_source,
+                "age_minutes": self.coordinator.taycan_soc_age_minutes,
+                "last_trigger": self.coordinator.wican.last_trigger,
+                "last_result": self.coordinator.wican.last_result,
+                "last_error": self.coordinator.wican.last_error,
+                "last_success_energy_kwh": self.coordinator.wican.last_success_energy_kwh,
+            }
         if self.entity_description.key == "actual_program_ranges":
             decision = self.coordinator.data
             if decision is None:

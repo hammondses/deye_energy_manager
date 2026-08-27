@@ -317,6 +317,14 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("ev_grid_bypass_enabled", default=defaults.get("ev_grid_bypass_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_solar_charging_enabled", default=defaults.get("ev_solar_charging_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_cheap_grid_charging_enabled", default=defaults.get("ev_cheap_grid_charging_enabled", True)): selector.BooleanSelector(),
+            vol.Required("wican_soc_enabled", default=defaults.get("wican_soc_enabled", False)): selector.BooleanSelector(),
+            vol.Required("wican_base_url", default=defaults.get("wican_base_url", TEXT_DEFAULTS["wican_base_url"])): selector.TextSelector(),
+            vol.Required("wican_soc_energy_threshold_kwh", default=defaults.get("wican_soc_energy_threshold_kwh", NUMBER_DEFAULTS["wican_soc_energy_threshold_kwh"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0.1, step=0.1)
+            ),
+            vol.Required("wican_soc_fresh_minutes", default=defaults.get("wican_soc_fresh_minutes", NUMBER_DEFAULTS["wican_soc_fresh_minutes"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=1, step=1)
+            ),
             vol.Required("ev_manual_target_soc", default=defaults.get("ev_manual_target_soc", NUMBER_DEFAULTS["ev_manual_target_soc"])): selector.NumberSelector(
                 selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=50, max=100, step=1, unit_of_measurement="%")
             ),

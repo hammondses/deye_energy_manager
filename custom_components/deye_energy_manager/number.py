@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfPower, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -92,6 +92,8 @@ NUMBERS = (
     DeyeNumberDescription(key="ev_bypass_program_power_w", name="EV bypass program power", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["ev_bypass_program_power_w"]),
     DeyeNumberDescription(key="ev_restore_program_power_w", name="EV restore program power", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["ev_restore_program_power_w"]),
     DeyeNumberDescription(key="ev_manual_target_soc", name="EV manual target SOC", native_unit_of_measurement=PERCENTAGE, native_min_value=50, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["ev_manual_target_soc"]),
+    DeyeNumberDescription(key="wican_soc_energy_threshold_kwh", name="WiCAN SOC energy threshold", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, native_min_value=0.1, native_step=0.1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["wican_soc_energy_threshold_kwh"]),
+    DeyeNumberDescription(key="wican_soc_fresh_minutes", name="WiCAN SOC fresh minutes", native_min_value=1, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["wican_soc_fresh_minutes"]),
     DeyeNumberDescription(key="grid_loss_voltage_threshold", name="Grid loss voltage threshold", native_min_value=0, native_step=5, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["grid_loss_voltage_threshold"]),
     DeyeNumberDescription(key="grid_loss_notification_cooldown_minutes", name="Grid loss notification cooldown", native_min_value=0, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["grid_loss_notification_cooldown_minutes"]),
     DeyeNumberDescription(key="min_thermal_run_minutes", name="Minimum thermal run minutes", native_min_value=0, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["min_thermal_run_minutes"]),

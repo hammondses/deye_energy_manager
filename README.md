@@ -318,6 +318,10 @@ Daytime EV permission requires at least 1.8kW of actual PV before starting, obse
 
 Normal charging is hard-stopped when the configured Porsche SOC reaches 80%. For an occasional overnight or top-up charge above that limit, set `EV manual target SOC` and turn on `EV manual charging override`. The integration starts the existing TIMXON charging script only while the connector is plugged in and Porsche SOC is available, owns the session across the 07:00 boundary, stops at the selected target, restores the normal Deye programme, and clears the override automatically. Turning the override off stops the session immediately. Daytime solar-current modulation should yield while the override is on and resume when it turns off.
 
+Local Taycan SOC can optionally come from a WiCAN Pro `SOC_D` one-shot request. Configure the WiCAN base URL in EV options and enable `WiCAN Taycan SOC enabled` only after a manual refresh succeeds. Automatic requests occur only on a real connector transition, charging start/stop, or each configured increment of charger session energy (default `1.0kWh`). Home Assistant startup, reloads, coordinator refreshes, time intervals, failures, and unavailable values never poll or retry the vehicle. The manual button also performs exactly one request.
+
+WiCAN entities include effective/local Taycan SOC, source and age, last update/trigger/result/error, energy until the next query, the kWh threshold number, enable switch, and manual refresh button. Fresh local SOC feeds the existing normal/manual cutoff logic; fresh Porsche Connect SOC is the fallback, followed by the newest last-known-good sample.
+
 ## Diagnostics And Tuning
 
 The integration exposes one thermal status sensor per managed load, for example:

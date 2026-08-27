@@ -22,6 +22,7 @@ BUTTONS = {
     "clear_ev_latch": "Clear EV latch",
     "force_ev_grid_bypass_start": "Force EV grid bypass start",
     "force_ev_grid_bypass_restore": "Force EV grid bypass restore",
+    "refresh_wican_taycan_soc": "Refresh WiCAN Taycan SOC",
 }
 
 
@@ -48,6 +49,8 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
                 await self._blocked("force EV restore blocked: EV control disabled")
                 return
             await self.coordinator.async_force_ev_grid_bypass(False)
+        elif self._key == "refresh_wican_taycan_soc":
+            await self.coordinator.async_query_wican_soc("manual")
         elif self._key == "apply_plan_now":
             await self.coordinator.async_apply_decision()
         elif self._key == "restore_deye_normal":
