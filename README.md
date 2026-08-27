@@ -306,7 +306,7 @@ EV support is native to the integration and disabled by default.
 - `number.deye_energy_manager_ev_stopped_load_threshold`
 - `number.deye_energy_manager_ev_restore_program_power`
 - `switch.deye_energy_manager_ev_manual_charging_override`
-- `number.deye_energy_manager_ev_manual_target_soc`
+- `number.deye_energy_manager_ev_manual_target_soc` (40-100%)
 - `sensor.deye_energy_manager_ev_active_target_soc`
 - `binary_sensor.deye_energy_manager_ev_soc_cutoff_reached`
 

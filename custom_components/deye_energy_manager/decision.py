@@ -1438,7 +1438,7 @@ def ev_decision(
     )
     startup_power_deficit = power_deficit and not charge_control_detected
     active_target_soc = (
-        min(max(settings.ev_manual_target_soc, 50.0), 100.0)
+        min(max(settings.ev_manual_target_soc, 40.0), 100.0)
         if inputs.ev_manual_charging_override
         else 80.0
     )

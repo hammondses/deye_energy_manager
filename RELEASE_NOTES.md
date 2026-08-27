@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.52
+
+- Allow the manual Taycan charging target to be set as low as 40%, while leaving the normal charging target at 80%.
+
 ## v0.5.51
 
 - Add optional event-driven local WiCAN Taycan SOC using one SOC_D request on connector, charge-start/stop, session-energy threshold, or manual-refresh events only. Automatic acquisition is disabled by default; failures never retry until another genuine event.

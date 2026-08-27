@@ -1187,6 +1187,42 @@ def test_manual_ev_override_starts_and_stops_at_selected_soc() -> None:
     assert "manual SOC cutoff" in reached.ev_decision_reason
 
 
+def test_manual_ev_override_supports_40_percent_target() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_manual_target_soc=40,
+    )
+
+    below_target = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=False,
+            ev_connector_status="Preparing",
+            porsche_soc=39,
+        ),
+        settings,
+    )
+    reached = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=40,
+        ),
+        settings,
+    )
+
+    assert below_target.ev_active_target_soc == 40
+    assert below_target.ev_expected_action == "ev_charger_start"
+    assert not below_target.ev_soc_cutoff_reached
+    assert reached.ev_active_target_soc == 40
+    assert reached.ev_soc_cutoff_reached
+    assert reached.ev_expected_action == "ev_charger_stop"
+
+
 def test_manual_ev_override_owns_session_across_0700_and_requires_soc() -> None:
     settings = EnergyManagerSettings(
         ev_control_enabled=True,

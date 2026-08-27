@@ -326,7 +326,7 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
                 selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=1, step=1)
             ),
             vol.Required("ev_manual_target_soc", default=defaults.get("ev_manual_target_soc", NUMBER_DEFAULTS["ev_manual_target_soc"])): selector.NumberSelector(
-                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=50, max=100, step=1, unit_of_measurement="%")
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=40, max=100, step=1, unit_of_measurement="%")
             ),
             vol.Required("grid_loss_notification_enabled", default=defaults.get("grid_loss_notification_enabled", FEATURE_DEFAULTS["grid_loss_notification_enabled"])): selector.BooleanSelector(),
             vol.Required("grid_loss_notify_service", default=defaults.get("grid_loss_notify_service", TEXT_DEFAULTS["grid_loss_notify_service"])): selector.TextSelector(),
