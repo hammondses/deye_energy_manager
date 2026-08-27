@@ -507,6 +507,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         new_state = event.data.get("new_state")
         if new_state is None or (old_state is not None and old_state.state == new_state.state):
             return
+        restoring = old_state is None or old_state.state in UNAVAILABLE
 
         connector_entity = self.entity_map.get("ev_connector_status")
         current_entity = self.entity_map.get("ev_current")
@@ -532,7 +533,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             charging=charging_now,
             energy_kwh=energy,
             threshold_kwh=self.wican_energy_threshold_kwh,
-            enabled=self.wican_soc_enabled,
+            enabled=self.wican_soc_enabled and not restoring,
         )
         self._schedule_wican_save()
         if trigger:

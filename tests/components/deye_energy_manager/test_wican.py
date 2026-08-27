@@ -50,6 +50,23 @@ def test_restore_and_disabled_observation_never_create_boot_or_timer_trigger() -
     assert restored.last_trigger == "none"
 
 
+def test_startup_restoration_establishes_baseline_without_later_churn_query() -> None:
+    state = WicanSocState(connector_connected=False, charging_active=False)
+
+    assert observe(state, "restored-connector", connected=True, enabled=False) is None
+    assert observe(state, "restored-energy", connected=True, enabled=True) is None
+    assert state.connector_connected
+
+
+def test_coordinator_treats_unavailable_state_restoration_as_disabled_observation() -> None:
+    tree = ast.parse((ROOT / "custom_components/deye_energy_manager/coordinator.py").read_text())
+    handler = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_handle_wican_event")
+    source = ast.unparse(handler)
+
+    assert "restoring = old_state is None or old_state.state in UNAVAILABLE" in source
+    assert "enabled=self.wican_soc_enabled and (not restoring)" in source
+
+
 def test_one_request_per_connector_transition_and_duplicate_event() -> None:
     state = WicanSocState(connector_connected=False, charging_active=False)
 

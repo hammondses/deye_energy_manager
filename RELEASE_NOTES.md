@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.53
+
+- Treat Home Assistant entity restoration from unavailable to live as baseline initialization, preventing an enabled WiCAN source from querying during startup while preserving later genuine connector and charging events.
+
 ## v0.5.52
 
 - Allow the manual Taycan charging target to be set as low as 40%, while leaving the normal charging target at 80%.
