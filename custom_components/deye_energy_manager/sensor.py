@@ -83,6 +83,8 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="cooling_raw_required_fan_percentage", name="Cooling raw required fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_raw_required_fan_pct),
     DeyeSensorDescription(key="cooling_recommended_fan_percentage", name="Cooling recommended fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_recommended_fan_pct),
     DeyeSensorDescription(key="cooling_reason", name="Cooling reason", value_fn=lambda d: d.cooling_reason),
+    DeyeSensorDescription(key="cooling_load_regime", name="Cooling load regime", value_fn=lambda d: d.cooling_load_regime),
+    DeyeSensorDescription(key="cooling_calibration_state", name="Cooling calibration state", value_fn=lambda d: d.cooling_calibration_state),
     DeyeSensorDescription(key="expected_action", name="Expected action", value_fn=lambda d: d.expected_action),
     DeyeSensorDescription(key="thermal_expected_action", name="Thermal expected action", value_fn=lambda d: d.thermal_action),
     DeyeSensorDescription(key="thermal_action_reason", name="Thermal action reason", value_fn=lambda d: d.thermal_action_reason),

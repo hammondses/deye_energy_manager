@@ -469,6 +469,8 @@ class EnergyManagerDecision:
     cooling_raw_required_fan_pct: float = 0.0
     cooling_recommended_fan_pct: float = 0.0
     cooling_reason: str = "unavailable"
+    cooling_load_regime: str = "unknown"
+    cooling_calibration_state: str = "temperature_unavailable"
 
 
 @dataclass(frozen=True, slots=True)

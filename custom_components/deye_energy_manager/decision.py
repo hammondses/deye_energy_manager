@@ -108,22 +108,23 @@ def inverter_cooling_recommendation(
         temperature_error_c is not None
         and temperature_error_c < -settings.cooling_target_deadband_c
     )
+    clearly_falling = trend is not None and trend < -0.05
     if current_pct is None or raw_pct == current_pct:
         recommended_pct = raw_pct
     elif raw_pct < current_pct:
-        if above_target or still_rising:
+        if still_rising or (above_target and not clearly_falling):
             recommended_pct = current_pct
             reason += "; temperature high or rising, hold"
         elif load_decreased:
             recommended_pct = raw_pct
             reason += "; load fell, reduce"
-        elif below_target:
+        elif below_target or clearly_falling:
             recommended_pct = max(raw_pct, current_pct - settings.cooling_feedback_step_pct)
             reason += f"; feedback authorises -{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
             reason += "; inside target deadband, hold"
-    elif load_increased or trend is None or above_target or still_rising:
+    elif trend is None or still_rising or ((load_increased or above_target) and not clearly_falling):
         recommended_pct = min(raw_pct, current_pct + settings.cooling_feedback_step_pct)
         reason += f"; feedback authorises +{settings.cooling_feedback_step_pct:g}%"
     else:
@@ -141,6 +142,47 @@ def inverter_cooling_recommendation(
         recommended_pct=round(recommended_pct),
         reason=reason,
     )
+
+
+def cooling_load_regime(inputs: EnergyManagerInputs) -> str:
+    """Classify the dominant inverter conversion path for recorder analysis."""
+
+    export_w = max(inputs.export_power_w, max(-inputs.grid_power_w, 0.0))
+    if export_w >= 500.0:
+        return "pv_export"
+    if inputs.battery_power_w <= -500.0:
+        return "battery_charging"
+    if inputs.battery_power_w >= 500.0:
+        return "battery_discharge"
+    if (inputs.inverter_pv_power_w or 0.0) >= 500.0:
+        return "pv_self_consumption"
+    if abs(inputs.inverter_ac_power_w or inputs.essential_power_w) >= 500.0:
+        return "ac_output"
+    return "idle"
+
+
+def cooling_calibration_state(
+    inputs: EnergyManagerInputs,
+    cooling: CoolingRecommendation,
+    settings: EnergyManagerSettings,
+) -> str:
+    """Return whether this sample belongs to a useful steady calibration window."""
+
+    if not inputs.cooling_temperature_valid or cooling.temperature_error_c is None:
+        return "temperature_unavailable"
+    if inputs.inverter_ac_temperature_c is not None and inputs.inverter_ac_temperature_c >= settings.cooling_emergency_temp_c:
+        return "emergency"
+    if inputs.cooling_fan_percentage is None:
+        return "fan_unavailable"
+    if abs(inputs.cooling_fan_percentage - cooling.recommended_pct) >= 2.0:
+        return "fan_adjusting"
+    if abs(cooling.load_change_w) >= 250.0:
+        return "load_changing"
+    if cooling.temperature_trend_c_per_min is None:
+        return "temperature_settling"
+    if abs(cooling.temperature_trend_c_per_min) > 0.05:
+        return "temperature_changing"
+    return "stable"
 
 
 def deye_capacity_percent(value: float) -> int:
@@ -2605,6 +2647,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cooling_raw_required_fan_pct=cooling.raw_required_pct,
         cooling_recommended_fan_pct=cooling.recommended_pct,
         cooling_reason=cooling.reason,
+        cooling_load_regime=cooling_load_regime(inputs),
+        cooling_calibration_state=cooling_calibration_state(inputs, cooling, settings),
     )
 
 

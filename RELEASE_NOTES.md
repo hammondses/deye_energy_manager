@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.54
+
+- Let clearly falling inverter temperature unwind elevated fan speed and prevent small overnight load changes from raising fan speed while temperature continues to fall.
+- Add cooling load-regime and calibration-state sensors so Home Assistant Recorder can isolate stable PV export, self-consumption, battery, and AC-output windows for fan-curve tuning.
+
 ## v0.5.53
 
 - Treat Home Assistant entity restoration from unavailable to live as baseline initialization, preventing an enabled WiCAN source from querying during startup while preserving later genuine connector and charging events.

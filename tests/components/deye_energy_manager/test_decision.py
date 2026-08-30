@@ -293,6 +293,53 @@ def test_inverter_cooling_turns_off_only_when_cool_and_idle() -> None:
     assert recommendation.recommended_pct == 0
 
 
+def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> None:
+    settings = EnergyManagerSettings()
+    unwinding = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=45,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=95,
+            cooling_temperature_trend_c_per_min=-0.2,
+        ),
+        settings,
+    )
+    overnight = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=3000,
+            inverter_ac_temperature_c=35,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=10,
+            cooling_temperature_trend_c_per_min=-0.2,
+            cooling_load_change_w=1000,
+        ),
+        settings,
+    )
+
+    assert unwinding.recommended_pct == 90
+    assert overnight.raw_required_pct == 15
+    assert overnight.recommended_pct == 10
+
+
+def test_cooling_diagnostics_identify_regime_and_stable_samples() -> None:
+    stable = decide(
+        base_inputs(
+            inverter_pv_power_w=6000,
+            inverter_ac_power_w=5500,
+            grid_power_w=-4000,
+            export_power_w=4000,
+            inverter_ac_temperature_c=42,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=35,
+            cooling_temperature_trend_c_per_min=0.0,
+        )
+    )
+
+    assert stable.cooling_load_regime == "pv_export"
+    assert stable.cooling_calibration_state == "stable"
+
+
 def test_time_slots_and_tariff_windows() -> None:
     cases = [
         (dt(20, 52), "Prog4", "peak"),
