@@ -127,6 +127,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._cooling_temperature_sample: tuple[datetime, float] | None = None
         self._cooling_temperature_trend_c_per_min: float | None = None
         self._previous_cooling_throughput_w: float | None = None
+        self._cooling_protection_condition_since: datetime | None = None
+        self.cooling_inverter_protection_active = False
+        self._cooling_protection_restore_values: dict[str, float] = {}
         self._cheap_grid_session_date: str | None = None
         self._cheap_grid_charge_blocked_target_soc: float | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
@@ -210,6 +213,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             }
         self.bedroom_night_heating_armed = bool(data.get("bedroom_night_heating_armed", False))
         self.ev_manual_charging_override = bool(data.get("ev_manual_charging_override", False))
+        self.cooling_inverter_protection_active = bool(data.get("cooling_inverter_protection_active", False))
+        raw_restore = data.get("cooling_protection_restore_values")
+        if isinstance(raw_restore, dict):
+            self._cooling_protection_restore_values = {
+                str(entity_id): float(value)
+                for entity_id, value in raw_restore.items()
+                if isinstance(value, (int, float))
+            }
 
     def _datetime_map(self, raw: object) -> dict[str, datetime]:
         """Return a string to datetime map from stored JSON data."""
@@ -261,6 +272,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "thermal_leases": {name: self._serialize_lease(lease) for name, lease in self._thermal_leases.items()},
             "bedroom_night_heating_armed": self.bedroom_night_heating_armed,
             "ev_manual_charging_override": self.ev_manual_charging_override,
+            "cooling_inverter_protection_active": self.cooling_inverter_protection_active,
+            "cooling_protection_restore_values": self._cooling_protection_restore_values,
         }
 
     def _serialize_datetime_map(self, values: dict[str, datetime]) -> dict[str, str]:
@@ -328,6 +341,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             bedroom_night_heating_armed=self.bedroom_night_heating_armed,
             pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
             inverter_cooling_control_enabled=bool(options["inverter_cooling_control_enabled"]),
+            cooling_minimum_hunt_enabled=bool(options["cooling_minimum_hunt_enabled"]),
+            cooling_fan_failure_protection_enabled=bool(options["cooling_fan_failure_protection_enabled"]),
             export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
             return_to_normal_on_shed_enabled=bool(options["return_to_normal_on_shed_enabled"]),
             forecast_full_override_enabled=bool(options["forecast_full_override_enabled"]),
@@ -462,6 +477,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_max_normal_fan_pct=float(options["cooling_max_normal_fan_pct"]),
             cooling_emergency_temp_c=float(options["cooling_emergency_temp_c"]),
             cooling_failsafe_fan_pct=float(options["cooling_failsafe_fan_pct"]),
+            cooling_hunt_step_interval_min=float(options["cooling_hunt_step_interval_min"]),
+            cooling_fan_failure_temp_c=float(options["cooling_fan_failure_temp_c"]),
+            cooling_fan_failure_delay_min=float(options["cooling_fan_failure_delay_min"]),
+            cooling_fan_min_rpm=float(options["cooling_fan_min_rpm"]),
+            cooling_protection_restore_max_sell_w=float(options["cooling_protection_restore_max_sell_w"]),
+            cooling_protection_restore_max_solar_w=float(options["cooling_protection_restore_max_solar_w"]),
         )
 
     def _legacy_thermal_actuation_mode(self, options: dict[str, object]) -> str:
@@ -657,6 +678,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             and state.state not in UNAVAILABLE
             and (now - state.last_updated).total_seconds() <= 600
         )
+
+    def _cooling_fan_health(self, settings: EnergyManagerSettings) -> tuple[bool, float | None]:
+        """Return whether the external controller and a commanded fan are responding."""
+
+        connected = self._state_optional_on("inverter_cooling_fan_status")
+        rpm = self._state_float("inverter_cooling_fan_rpm")
+        percentage = self._cooling_fan_percentage()
+        if connected is not True:
+            return False, rpm
+        if percentage is None:
+            return False, rpm
+        if rpm is None or rpm < settings.cooling_fan_min_rpm:
+            return False, rpm
+        return True, rpm
 
     def _cooling_temperature(self) -> tuple[float | None, datetime | None, float | None]:
         """Return the current temperature sample and trend between distinct updates."""
@@ -984,6 +1019,27 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if self._previous_cooling_throughput_w is not None
             else 0.0
         )
+        cooling_fan_healthy, cooling_fan_rpm = self._cooling_fan_health(settings)
+        cooling_protection_condition = (
+            not cooling_fan_healthy
+            and self._cooling_temperature_valid(now)
+            and inverter_ac_temperature_c is not None
+            and inverter_ac_temperature_c >= settings.cooling_fan_failure_temp_c
+        )
+        if cooling_protection_condition:
+            self._cooling_protection_condition_since = self._cooling_protection_condition_since or now
+        else:
+            self._cooling_protection_condition_since = None
+        cooling_protection_condition_minutes = (
+            (now - self._cooling_protection_condition_since).total_seconds() / 60.0
+            if self._cooling_protection_condition_since is not None
+            else 0.0
+        )
+        hunt_reference = self._last_cooling_write_at or self.started_at
+        cooling_hunt_step_ready = (
+            (dt_util.utcnow() - hunt_reference).total_seconds() / 60.0
+            >= settings.cooling_hunt_step_interval_min
+        )
         grid_power_w = self._state_float("grid_ct_power") or 0.0
         ev_charge_requested = self._state_optional_on("ev_charge_control")
         ev_connector_status = self._state_string("ev_connector_status")
@@ -1048,6 +1104,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_temperature_sample_at=cooling_temperature_sample_at,
             cooling_temperature_trend_c_per_min=cooling_temperature_trend,
             cooling_load_change_w=cooling_load_change_w,
+            cooling_hunt_step_ready=cooling_hunt_step_ready,
+            cooling_fan_healthy=cooling_fan_healthy,
+            cooling_fan_rpm=cooling_fan_rpm,
+            cooling_protection_condition_minutes=cooling_protection_condition_minutes,
+            cooling_inverter_protection_active=self.cooling_inverter_protection_active,
         )
         decision = decide(inputs, settings)
         if decision.solar_arrived and decision.ev_solar_charge_allowed:
@@ -1266,6 +1327,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_latch_on = False
         self.ev_hold_until = None
         async with self._apply_lock:
+            await self._restore_cooling_protection()
             await self._apply_deye_plan(self._manual_restore_deye_plan(), force=True, override_gates=True)
         await self.async_request_refresh()
 
@@ -1274,11 +1336,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
         async with self._apply_lock:
             decision = decision or self.data
-            if decision is None or decision.control_blocked:
+            if decision is None:
                 return
             if dt_util.utcnow() - self.started_at < timedelta(seconds=60):
                 return
             settings = self.settings
+            if decision.cooling_inverter_protection_required or self.cooling_inverter_protection_active:
+                await self._apply_cooling_protection(decision)
+                return
+            if decision.control_blocked:
+                return
             if settings.inverter_cooling_control_enabled:
                 await self._apply_inverter_cooling(decision)
             if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_start":
@@ -1360,6 +1427,78 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.last_control_action = (
             f"inverter cooling fan -> {desired}%: {decision.cooling_reason}"
         )
+
+    def _capture_cooling_protection_restore_values(self) -> None:
+        """Remember only the numeric settings changed by the protection latch."""
+
+        entity_ids = [
+            self.entity_map.get("inverter_max_sell_power", ""),
+            self.entity_map.get("inverter_max_solar_power", ""),
+            *PROG_CAPACITY_ENTITIES,
+        ]
+        self._cooling_protection_restore_values = {
+            entity_id: value
+            for entity_id in entity_ids
+            if entity_id and (value := self._entity_float(entity_id)) is not None
+        }
+
+    def _cooling_protection_plan(self) -> DeyePlan:
+        slots = self._enabled_program_slots()
+        return DeyePlan(
+            mode="cooling_fan_failure_protection",
+            reason="external fan failure while inverter is hot: block export, PV and battery discharge",
+            capacity_targets={slot: 100.0 for slot in slots},
+            charge_modes={slot: CHARGE_OPTION_NO_GRID for slot in slots},
+            grid_charge_enabled=False,
+            emergency=True,
+        )
+
+    async def _apply_cooling_protection(self, decision: EnergyManagerDecision) -> None:
+        """Latch and enforce grid pass-through after a sustained hot fan failure."""
+
+        if not self.cooling_inverter_protection_active:
+            self._capture_cooling_protection_restore_values()
+            self.cooling_inverter_protection_active = True
+            self._schedule_runtime_save()
+        await self._call_number_set(
+            self.entity_map.get("inverter_max_sell_power", "number.deye_max_sell_power"),
+            0.0,
+            reason=decision.cooling_protection_reason,
+            emergency=True,
+        )
+        await self._call_number_set(
+            self.entity_map.get("inverter_max_solar_power", "number.deye_max_solar_power"),
+            0.0,
+            reason=decision.cooling_protection_reason,
+            emergency=True,
+        )
+        await self._apply_deye_plan(self._cooling_protection_plan(), override_gates=True)
+        self.last_control_action = "cooling protection latched: inverter forced to grid pass-through"
+
+    async def _restore_cooling_protection(self) -> None:
+        """Restore the exact numeric state captured before cooling protection tripped."""
+
+        if not self.cooling_inverter_protection_active:
+            return
+        restore_values = dict(self._cooling_protection_restore_values)
+        restore_values.setdefault(
+            self.entity_map.get("inverter_max_sell_power", "number.deye_max_sell_power"),
+            self.settings.cooling_protection_restore_max_sell_w,
+        )
+        restore_values.setdefault(
+            self.entity_map.get("inverter_max_solar_power", "number.deye_max_solar_power"),
+            self.settings.cooling_protection_restore_max_solar_w,
+        )
+        for entity_id, value in restore_values.items():
+            await self._call_number_set(
+                entity_id,
+                value,
+                reason="manual cooling protection restore",
+                force=True,
+            )
+        self.cooling_inverter_protection_active = False
+        self._cooling_protection_restore_values = {}
+        self._schedule_runtime_save()
 
     async def _call_number_set(self, entity_id: str, value: float, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
         if entity_id in PROG_CAPACITY_ENTITIES:

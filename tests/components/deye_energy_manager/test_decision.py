@@ -322,6 +322,104 @@ def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> 
     assert overnight.recommended_pct == 10
 
 
+def test_inverter_cooling_minimum_hunt_steps_down_only_after_stable_window() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    waiting = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=42,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=0.0,
+            cooling_hunt_step_ready=False,
+        ),
+        settings,
+    )
+    probing = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=42,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=0.0,
+            cooling_hunt_step_ready=True,
+        ),
+        settings,
+    )
+
+    assert waiting.recommended_pct == 40
+    assert probing.recommended_pct == 35
+    assert "minimum hunt" in probing.reason
+
+
+def test_inverter_cooling_minimum_hunt_recovers_on_rise_or_load_jump() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    rising = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=42,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=20,
+            cooling_temperature_trend_c_per_min=0.2,
+        ),
+        settings,
+    )
+    load_jump = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=42,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=20,
+            cooling_temperature_trend_c_per_min=-0.1,
+            cooling_load_change_w=1000,
+        ),
+        settings,
+    )
+
+    assert rising.recommended_pct == 25
+    assert load_jump.recommended_pct == 25
+
+
+def test_cooling_protection_requires_sustained_hot_fan_failure() -> None:
+    settings = EnergyManagerSettings(
+        cooling_fan_failure_protection_enabled=True,
+        cooling_fan_failure_temp_c=50,
+        cooling_fan_failure_delay_min=5,
+    )
+    pending = decide(
+        base_inputs(
+            inverter_ac_temperature_c=51,
+            cooling_temperature_valid=True,
+            cooling_fan_healthy=False,
+            cooling_protection_condition_minutes=4.9,
+        ),
+        settings,
+    )
+    tripped = decide(
+        base_inputs(
+            inverter_ac_temperature_c=51,
+            cooling_temperature_valid=True,
+            cooling_fan_healthy=False,
+            cooling_protection_condition_minutes=5,
+        ),
+        settings,
+    )
+    cool_failure = decide(
+        base_inputs(
+            inverter_ac_temperature_c=49,
+            cooling_temperature_valid=True,
+            cooling_fan_healthy=False,
+            cooling_protection_condition_minutes=20,
+        ),
+        settings,
+    )
+
+    assert not pending.cooling_inverter_protection_required
+    assert tripped.cooling_inverter_protection_required
+    assert tripped.cooling_inverter_protection_active
+    assert not cool_failure.cooling_inverter_protection_required
+
+
 def test_cooling_diagnostics_identify_regime_and_stable_samples() -> None:
     stable = decide(
         base_inputs(

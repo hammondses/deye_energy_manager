@@ -53,6 +53,10 @@ DEFAULT_ENTITY_MAP = {
     "inverter_pv_power": "sensor.deye_total_pv_power",
     "inverter_ac_power": "sensor.deye_inverter_power",
     "inverter_cooling_fan": "fan.deye_external_fans_cooling_fans",
+    "inverter_cooling_fan_status": "binary_sensor.garage_deye_external_fans_device_status",
+    "inverter_cooling_fan_rpm": "sensor.garage_deye_external_fans_cooling_fan_rpm",
+    "inverter_max_sell_power": "number.deye_max_sell_power",
+    "inverter_max_solar_power": "number.deye_max_solar_power",
     "grid_charge_switch": "switch.deye_grid_charge_enabled",
     "porsche_soc": "sensor.taycan_4s_state_of_charge",
     "porsche_charging_status": "sensor.taycan_4s_charging_status",
@@ -227,6 +231,8 @@ FEATURE_DEFAULTS = {
     "direct_climate_control_enabled": False,
     "pv_load_test_control_enabled": False,
     "inverter_cooling_control_enabled": False,
+    "cooling_minimum_hunt_enabled": False,
+    "cooling_fan_failure_protection_enabled": False,
     "export_limited_mode_enabled": False,
     "return_to_normal_on_shed_enabled": True,
     "forecast_full_override_enabled": True,
@@ -355,6 +361,12 @@ NUMBER_DEFAULTS = {
     "cooling_max_normal_fan_pct": 70.0,
     "cooling_emergency_temp_c": 48.0,
     "cooling_failsafe_fan_pct": 50.0,
+    "cooling_hunt_step_interval_min": 15.0,
+    "cooling_fan_failure_temp_c": 50.0,
+    "cooling_fan_failure_delay_min": 5.0,
+    "cooling_fan_min_rpm": 200.0,
+    "cooling_protection_restore_max_sell_w": 10000.0,
+    "cooling_protection_restore_max_solar_w": 15000.0,
 }
 
 TEXT_DEFAULTS = {

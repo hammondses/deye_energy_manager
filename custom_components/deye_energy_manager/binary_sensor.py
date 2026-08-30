@@ -63,6 +63,9 @@ BINARY_SENSORS = (
     DeyeBinarySensorDescription(key="forecast_data_valid", name="Forecast data valid", value_fn=lambda d: d.forecast_data_valid),
     DeyeBinarySensorDescription(key="control_blocked", name="Control blocked", value_fn=lambda d: d.control_blocked),
     DeyeBinarySensorDescription(key="deye_write_thrash_detected", name="Deye write thrash detected", value_fn=lambda d: False),
+    DeyeBinarySensorDescription(key="cooling_fan_healthy", name="Cooling fan healthy", value_fn=lambda d: d.cooling_fan_healthy is True),
+    DeyeBinarySensorDescription(key="cooling_inverter_protection_required", name="Cooling inverter protection required", value_fn=lambda d: d.cooling_inverter_protection_required),
+    DeyeBinarySensorDescription(key="cooling_inverter_protection_active", name="Cooling inverter protection active", value_fn=lambda d: d.cooling_inverter_protection_active),
 )
 
 

@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.55
+
+- Add a default-off minimum-fan hunt mode that probes downward in configurable steps only after a stable observation window, then responds immediately to rising temperature, a target breach, or a meaningful load increase.
+- Add Home Assistant fan-health, RPM, trip-duration, and protection-state diagnostics plus adjustable hunt and safety thresholds.
+- Add default-off, latched external-fan failure protection: after fan telemetry remains failed above the configured inverter temperature, block export and PV, raise programme reserves to 100%, disable grid charging, and require the existing Restore Deye normal button to restore the captured pre-trip settings.
+
 ## v0.5.54
 
 - Let clearly falling inverter temperature unwind elevated fan speed and prevent small overnight load changes from raising fan speed while temperature continues to fall.

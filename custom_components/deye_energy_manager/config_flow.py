@@ -353,6 +353,14 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                 "inverter_cooling_control_enabled",
                 default=defaults.get("inverter_cooling_control_enabled", False),
             ): selector.BooleanSelector(),
+            vol.Required(
+                "cooling_minimum_hunt_enabled",
+                default=defaults.get("cooling_minimum_hunt_enabled", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "cooling_fan_failure_protection_enabled",
+                default=defaults.get("cooling_fan_failure_protection_enabled", False),
+            ): selector.BooleanSelector(),
             **{
                 vol.Required(key, default=defaults.get(key, NUMBER_DEFAULTS[key])): selector.NumberSelector(
                     selector.NumberSelectorConfig(
@@ -373,6 +381,12 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                     ("cooling_max_normal_fan_pct", 30, 100, 1),
                     ("cooling_emergency_temp_c", 45, 55, 0.5),
                     ("cooling_failsafe_fan_pct", 0, 100, 1),
+                    ("cooling_hunt_step_interval_min", 1, 60, 1),
+                    ("cooling_fan_failure_temp_c", 45, 65, 0.5),
+                    ("cooling_fan_failure_delay_min", 1, 30, 1),
+                    ("cooling_fan_min_rpm", 0, 5000, 50),
+                    ("cooling_protection_restore_max_sell_w", 0, 12000, 100),
+                    ("cooling_protection_restore_max_solar_w", 0, 18000, 100),
                 )
             },
         }

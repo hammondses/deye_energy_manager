@@ -26,6 +26,8 @@ class EnergyManagerSettings:
     bedroom_night_heating_armed: bool = False
     pv_load_test_control_enabled: bool = False
     inverter_cooling_control_enabled: bool = False
+    cooling_minimum_hunt_enabled: bool = False
+    cooling_fan_failure_protection_enabled: bool = False
     export_limited_mode_enabled: bool = False
     return_to_normal_on_shed_enabled: bool = True
     forecast_full_override_enabled: bool = True
@@ -161,6 +163,12 @@ class EnergyManagerSettings:
     cooling_max_normal_fan_pct: float = 70.0
     cooling_emergency_temp_c: float = 48.0
     cooling_failsafe_fan_pct: float = 50.0
+    cooling_hunt_step_interval_min: float = 15.0
+    cooling_fan_failure_temp_c: float = 50.0
+    cooling_fan_failure_delay_min: float = 5.0
+    cooling_fan_min_rpm: float = 200.0
+    cooling_protection_restore_max_sell_w: float = 10000.0
+    cooling_protection_restore_max_solar_w: float = 15000.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +284,11 @@ class EnergyManagerInputs:
     cooling_temperature_sample_at: datetime | None = None
     cooling_temperature_trend_c_per_min: float | None = None
     cooling_load_change_w: float = 0.0
+    cooling_hunt_step_ready: bool = False
+    cooling_fan_healthy: bool | None = None
+    cooling_fan_rpm: float | None = None
+    cooling_protection_condition_minutes: float = 0.0
+    cooling_inverter_protection_active: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +484,12 @@ class EnergyManagerDecision:
     cooling_reason: str = "unavailable"
     cooling_load_regime: str = "unknown"
     cooling_calibration_state: str = "temperature_unavailable"
+    cooling_fan_healthy: bool | None = None
+    cooling_fan_rpm: float | None = None
+    cooling_protection_condition_minutes: float = 0.0
+    cooling_inverter_protection_required: bool = False
+    cooling_inverter_protection_active: bool = False
+    cooling_protection_reason: str = "inactive"
 
 
 @dataclass(frozen=True, slots=True)

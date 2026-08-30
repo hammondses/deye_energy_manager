@@ -109,7 +109,31 @@ def inverter_cooling_recommendation(
         and temperature_error_c < -settings.cooling_target_deadband_c
     )
     clearly_falling = trend is not None and trend < -0.05
-    if current_pct is None or raw_pct == current_pct:
+    hunt_active = (
+        settings.cooling_minimum_hunt_enabled
+        and temperature_error_c is not None
+        and temperature is not None
+        and temperature < settings.cooling_emergency_temp_c
+        and current_pct is not None
+        and throughput_w >= 500.0
+    )
+    if hunt_active:
+        if still_rising or above_target or load_increased:
+            recommended_pct = min(
+                settings.cooling_max_normal_fan_pct,
+                current_pct + settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: temperature/load demands +{settings.cooling_feedback_step_pct:g}%"
+        elif inputs.cooling_hunt_step_ready and (below_target or clearly_falling or trend is not None and trend <= 0.05):
+            recommended_pct = max(
+                settings.cooling_min_active_fan_pct,
+                current_pct - settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: stable below limit, try -{settings.cooling_feedback_step_pct:g}%"
+        else:
+            recommended_pct = current_pct
+            reason = "minimum hunt: waiting for a stable observation window"
+    elif current_pct is None or raw_pct == current_pct:
         recommended_pct = raw_pct
     elif raw_pct < current_pct:
         if still_rising or (above_target and not clearly_falling):
@@ -142,6 +166,33 @@ def inverter_cooling_recommendation(
         recommended_pct=round(recommended_pct),
         reason=reason,
     )
+
+
+def cooling_protection_state(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+) -> tuple[bool, bool, str]:
+    """Return fan-failure detection, trip requirement, and a diagnostic reason."""
+
+    failed = inputs.cooling_fan_healthy is False
+    hot = (
+        inputs.cooling_temperature_valid
+        and inputs.inverter_ac_temperature_c is not None
+        and inputs.inverter_ac_temperature_c >= settings.cooling_fan_failure_temp_c
+    )
+    sustained = inputs.cooling_protection_condition_minutes >= settings.cooling_fan_failure_delay_min
+    required = settings.cooling_fan_failure_protection_enabled and failed and hot and sustained
+    if inputs.cooling_inverter_protection_active:
+        return failed, True, "latched; use Restore Deye normal after checking the fans"
+    if not settings.cooling_fan_failure_protection_enabled:
+        return failed, False, "protection disabled"
+    if not failed:
+        return False, False, "external fan telemetry healthy"
+    if not hot:
+        return True, False, "external fans unavailable, inverter below trip temperature"
+    if not sustained:
+        return True, False, f"hot fan failure pending {inputs.cooling_protection_condition_minutes:.1f}/{settings.cooling_fan_failure_delay_min:g} min"
+    return True, required, "external fans failed while inverter remained hot"
 
 
 def cooling_load_regime(inputs: EnergyManagerInputs) -> str:
@@ -1700,6 +1751,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     settings = settings or EnergyManagerSettings()
     cooling = inverter_cooling_recommendation(inputs, settings)
+    cooling_fan_failed, cooling_protection_required, cooling_protection_reason = cooling_protection_state(inputs, settings)
     tier = forecast_tier(inputs.forecast_tomorrow_kwh, settings)
     active_prog_range = active_program_range(inputs.now, settings)
     actual_active_prog = str(active_prog_range["program"])
@@ -2649,6 +2701,12 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cooling_reason=cooling.reason,
         cooling_load_regime=cooling_load_regime(inputs),
         cooling_calibration_state=cooling_calibration_state(inputs, cooling, settings),
+        cooling_fan_healthy=None if inputs.cooling_fan_healthy is None else not cooling_fan_failed,
+        cooling_fan_rpm=inputs.cooling_fan_rpm,
+        cooling_protection_condition_minutes=round(inputs.cooling_protection_condition_minutes, 1),
+        cooling_inverter_protection_required=cooling_protection_required,
+        cooling_inverter_protection_active=inputs.cooling_inverter_protection_active or cooling_protection_required,
+        cooling_protection_reason=cooling_protection_reason,
     )
 
 
