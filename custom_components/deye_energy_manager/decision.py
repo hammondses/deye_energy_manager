@@ -2078,34 +2078,38 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
 
     thermal_should_shed = (
-        discharge_shed_required
-        or (
-            not inputs.free_power_active
-            and any(load.solar_owned and load.lease_reason == "free_power" for load in inputs.heat_loads)
-        )
-        or (
-            inputs.any_solar_owned_heat_load_on
-            and (
-                (
-                    not forecast_override
-                    and soc_known
-                    and soc < thermal_start_min_soc
-                    and battery_charge_w < settings.thermal_keep_running_min_charge_w
-                    and not export_soak_keep_available
+        thermal_control_enabled
+        and (
+            discharge_shed_required
+            or (
+                not inputs.free_power_active
+                and any(load.solar_owned and load.lease_reason == "free_power" for load in inputs.heat_loads)
+            )
+            or (
+                inputs.any_solar_owned_heat_load_on
+                and (
+                    (
+                        not forecast_override
+                        and soc_known
+                        and soc < thermal_start_min_soc
+                        and battery_charge_w < settings.thermal_keep_running_min_charge_w
+                        and not export_soak_keep_available
+                    )
+                    or (
+                        pre_peak_preserve_required
+                        and not forecast_override
+                        and soc_known
+                        and soc < thermal_start_min_soc
+                    )
+                    or overnight_protection_required
                 )
-                or (
-                    pre_peak_preserve_required
-                    and not forecast_override
-                    and soc_known
-                    and soc < thermal_start_min_soc
-                )
-                or overnight_protection_required
             )
         )
     )
 
     thermal_should_emergency_shed = (
         settings.enabled
+        and thermal_control_enabled
         and (
             battery_discharge_w >= settings.thermal_emergency_shed_w
             or battery_discharge_w >= settings.emergency_shed_discharge_w

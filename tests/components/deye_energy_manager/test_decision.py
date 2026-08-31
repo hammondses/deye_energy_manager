@@ -555,10 +555,11 @@ def test_heat_allowed_rules() -> None:
 
 
 def test_heat_shed_rules() -> None:
-    assert decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=91, battery_power_w=600)).heat_should_shed
-    assert decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=31, battery_power_w=-300)).heat_should_shed
-    assert not decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=91, battery_power_w=0)).heat_should_shed
-    assert not decide(base_inputs(any_solar_owned_heat_load_on=False, battery_soc=31, battery_power_w=-300)).heat_should_shed
+    settings = EnergyManagerSettings(thermal_control_enabled=True)
+    assert decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=91, battery_power_w=600), settings).heat_should_shed
+    assert decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=31, battery_power_w=-300), settings).heat_should_shed
+    assert not decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=91, battery_power_w=0), settings).heat_should_shed
+    assert not decide(base_inputs(any_solar_owned_heat_load_on=False, battery_soc=31, battery_power_w=-300), settings).heat_should_shed
 
 
 def test_grid_charge_rules() -> None:
@@ -2030,11 +2031,38 @@ def test_emergency_shed_all_when_discharge_exceeds_threshold() -> None:
             now=dt(12),
             battery_power_w=4500,
             any_solar_owned_heat_load_on=True,
-        )
+        ),
+        EnergyManagerSettings(thermal_control_enabled=True),
     )
 
     assert decision.emergency_shed_all_required
     assert "emergency_shed_all_heat_loads" in decision.proposed_actions
+
+
+def test_disabled_thermal_control_does_not_publish_shed_actions() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(23),
+            battery_power_w=5000,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office heat pump",
+                    priority=1,
+                    is_on=True,
+                    hvac_mode="heat",
+                    current_temp=22,
+                    target_temp=27,
+                )
+            ],
+        ),
+        EnergyManagerSettings(thermal_control_enabled=False),
+    )
+
+    assert not decision.thermal_should_shed
+    assert not decision.thermal_should_emergency_shed
+    assert decision.thermal_action == "none"
+    assert "shed_one_heat_load" not in decision.proposed_actions
+    assert "emergency_shed_all_heat_loads" not in decision.proposed_actions
 
 
 def test_overnight_protection_projects_soc_to_0800() -> None:

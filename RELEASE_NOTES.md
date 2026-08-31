@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.57
+
+- Stop publishing thermal shed and emergency-shed recommendations while thermal control is disabled; ordinary whole-house battery discharge is no longer presented as a thermal action when that subsystem is off.
+
 ## v0.5.56
 
 - Stop recalculating and republishing every integration entity on each high-frequency power-sensor update; decisions now use the existing 30-second coordinator schedule while WiCAN retains its narrow event listener.
