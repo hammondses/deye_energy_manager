@@ -108,10 +108,6 @@ def inverter_cooling_recommendation(
         temperature_error_c is not None
         and temperature_error_c < -settings.cooling_target_deadband_c
     )
-    far_below_target = (
-        temperature_error_c is not None
-        and temperature_error_c < -2.0 * settings.cooling_target_deadband_c
-    )
     clearly_falling = trend is not None and trend < -0.05
     hunt_active = (
         settings.cooling_minimum_hunt_enabled
@@ -122,24 +118,27 @@ def inverter_cooling_recommendation(
         and throughput_w >= 500.0
     )
     if hunt_active:
-        if far_below_target:
-            recommended_pct = settings.cooling_min_active_fan_pct
-            reason = "minimum hunt: far below target, use minimum active fan"
-        elif still_rising or above_target or load_increased:
+        if still_rising:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
                 current_pct + settings.cooling_feedback_step_pct,
             )
-            reason = f"minimum hunt: temperature/load demands +{settings.cooling_feedback_step_pct:g}%"
-        elif inputs.cooling_hunt_step_ready and (below_target or clearly_falling or trend is not None and trend <= 0.05):
+            reason = f"minimum hunt: temperature rising, +{settings.cooling_feedback_step_pct:g}%"
+        elif above_target and not clearly_falling:
+            recommended_pct = min(
+                settings.cooling_max_normal_fan_pct,
+                current_pct + settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: above target, +{settings.cooling_feedback_step_pct:g}%"
+        elif below_target:
             recommended_pct = max(
                 settings.cooling_min_active_fan_pct,
                 current_pct - settings.cooling_feedback_step_pct,
             )
-            reason = f"minimum hunt: stable below limit, try -{settings.cooling_feedback_step_pct:g}%"
+            reason = f"minimum hunt: below target, -{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
-            reason = "minimum hunt: waiting for a stable observation window"
+            reason = "minimum hunt: inside target band, hold"
     elif current_pct is None or raw_pct == current_pct:
         recommended_pct = raw_pct
     elif raw_pct < current_pct:

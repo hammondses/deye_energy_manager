@@ -381,7 +381,6 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                     ("cooling_max_normal_fan_pct", 30, 100, 1),
                     ("cooling_emergency_temp_c", 45, 55, 0.5),
                     ("cooling_failsafe_fan_pct", 0, 100, 1),
-                    ("cooling_hunt_step_interval_min", 1, 60, 1),
                     ("cooling_fan_failure_temp_c", 45, 65, 0.5),
                     ("cooling_fan_failure_delay_min", 1, 30, 1),
                     ("cooling_fan_min_rpm", 0, 5000, 50),

@@ -163,7 +163,6 @@ class EnergyManagerSettings:
     cooling_max_normal_fan_pct: float = 70.0
     cooling_emergency_temp_c: float = 48.0
     cooling_failsafe_fan_pct: float = 50.0
-    cooling_hunt_step_interval_min: float = 5.0
     cooling_fan_failure_temp_c: float = 50.0
     cooling_fan_failure_delay_min: float = 5.0
     cooling_fan_min_rpm: float = 200.0
@@ -284,7 +283,6 @@ class EnergyManagerInputs:
     cooling_temperature_sample_at: datetime | None = None
     cooling_temperature_trend_c_per_min: float | None = None
     cooling_load_change_w: float = 0.0
-    cooling_hunt_step_ready: bool = False
     cooling_fan_healthy: bool | None = None
     cooling_fan_rpm: float | None = None
     cooling_protection_condition_minutes: float = 0.0

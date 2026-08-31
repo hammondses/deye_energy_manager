@@ -270,37 +270,35 @@ def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> 
     assert overnight.recommended_pct == 10
 
 
-def test_inverter_cooling_minimum_hunt_steps_down_only_after_stable_window() -> None:
+def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
-    waiting = inverter_cooling_recommendation(
+    holding = inverter_cooling_recommendation(
         base_inputs(
             inverter_pv_power_w=7000,
             inverter_ac_temperature_c=44,
             cooling_temperature_valid=True,
             cooling_fan_percentage=40,
             cooling_temperature_trend_c_per_min=0.0,
-            cooling_hunt_step_ready=False,
         ),
         settings,
     )
-    probing = inverter_cooling_recommendation(
+    lowering = inverter_cooling_recommendation(
         base_inputs(
             inverter_pv_power_w=7000,
-            inverter_ac_temperature_c=44,
+            inverter_ac_temperature_c=43.5,
             cooling_temperature_valid=True,
             cooling_fan_percentage=40,
             cooling_temperature_trend_c_per_min=0.0,
-            cooling_hunt_step_ready=True,
         ),
         settings,
     )
 
-    assert waiting.recommended_pct == 40
-    assert probing.recommended_pct == 35
-    assert "minimum hunt" in probing.reason
+    assert holding.recommended_pct == 40
+    assert lowering.recommended_pct == 35
+    assert lowering.reason == "minimum hunt: below target, -5%"
 
 
-def test_inverter_cooling_minimum_hunt_resets_stale_high_fan_when_cold() -> None:
+def test_inverter_cooling_minimum_hunt_gradually_lowers_stale_high_fan_when_cold() -> None:
     recommendation = inverter_cooling_recommendation(
         base_inputs(
             battery_power_w=3081,
@@ -308,17 +306,16 @@ def test_inverter_cooling_minimum_hunt_resets_stale_high_fan_when_cold() -> None
             cooling_temperature_valid=True,
             cooling_fan_percentage=70,
             cooling_temperature_trend_c_per_min=-0.05,
-            cooling_hunt_step_ready=False,
         ),
         EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
     )
 
     assert recommendation.raw_required_pct == 15
-    assert recommendation.recommended_pct == 10
-    assert recommendation.reason == "minimum hunt: far below target, use minimum active fan"
+    assert recommendation.recommended_pct == 65
+    assert recommendation.reason == "minimum hunt: below target, -5%"
 
 
-def test_inverter_cooling_minimum_hunt_recovers_on_rise_or_load_jump() -> None:
+def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
     rising = inverter_cooling_recommendation(
         base_inputs(
@@ -343,7 +340,30 @@ def test_inverter_cooling_minimum_hunt_recovers_on_rise_or_load_jump() -> None:
     )
 
     assert rising.recommended_pct == 25
-    assert load_jump.recommended_pct == 25
+    assert load_jump.recommended_pct == 20
+
+
+def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    samples = (
+        (45.2, 10, 0.2, 15),
+        (45.3, 15, 0.1, 20),
+        (45.2, 20, -0.1, 20),
+        (44.9, 20, 0.0, 20),
+    )
+
+    for temperature, current_fan, trend, expected_fan in samples:
+        recommendation = inverter_cooling_recommendation(
+            base_inputs(
+                inverter_pv_power_w=7000,
+                inverter_ac_temperature_c=temperature,
+                cooling_temperature_valid=True,
+                cooling_fan_percentage=current_fan,
+                cooling_temperature_trend_c_per_min=trend,
+            ),
+            settings,
+        )
+        assert recommendation.recommended_pct == expected_fan
 
 
 def test_cooling_protection_requires_sustained_hot_fan_failure() -> None:

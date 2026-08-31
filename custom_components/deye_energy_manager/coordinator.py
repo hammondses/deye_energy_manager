@@ -479,7 +479,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_max_normal_fan_pct=float(options["cooling_max_normal_fan_pct"]),
             cooling_emergency_temp_c=float(options["cooling_emergency_temp_c"]),
             cooling_failsafe_fan_pct=float(options["cooling_failsafe_fan_pct"]),
-            cooling_hunt_step_interval_min=float(options["cooling_hunt_step_interval_min"]),
             cooling_fan_failure_temp_c=float(options["cooling_fan_failure_temp_c"]),
             cooling_fan_failure_delay_min=float(options["cooling_fan_failure_delay_min"]),
             cooling_fan_min_rpm=float(options["cooling_fan_min_rpm"]),
@@ -1031,11 +1030,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if self._cooling_protection_condition_since is not None
             else 0.0
         )
-        hunt_reference = self._last_cooling_write_at or self.started_at
-        cooling_hunt_step_ready = (
-            (dt_util.utcnow() - hunt_reference).total_seconds() / 60.0
-            >= settings.cooling_hunt_step_interval_min
-        )
         grid_power_w = self._state_float("grid_ct_power") or 0.0
         ev_charge_requested = self._state_optional_on("ev_charge_control")
         ev_connector_status = self._state_string("ev_connector_status")
@@ -1100,7 +1094,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_temperature_sample_at=cooling_temperature_sample_at,
             cooling_temperature_trend_c_per_min=cooling_temperature_trend,
             cooling_load_change_w=cooling_load_change_w,
-            cooling_hunt_step_ready=cooling_hunt_step_ready,
             cooling_fan_healthy=cooling_fan_healthy,
             cooling_fan_rpm=cooling_fan_rpm,
             cooling_protection_condition_minutes=cooling_protection_condition_minutes,

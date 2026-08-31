@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.61
+
+- Replace the minimum-hunt timer with gradual temperature feedback: each fresh rising sample raises the fan one step, a sample below the target band lowers it one step, and a sample inside the band holds it.
+- Remove load-triggered fan increases and the obsolete cooling hunt observation-time control from adaptive mode.
+
 ## v0.5.60
 
 - Make minimum-hunt mode use the configured minimum active fan immediately whenever inverter temperature is clearly below target; the legacy load coefficient is no longer a floor in adaptive mode.

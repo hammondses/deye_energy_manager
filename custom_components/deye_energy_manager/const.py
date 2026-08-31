@@ -361,7 +361,6 @@ NUMBER_DEFAULTS = {
     "cooling_max_normal_fan_pct": 70.0,
     "cooling_emergency_temp_c": 48.0,
     "cooling_failsafe_fan_pct": 50.0,
-    "cooling_hunt_step_interval_min": 5.0,
     "cooling_fan_failure_temp_c": 50.0,
     "cooling_fan_failure_delay_min": 5.0,
     "cooling_fan_min_rpm": 200.0,
