@@ -106,7 +106,7 @@ required fan % = baseline fan %
 
 Cooling throughput is the highest absolute value of local PV input, inverter AC output, and battery power, avoiding double-counting the same energy through multiple conversion paths. The curve is a cooling-demand ceiling, not a speed that must be chased. A load increase can authorise one proactive fan step; further increases require a fresh temperature sample that is still rising or above the target deadband. Stable temperature near target holds the current speed, while falling load or clearly below-target temperature can reduce speed immediately. The high-temperature threshold raises the demand ceiling to 100% but does not bypass the feedback ramp.
 
-With minimum hunt enabled, each fresh temperature change can move the fan by one configured feedback step: rising temperature raises it, temperature below the target band lowers it, and temperature inside the band holds it. There is no fixed observation timer and the old load curve does not act as a floor. The default target is 45 C.
+With minimum hunt enabled, each fresh temperature change can move the fan by one configured feedback step. Temperature below the target band lowers it even during normal warm-up; once inside the band, rising temperature raises it and falling or stable temperature holds it. There is no fixed observation timer and the old load curve does not act as a floor. The default target is 45 C.
 
 Automatic fan writes remain off until `switch.deye_energy_manager_inverter_cooling_control_enabled` is enabled. Curve controls:
 

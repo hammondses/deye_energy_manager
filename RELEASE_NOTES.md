@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.62
+
+- Stop ordinary warming far below the cooling target from repeatedly ramping the fan upward. Below-band temperature now continues stepping down; rising temperature steps up only after entering the target band.
+
 ## v0.5.61
 
 - Replace the minimum-hunt timer with gradual temperature feedback: each fresh rising sample raises the fan one step, a sample below the target band lowers it one step, and a sample inside the band holds it.

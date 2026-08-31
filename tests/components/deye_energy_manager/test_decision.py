@@ -305,7 +305,7 @@ def test_inverter_cooling_minimum_hunt_gradually_lowers_stale_high_fan_when_cold
             inverter_ac_temperature_c=19.15,
             cooling_temperature_valid=True,
             cooling_fan_percentage=70,
-            cooling_temperature_trend_c_per_min=-0.05,
+            cooling_temperature_trend_c_per_min=0.1,
         ),
         EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
     )
