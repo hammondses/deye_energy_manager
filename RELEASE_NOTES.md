@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.63
+
+- Add a configurable 0.2 C/min trend deadband so 0.1-degree jitter holds the fan instead of flapping it.
+- Make meaningful rising and falling trends change adaptive cooling by exactly one step in either direction, regardless of distance from target.
+- Make emergency temperature bypass ordinary feedback and command 100% fan immediately.
+
 ## v0.5.62
 
 - Stop ordinary warming far below the cooling target from repeatedly ramping the fan upward. Below-band temperature now continues stepping down; rising temperature steps up only after entering the target band.

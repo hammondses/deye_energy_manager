@@ -151,7 +151,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             inverter_ac_temperature_c=43,
             cooling_temperature_valid=True,
             cooling_fan_percentage=35,
-            cooling_temperature_trend_c_per_min=0.2,
+            cooling_temperature_trend_c_per_min=0.3,
         ),
         settings,
     )
@@ -206,6 +206,7 @@ def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
             inverter_ac_temperature_c=48,
             cooling_temperature_valid=True,
             cooling_fan_percentage=20,
+            cooling_temperature_trend_c_per_min=-1.0,
         ),
         EnergyManagerSettings(),
     )
@@ -220,7 +221,7 @@ def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
     )
 
     assert emergency.raw_required_pct == 100
-    assert emergency.recommended_pct == 25
+    assert emergency.recommended_pct == 100
     assert stale.raw_required_pct == 50
     assert "failsafe" in stale.reason
 
@@ -249,7 +250,7 @@ def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> 
             inverter_ac_temperature_c=45,
             cooling_temperature_valid=True,
             cooling_fan_percentage=95,
-            cooling_temperature_trend_c_per_min=-0.2,
+            cooling_temperature_trend_c_per_min=-0.3,
         ),
         settings,
     )
@@ -259,7 +260,7 @@ def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> 
             inverter_ac_temperature_c=35,
             cooling_temperature_valid=True,
             cooling_fan_percentage=10,
-            cooling_temperature_trend_c_per_min=-0.2,
+            cooling_temperature_trend_c_per_min=-0.3,
             cooling_load_change_w=1000,
         ),
         settings,
@@ -288,17 +289,17 @@ def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
             inverter_ac_temperature_c=43.5,
             cooling_temperature_valid=True,
             cooling_fan_percentage=40,
-            cooling_temperature_trend_c_per_min=0.0,
+            cooling_temperature_trend_c_per_min=-0.3,
         ),
         settings,
     )
 
     assert holding.recommended_pct == 40
     assert lowering.recommended_pct == 35
-    assert lowering.reason == "minimum hunt: below target, -5%"
+    assert lowering.reason == "minimum hunt: temperature falling, -5%"
 
 
-def test_inverter_cooling_minimum_hunt_gradually_lowers_stale_high_fan_when_cold() -> None:
+def test_inverter_cooling_minimum_hunt_holds_cold_fan_during_trend_jitter() -> None:
     recommendation = inverter_cooling_recommendation(
         base_inputs(
             battery_power_w=3081,
@@ -311,8 +312,8 @@ def test_inverter_cooling_minimum_hunt_gradually_lowers_stale_high_fan_when_cold
     )
 
     assert recommendation.raw_required_pct == 15
-    assert recommendation.recommended_pct == 65
-    assert recommendation.reason == "minimum hunt: below target, -5%"
+    assert recommendation.recommended_pct == 70
+    assert recommendation.reason == "minimum hunt: temperature inside trend deadband, hold"
 
 
 def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
@@ -320,10 +321,10 @@ def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> No
     rising = inverter_cooling_recommendation(
         base_inputs(
             inverter_pv_power_w=7000,
-            inverter_ac_temperature_c=44,
+            inverter_ac_temperature_c=40,
             cooling_temperature_valid=True,
             cooling_fan_percentage=20,
-            cooling_temperature_trend_c_per_min=0.2,
+            cooling_temperature_trend_c_per_min=0.3,
         ),
         settings,
     )
@@ -346,8 +347,8 @@ def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> No
 def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
     samples = (
-        (45.2, 10, 0.2, 15),
-        (45.3, 15, 0.1, 20),
+        (45.2, 10, 0.3, 15),
+        (45.3, 15, 0.25, 20),
         (45.2, 20, -0.1, 20),
         (44.9, 20, 0.0, 20),
     )

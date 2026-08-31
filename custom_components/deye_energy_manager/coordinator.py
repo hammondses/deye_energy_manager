@@ -475,6 +475,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_temperature_gain_pct_per_c=float(options["cooling_temperature_gain_pct_per_c"]),
             cooling_feedback_step_pct=float(options["cooling_feedback_step_pct"]),
             cooling_target_deadband_c=float(options["cooling_target_deadband_c"]),
+            cooling_trend_deadband_c_per_min=float(options["cooling_trend_deadband_c_per_min"]),
             cooling_min_active_fan_pct=float(options["cooling_min_active_fan_pct"]),
             cooling_max_normal_fan_pct=float(options["cooling_max_normal_fan_pct"]),
             cooling_emergency_temp_c=float(options["cooling_emergency_temp_c"]),

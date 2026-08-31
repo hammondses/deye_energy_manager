@@ -103,12 +103,18 @@ def inverter_cooling_recommendation(
         temperature_error_c is not None
         and temperature_error_c > settings.cooling_target_deadband_c
     )
-    still_rising = trend is not None and trend > 0.05
+    still_rising = (
+        trend is not None
+        and trend > settings.cooling_trend_deadband_c_per_min
+    )
     below_target = (
         temperature_error_c is not None
         and temperature_error_c < -settings.cooling_target_deadband_c
     )
-    clearly_falling = trend is not None and trend < -0.05
+    clearly_falling = (
+        trend is not None
+        and trend < -settings.cooling_trend_deadband_c_per_min
+    )
     hunt_active = (
         settings.cooling_minimum_hunt_enabled
         and temperature_error_c is not None
@@ -117,19 +123,22 @@ def inverter_cooling_recommendation(
         and current_pct is not None
         and throughput_w >= 500.0
     )
-    if hunt_active:
-        if below_target:
-            recommended_pct = max(
-                settings.cooling_min_active_fan_pct,
-                current_pct - settings.cooling_feedback_step_pct,
-            )
-            reason = f"minimum hunt: below target, -{settings.cooling_feedback_step_pct:g}%"
-        elif still_rising:
+    if temperature is not None and temperature >= settings.cooling_emergency_temp_c:
+        recommended_pct = 100.0
+        reason = f"emergency cooling: AC temperature {temperature:.1f}C, use 100% fan"
+    elif hunt_active:
+        if still_rising:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
                 current_pct + settings.cooling_feedback_step_pct,
             )
             reason = f"minimum hunt: temperature rising, +{settings.cooling_feedback_step_pct:g}%"
+        elif clearly_falling:
+            recommended_pct = max(
+                settings.cooling_min_active_fan_pct,
+                current_pct - settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: temperature falling, -{settings.cooling_feedback_step_pct:g}%"
         elif above_target and not clearly_falling:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
@@ -138,7 +147,7 @@ def inverter_cooling_recommendation(
             reason = f"minimum hunt: above target, +{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
-            reason = "minimum hunt: inside target band, hold"
+            reason = "minimum hunt: temperature inside trend deadband, hold"
     elif current_pct is None or raw_pct == current_pct:
         recommended_pct = raw_pct
     elif raw_pct < current_pct:

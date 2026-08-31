@@ -266,6 +266,7 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
                 "temperature_gain_percentage_per_c": settings.cooling_temperature_gain_pct_per_c,
                 "feedback_step_percentage": settings.cooling_feedback_step_pct,
                 "target_deadband_c": settings.cooling_target_deadband_c,
+                "trend_deadband_c_per_min": settings.cooling_trend_deadband_c_per_min,
             }
         return None
 

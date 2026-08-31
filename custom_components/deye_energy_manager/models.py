@@ -159,6 +159,7 @@ class EnergyManagerSettings:
     cooling_temperature_gain_pct_per_c: float = 5.0
     cooling_feedback_step_pct: float = 5.0
     cooling_target_deadband_c: float = 1.0
+    cooling_trend_deadband_c_per_min: float = 0.2
     cooling_min_active_fan_pct: float = 10.0
     cooling_max_normal_fan_pct: float = 70.0
     cooling_emergency_temp_c: float = 48.0
