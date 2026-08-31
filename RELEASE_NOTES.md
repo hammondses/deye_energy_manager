@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.56
+
+- Stop recalculating and republishing every integration entity on each high-frequency power-sensor update; decisions now use the existing 30-second coordinator schedule while WiCAN retains its narrow event listener.
+- Bound text sensor states to Home Assistant's 255-character limit, preventing verbose decision diagnostics from flooding the system log.
+
 ## v0.5.55
 
 - Add a default-off minimum-fan hunt mode that probes downward in configurable steps only after a stable observation window, then responds immediately to rising temperature, a target breach, or a meaningful load increase.

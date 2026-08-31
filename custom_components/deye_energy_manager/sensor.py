@@ -169,6 +169,10 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
 
     @property
     def native_value(self) -> Any:
+        value = self._raw_native_value()
+        return f"{value[:252]}..." if isinstance(value, str) and len(value) > 255 else value
+
+    def _raw_native_value(self) -> Any:
         if self.coordinator.data is None:
             return None
         if self.entity_description.key == "last_control_action":

@@ -10,7 +10,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -136,13 +136,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.load_diagnostics: dict[str, object] = {}
         self._remove_listeners: list[Callable[[], None]] = []
 
-        watch_entities = [entity for entity in self.entity_map.values() if entity]
-        self._remove_listeners.append(
-            async_track_state_change_event(hass, watch_entities, self._handle_state_change)
-        )
-        self._remove_listeners.append(
-            async_track_time_interval(hass, self._handle_time_interval, DEFAULT_SCAN_INTERVAL)
-        )
+        watch_entities = [
+            self.entity_map[key]
+            for key in ("ev_connector_status", "ev_current", "ev_power", "ev_energy_session")
+            if self.entity_map.get(key)
+        ]
+        if watch_entities:
+            self._remove_listeners.append(
+                async_track_state_change_event(hass, watch_entities, self._handle_state_change)
+            )
         entry.async_on_unload(self._remove_all_listeners)
 
     async def async_load_stored_soc(self) -> None:
@@ -509,8 +511,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     @callback
     def _handle_state_change(self, event) -> None:
         self._handle_wican_event(event)
-        self.async_set_updated_data(self._calculate())
-        self.hass.async_create_task(self.async_apply_decision())
 
     def _handle_wican_event(self, event) -> None:
         """Observe only charger state events; timer refreshes never enter here."""
@@ -612,10 +612,6 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 self.wican.record_failure(trigger, f"{type(err).__name__}: {err}", self._state_float("ev_energy_session"))
             self._schedule_wican_save()
         await self.async_request_refresh()
-
-    @callback
-    def _handle_time_interval(self, _now) -> None:
-        self.hass.async_create_task(self.async_request_refresh())
 
     @callback
     def _remove_all_listeners(self) -> None:

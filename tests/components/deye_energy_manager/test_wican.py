@@ -181,17 +181,23 @@ def test_source_freshness_fallback_and_newer_local_last_known_good() -> None:
     )
 
 
-def test_coordinator_timer_startup_and_refresh_have_no_wican_query_call() -> None:
+def test_coordinator_refreshes_are_timer_driven_and_never_query_wican() -> None:
     coordinator = ast.parse((ROOT / "custom_components/deye_energy_manager/coordinator.py").read_text())
     setup = ast.parse((ROOT / "custom_components/deye_energy_manager/__init__.py").read_text())
 
     for tree, function_names in (
-        (coordinator, {"_handle_time_interval", "_async_update_data"}),
+        (coordinator, {"_async_update_data"}),
         (setup, {"async_setup_entry"}),
     ):
         functions = {node.name: node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
         for name in function_names:
             assert "async_query_wican_soc" not in ast.unparse(functions[name])
+
+    functions = {node.name: node for node in ast.walk(coordinator) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    state_handler = ast.unparse(functions["_handle_state_change"])
+    assert "_calculate" not in state_handler
+    assert "async_apply_decision" not in state_handler
+    assert "async_track_time_interval" not in ast.unparse(coordinator)
 
 
 def test_query_implementation_has_one_post_and_no_retry_loop() -> None:
