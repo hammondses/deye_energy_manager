@@ -299,6 +299,24 @@ def test_inverter_cooling_minimum_hunt_steps_down_only_after_stable_window() -> 
     assert "minimum hunt" in probing.reason
 
 
+def test_inverter_cooling_minimum_hunt_resets_stale_high_fan_when_cold() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            battery_power_w=3081,
+            inverter_ac_temperature_c=19.15,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=70,
+            cooling_temperature_trend_c_per_min=-0.05,
+            cooling_hunt_step_ready=False,
+        ),
+        EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
+    )
+
+    assert recommendation.raw_required_pct == 15
+    assert recommendation.recommended_pct == 15
+    assert recommendation.reason == "minimum hunt: far below target, reset to curve"
+
+
 def test_inverter_cooling_minimum_hunt_recovers_on_rise_or_load_jump() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
     rising = inverter_cooling_recommendation(

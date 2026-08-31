@@ -108,6 +108,10 @@ def inverter_cooling_recommendation(
         temperature_error_c is not None
         and temperature_error_c < -settings.cooling_target_deadband_c
     )
+    far_below_target = (
+        temperature_error_c is not None
+        and temperature_error_c < -2.0 * settings.cooling_target_deadband_c
+    )
     clearly_falling = trend is not None and trend < -0.05
     hunt_active = (
         settings.cooling_minimum_hunt_enabled
@@ -118,7 +122,10 @@ def inverter_cooling_recommendation(
         and throughput_w >= 500.0
     )
     if hunt_active:
-        if still_rising or above_target or load_increased:
+        if far_below_target and raw_pct < current_pct:
+            recommended_pct = raw_pct
+            reason = "minimum hunt: far below target, reset to curve"
+        elif still_rising or above_target or load_increased:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
                 current_pct + settings.cooling_feedback_step_pct,

@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.59
+
+- Reset minimum-hunt cooling directly to the calculated fan curve when inverter temperature is well below target, instead of holding a stale high fan command for repeated observation windows.
+
 ## v0.5.58
 
 - Replace the forecast/export/comfort thermal matrix with one export-constrained curtailment-soak policy.
