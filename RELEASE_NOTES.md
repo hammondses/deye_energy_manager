@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.60
+
+- Make minimum-hunt mode use the configured minimum active fan immediately whenever inverter temperature is clearly below target; the legacy load coefficient is no longer a floor in adaptive mode.
+- Change the default cooling target from 43 C to 45 C and the near-target probe observation window from 15 minutes to 5 minutes.
+
 ## v0.5.59
 
 - Reset minimum-hunt cooling directly to the calculated fan curve when inverter temperature is well below target, instead of holding a stale high fan command for repeated observation windows.

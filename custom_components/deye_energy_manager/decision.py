@@ -122,9 +122,9 @@ def inverter_cooling_recommendation(
         and throughput_w >= 500.0
     )
     if hunt_active:
-        if far_below_target and raw_pct < current_pct:
-            recommended_pct = raw_pct
-            reason = "minimum hunt: far below target, reset to curve"
+        if far_below_target:
+            recommended_pct = settings.cooling_min_active_fan_pct
+            reason = "minimum hunt: far below target, use minimum active fan"
         elif still_rising or above_target or load_increased:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
