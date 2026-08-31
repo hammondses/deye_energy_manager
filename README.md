@@ -140,7 +140,7 @@ The default mappings use `sensor.deye_ac_temperature`, `sensor.deye_total_pv_pow
 
 ## Thermal Storage
 
-The integration now owns native thermal storage decisions and direct climate actuation.
+The integration exposes a deliberately narrow curtailment-soak controller and direct climate actuation.
 
 - `select.deye_energy_manager_thermal_mode`: `heating`, `cooling`, `auto`, `off`
 - `select.deye_energy_manager_thermal_actuation_mode`: `advisory`, `scripts`, `direct`
@@ -156,18 +156,15 @@ The integration now owns native thermal storage decisions and direct climate act
 - `sensor.deye_energy_manager_thermal_policy_state`
 - `sensor.deye_energy_manager_solar_phase`
 
-Thermal permission uses the thermal thresholds, not the 17:00 battery target. On excellent/good forecast days, `forecast_full_override` can allow thermal soaking earlier when remaining Solcast energy is enough to reach the battery target plus buffer, but it is no longer treated as "heat now" during morning battery-priority periods. The policy state separates comfort, overnight dining comfort, morning preheat, solar soak, normalise, shed, and emergency shed.
+Thermal permission does not use forecast tiers, future PV, comfort schedules, room rotation, or whole-house discharge. Those legacy settings remain available only for configuration compatibility.
 
 Thermal policy states:
 
-- `battery_priority`
-- `comfort_only`
-- `overnight_dining_comfort`
-- `morning_preheat`
-- `solar_soak_allowed`
-- `solar_soak_full_send`
-- `normalise`
-- `shed`
+- `disabled`
+- `idle`
+- `curtailment_ready`
+- `curtailment_soak`
+- `curtailment_cleanup`
 - `emergency_shed`
 
 Solar phases:
@@ -215,7 +212,7 @@ Native controls:
 - `number.deye_energy_manager_paid_grid_avoidance_buffer_kwh`
 - `switch.deye_energy_manager_dynamic_base_load_estimate_enabled`
 
-Thermal soak, PV load testing, and EV solar-charging permission use this budget. Candidate loads are only added when the budget can cover their estimated minimum-run energy plus margin.
+EV solar-charging permission still uses this budget. Curtailment soak intentionally uses only its live PV, battery, grid-flow, SOC, ownership, and feature-gate inputs.
 
 Actuation modes:
 
@@ -223,21 +220,11 @@ Actuation modes:
 - `scripts`: compatibility bridge to external scripts
 - `direct`: integration directly controls climates and ownership booleans
 
-When `thermal_actuation_mode` is `direct` and direct climate control is enabled, the integration directly controls managed climates:
+When curtailment-soak control, `thermal_actuation_mode = direct`, and direct climate control are enabled, the integration directly controls one eligible heating load:
 
-- Heating soak: HVAC `heat`, target `heat_soak_target_temp`
-- Heating normalise: HVAC `heat`, target `heat_normal_target_temp`
-- Cooling soak: HVAC `cool`, target `cool_soak_target_temp`
-- Cooling normalise: HVAC `cool`, target `cool_normal_target_temp`
-- Underfloor loads are heating-only and turn off on shed.
-
-Comfort and preheat are separate from solar soak:
-
-- Comfort heat uses `number.deye_energy_manager_heat_comfort_target_temp` and normal fan.
-- Morning preheat uses `number.deye_energy_manager_morning_preheat_target_temp` and `select.deye_energy_manager_morning_preheat_fan_mode`.
-- Overnight dining comfort is opt-in via `switch.deye_energy_manager_overnight_dining_comfort_enabled`; when enabled, it uses the dining/living heatpump only during cheap-grid hours while projected 07:00 SOC remains above `morning_start_soc_target` plus `number.deye_energy_manager_overnight_dining_soc_margin`.
-- Solar soak uses soak targets and soak fan modes.
-- Morning preheat initially targets the configured bedroom load only.
+- Start: HVAC `heat`, target `heat_soak_target_temp`, lease reason `curtailment_soak`.
+- Cleanup: turn off only a manager-owned thermal load.
+- Manual and external loads are never selected.
 
 Bathroom underfloor is separate again:
 
@@ -462,14 +449,18 @@ Diagnostics download and Home Assistant Repairs are supported for common setup i
 - Existing managed load editor
 - Outdoor/season thermal auto mode
 
-## Export Thermal Soak
+## Curtailment Thermal Soak
 
-When solar export is available, the integration uses live grid CT power instead of probing loads from PV forecasts. `sensor.deye_grid_ct_power` is interpreted as signed grid flow:
+Thermal control has one automatic purpose: absorb solar that cannot be exported or accepted by the battery. It does not start loads from live export, future forecasts, comfort schedules, room rotation, or whole-house battery discharge.
+
+`sensor.deye_grid_ct_power` is interpreted as signed grid flow:
 
 - positive = grid import
 - negative = grid export
 
-Thermal soak can start when live export is above `number.deye_energy_manager_thermal_export_start_w` and a candidate load fits the available export plus the configured import tolerance. It can keep running while export remains above `number.deye_energy_manager_thermal_export_keep_w`, but paid-grid avoidance, battery discharge shedding, manual overrides, room comfort state, and direct-control gates still take priority.
+Curtailment soak is available only when thermal control and export-constrained mode are enabled, current expected PV and SOC are above their configured minimums, battery charge is below its configured maximum, and live grid flow remains within the configured export/import tolerances. Automatic climate writes additionally require curtailment-soak control, direct thermal mode, and direct climate control.
+
+The integration starts at most one eligible heat load. It stops only manager-owned thermal loads when the curtailment signal disappears, the battery can accept the solar again, grid import begins, or meaningful battery discharge begins. Manually operated loads are never selected for cleanup.
 
 Useful diagnostics:
 
@@ -478,18 +469,11 @@ Useful diagnostics:
 - `sensor.deye_energy_manager_thermal_export_margin`
 - `binary_sensor.deye_energy_manager_export_soak_available`
 - `sensor.deye_energy_manager_export_soak_reason`
+- `binary_sensor.deye_energy_manager_pv_load_test_recommended`
 
-The old PV-load-test/export-limited controls are retained only as compatibility entities for existing configurations. Runtime thermal soak no longer turns loads on just to discover hidden clipped PV.
+The entity IDs retain their historical names for compatibility. Their displayed names and runtime semantics now describe curtailment soak.
 
-When a solar-owned room is close to target and another managed room is materially below target, the integration also exposes:
-
-- `binary_sensor.deye_energy_manager_heat_rotation_recommended`
-- `sensor.deye_energy_manager_heat_load_to_shed`
-- `sensor.deye_energy_manager_heat_load_to_add`
-
-This is for heat pumps that taper after reaching setpoint. In direct-control mode it can shed the satisfied room and add the colder room, but only when heat control, direct climate control, export-limited mode, and PV load-test control are all explicitly enabled.
-
-## Heat Safety Features
+## Thermal Ownership Safety
 
 Manual override cleanup:
 
@@ -497,22 +481,7 @@ Manual override cleanup:
 - If a manager-owned heat target is lowered below the configured solar target, ownership is cleared.
 - That load is blocked from automatic re-add until `manual_override_cooldown_min` expires.
 
-Emergency shed-all:
-
-- `binary_sensor.deye_energy_manager_emergency_shed_all_required`
-- `number.deye_energy_manager_emergency_shed_discharge_w`
-
-When battery discharge exceeds the emergency threshold, all manager-owned heat loads are shed immediately in direct-control mode, and their ownership flags are cleared. Script mode calls `script.deye_energy_manager_emergency_shed_all_heat_loads`.
-
-Overnight protection:
-
-- `sensor.deye_energy_manager_projected_soc_08`
-- `sensor.deye_energy_manager_projected_soc_07_with_overnight_dining`
-- `binary_sensor.deye_energy_manager_overnight_dining_comfort_allowed`
-- `binary_sensor.deye_energy_manager_overnight_protection_required`
-- `binary_sensor.deye_energy_manager_bedroom_heat_taper_recommended`
-
-The integration can run the dining/living heatpump overnight from spare battery headroom. It projects SOC to 07:00 from current discharge and candidate dining load, then allows the run only if the result stays above the calculated `morning_start_soc_target` plus `overnight_dining_soc_margin`. If an owned overnight dining run later threatens that guardrail, it targets that load for normalise/shed. Owned bedroom heat can still be tapered to `overnight_bedroom_taper_target_temp`.
+The automatic thermal path no longer performs emergency shed-all, overnight protection, comfort heating, preheat, or rotation. The manual emergency button remains available behind the direct thermal control gates.
 
 ## Agentic Editing
 

@@ -1777,10 +1777,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, nonessential_only=True, turn_off=True)
             elif decision.thermal_should_shed:
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, turn_off=True)
-            elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
-                await self._direct_rotate_heat_load(decision)
-            elif decision.thermal_load_to_add and (
-                decision.thermal_action in {"morning_preheat", "overnight_dining_comfort", "underfloor_comfort", "comfort_heat", "add_one"}
+            elif (
+                self.settings.pv_load_test_control_enabled
+                and decision.thermal_load_to_add
+                and decision.thermal_action == "add_one"
             ):
                 await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
             return

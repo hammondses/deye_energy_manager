@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.5.58
+
+- Replace the forecast/export/comfort thermal matrix with one export-constrained curtailment-soak policy.
+- Start at most one eligible managed heating load only when current expected PV is high, battery acceptance is low, SOC is healthy, and live import/export stays within the configured tolerances.
+- Preserve live export and stop only manager-owned curtailment loads when the signal disappears; retire automatic comfort, preheat, rotation, overnight, unowned-shed, and emergency-shed behaviour.
+
 ## v0.5.57
 
 - Stop publishing thermal shed and emergency-shed recommendations while thermal control is disabled; ordinary whole-house battery discharge is no longer presented as a thermal action when that subsystem is off.
