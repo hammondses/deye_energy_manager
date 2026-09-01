@@ -299,20 +299,36 @@ def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
     assert lowering.reason == "minimum hunt: temperature falling, -5%"
 
 
-def test_inverter_cooling_minimum_hunt_holds_cold_fan_during_trend_jitter() -> None:
+def test_inverter_cooling_minimum_hunt_unwinds_cold_fan_during_trend_jitter() -> None:
     recommendation = inverter_cooling_recommendation(
         base_inputs(
-            battery_power_w=3081,
-            inverter_ac_temperature_c=19.15,
+            inverter_pv_power_w=9817,
+            inverter_ac_temperature_c=39.3,
             cooling_temperature_valid=True,
             cooling_fan_percentage=70,
+            cooling_temperature_trend_c_per_min=0.075,
+        ),
+        EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
+    )
+
+    assert recommendation.raw_required_pct == 40
+    assert recommendation.recommended_pct == 65
+    assert recommendation.reason == "minimum hunt: below target, -5%"
+
+
+def test_inverter_cooling_minimum_hunt_holds_jitter_inside_target_band() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=44.9,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
             cooling_temperature_trend_c_per_min=0.1,
         ),
         EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
     )
 
-    assert recommendation.raw_required_pct == 15
-    assert recommendation.recommended_pct == 70
+    assert recommendation.recommended_pct == 40
     assert recommendation.reason == "minimum hunt: temperature inside trend deadband, hold"
 
 

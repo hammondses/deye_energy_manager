@@ -145,6 +145,12 @@ def inverter_cooling_recommendation(
                 current_pct + settings.cooling_feedback_step_pct,
             )
             reason = f"minimum hunt: above target, +{settings.cooling_feedback_step_pct:g}%"
+        elif below_target:
+            recommended_pct = max(
+                settings.cooling_min_active_fan_pct,
+                current_pct - settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: below target, -{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
             reason = "minimum hunt: temperature inside trend deadband, hold"

@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.64
+
+- Let minimum-hunt cooling unwind an elevated fan by one configured step per fresh sample when AC temperature is below the target band, even if its small trend is inside the jitter deadband.
+- Keep meaningful temperature rise ahead of the cold unwind rule, and keep jitter holding the fan inside the target band.
+
 ## v0.5.63
 
 - Add a configurable 0.2 C/min trend deadband so 0.1-degree jitter holds the fan instead of flapping it.
