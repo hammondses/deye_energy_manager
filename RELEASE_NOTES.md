@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.5.65
+
+- Make minimum-hunt cooling target the configured temperature band instead of treating every rising sample as proof that more fan is required.
+- Hold while a cool inverter warms toward the target, probe downward only after it settles below the band, and step upward only above the band unless it is already cooling.
+
 ## v0.5.64
 
 - Let minimum-hunt cooling unwind an elevated fan by one configured step per fresh sample when AC temperature is below the target band, even if its small trend is inside the jitter deadband.

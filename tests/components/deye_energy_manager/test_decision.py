@@ -296,7 +296,7 @@ def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
 
     assert holding.recommended_pct == 40
     assert lowering.recommended_pct == 35
-    assert lowering.reason == "minimum hunt: temperature falling, -5%"
+    assert lowering.reason == "minimum hunt: below target, -5%"
 
 
 def test_inverter_cooling_minimum_hunt_unwinds_cold_fan_during_trend_jitter() -> None:
@@ -329,7 +329,7 @@ def test_inverter_cooling_minimum_hunt_holds_jitter_inside_target_band() -> None
     )
 
     assert recommendation.recommended_pct == 40
-    assert recommendation.reason == "minimum hunt: temperature inside trend deadband, hold"
+    assert recommendation.reason == "minimum hunt: inside target band, hold"
 
 
 def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
@@ -356,16 +356,19 @@ def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> No
         settings,
     )
 
-    assert rising.recommended_pct == 25
+    assert rising.recommended_pct == 20
+    assert rising.reason == "minimum hunt: warming toward target band, hold"
     assert load_jump.recommended_pct == 20
 
 
 def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
     samples = (
-        (45.2, 10, 0.3, 15),
-        (45.3, 15, 0.25, 20),
-        (45.2, 20, -0.1, 20),
+        (39.2, 45, 0.25, 45),
+        (39.2, 45, 0.1, 40),
+        (44.9, 40, 0.3, 40),
+        (46.2, 40, 0.3, 45),
+        (46.2, 45, -0.3, 45),
         (44.9, 20, 0.0, 20),
     )
 
