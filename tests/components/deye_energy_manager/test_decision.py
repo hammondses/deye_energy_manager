@@ -1536,6 +1536,28 @@ def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     assert decision.ev_expected_action == "allow_solar_charge"
 
 
+def test_ev_solar_charge_uses_today_budget_not_tomorrow_tier() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=96,
+            battery_power_w=-3000,
+            pv_power_now_w=9000,
+            forecast_remaining_today_kwh=30,
+            forecast_tomorrow_kwh=16,
+        ),
+        EnergyManagerSettings(
+            ev_control_enabled=True,
+            ev_solar_charging_enabled=True,
+            flexible_load_priority="battery_first",
+        ),
+    )
+
+    assert decision.forecast_mode == "poor"
+    assert decision.discretionary_energy_budget_kwh > 0
+    assert decision.ev_solar_charge_allowed
+
+
 def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() -> None:
     settings = EnergyManagerSettings(
         ev_control_enabled=True,

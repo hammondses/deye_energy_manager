@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.66
+
+- Allow daytime solar EV charging from today's discretionary energy budget without requiring tomorrow's forecast tier to be good or excellent.
+
 ## v0.5.65
 
 - Make minimum-hunt cooling target the configured temperature band instead of treating every rising sample as proof that more fan is required.

@@ -1516,7 +1516,6 @@ def ev_decision(
     cheap_window: bool,
     battery_recovered: bool,
     battery_priority_satisfied: bool,
-    forecast_override: bool,
     solar_has_arrived: bool,
 ) -> tuple[bool, bool, bool, bool, str, str, float | None, float, bool, datetime | None]:
     """Return EV detection, bypass, solar permission, latch, reason, action, power, hold."""
@@ -1671,7 +1670,6 @@ def ev_decision(
         and not soc_cutoff_reached
         and battery_recovered
         and battery_priority_satisfied
-        and forecast_override
         and solar_ready
         and pv_start_ready
         and not startup_power_deficit
@@ -2309,7 +2307,6 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cheap_window,
         soc_known and soc >= morning_start_soc_target,
         battery_priority_satisfied,
-        forecast_override,
         solar_has_arrived,
     )
     if not discretionary_budget_positive and ev_solar_charge_allowed:
