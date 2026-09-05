@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.69
+
+- Let minimum-hunt cooling follow meaningful rising and falling temperature trends inside the target band while retaining the configured trend deadband for jitter.
+
 ## v0.5.68
 
 - Allow the inverter cooling target to be configured up to 55 C.

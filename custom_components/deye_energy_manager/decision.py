@@ -142,6 +142,18 @@ def inverter_cooling_recommendation(
                 current_pct - settings.cooling_feedback_step_pct,
             )
             reason = f"minimum hunt: below target, -{settings.cooling_feedback_step_pct:g}%"
+        elif still_rising:
+            recommended_pct = min(
+                settings.cooling_max_normal_fan_pct,
+                current_pct + settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: rising inside target band, +{settings.cooling_feedback_step_pct:g}%"
+        elif not above_target and clearly_falling:
+            recommended_pct = max(
+                settings.cooling_min_active_fan_pct,
+                current_pct - settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: falling inside target band, -{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
             reason = "minimum hunt: inside target band, hold"

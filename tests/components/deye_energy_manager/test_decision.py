@@ -362,6 +362,33 @@ def test_inverter_cooling_minimum_hunt_holds_jitter_inside_target_band() -> None
     assert recommendation.reason == "minimum hunt: inside target band, hold"
 
 
+def test_inverter_cooling_minimum_hunt_responds_to_real_trend_inside_target_band() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=48)
+    rising = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=9000,
+            inverter_ac_temperature_c=47.9,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=0.35,
+        ),
+        settings,
+    )
+    falling = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=9000,
+            inverter_ac_temperature_c=47.9,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=-0.35,
+        ),
+        settings,
+    )
+
+    assert rising.recommended_pct == 45
+    assert falling.recommended_pct == 35
+
+
 def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
     rising = inverter_cooling_recommendation(
@@ -396,7 +423,7 @@ def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
     samples = (
         (39.2, 45, 0.25, 45),
         (39.2, 45, 0.1, 40),
-        (44.9, 40, 0.3, 40),
+        (44.9, 40, 0.3, 45),
         (46.2, 40, 0.3, 45),
         (46.2, 45, -0.3, 45),
         (44.9, 20, 0.0, 20),
