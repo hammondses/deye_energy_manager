@@ -71,6 +71,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             update_interval=DEFAULT_SCAN_INTERVAL,
         )
         self.entry = entry
+        self.configured_options = dict(entry.options)
         self.started_at = dt_util.utcnow()
         self.previous_essential_power_w: float | None = None
         self.previous_grid_power_w: float | None = None

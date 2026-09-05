@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.67
+
+- Apply ordinary Home Assistant number, switch, and select changes in place so unrelated controls such as EV charging do not briefly become unavailable; retain full reloads for entity-map and managed-load topology changes.
+
 ## v0.5.66
 
 - Allow daytime solar EV charging from today's discretionary energy budget without requiring tomorrow's forecast tier to be good or excellent.

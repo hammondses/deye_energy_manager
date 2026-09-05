@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from custom_components.deye_energy_manager import decision as decision_module
-from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
+from custom_components.deye_energy_manager import async_update_entry, decision as decision_module
+from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS, DOMAIN
 from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, inverter_cooling_recommendation, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value, resolved_ev_power_w
 from custom_components.deye_energy_manager.migration import migrate_options, migrate_porsche_entity_map
@@ -18,6 +20,34 @@ TZ = ZoneInfo("Pacific/Auckland")
 
 def dt(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 7, 1, hour, minute, tzinfo=TZ)
+
+
+def test_only_entity_topology_option_changes_require_reload() -> None:
+    class Coordinator:
+        configured_options = {"cooling_target_temp_c": 45.0, "entity_map": {"battery_soc": "sensor.old"}}
+        refreshes = 0
+
+        async def async_request_refresh(self) -> None:
+            self.refreshes += 1
+
+    class ConfigEntries:
+        reloads: list[str] = []
+
+        async def async_reload(self, entry_id: str) -> None:
+            self.reloads.append(entry_id)
+
+    coordinator = Coordinator()
+    config_entries = ConfigEntries()
+    entry = SimpleNamespace(entry_id="entry", options={**coordinator.configured_options, "cooling_target_temp_c": 43.0})
+    hass = SimpleNamespace(data={DOMAIN: {"entry": coordinator}}, config_entries=config_entries)
+
+    asyncio.run(async_update_entry(hass, entry))
+    assert coordinator.refreshes == 1
+    assert config_entries.reloads == []
+
+    entry.options = {**entry.options, "entity_map": {"battery_soc": "sensor.new"}}
+    asyncio.run(async_update_entry(hass, entry))
+    assert config_entries.reloads == ["entry"]
 
 
 def test_ev_power_falls_back_to_current_times_voltage() -> None:
