@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.5.68
+
+- Allow the inverter cooling target to be configured up to 55 C.
+
 ## v0.5.67
 
 - Apply ordinary Home Assistant number, switch, and select changes in place so unrelated controls such as EV charging do not briefly become unavailable; retain full reloads for entity-map and managed-load topology changes.

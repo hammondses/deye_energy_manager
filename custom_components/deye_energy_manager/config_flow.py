@@ -371,7 +371,7 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                     )
                 )
                 for key, minimum, maximum, step in (
-                    ("cooling_target_temp_c", 35, 47, 0.5),
+                    ("cooling_target_temp_c", 35, 55, 0.5),
                     ("cooling_curve_idle_fan_pct", 0, 50, 1),
                     ("cooling_curve_fan_pct_per_kw", 0, 10, 0.1),
                     ("cooling_temperature_gain_pct_per_c", 0, 20, 0.5),
