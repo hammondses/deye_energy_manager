@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.6.0b4 — overhaul branch, not released
+
+- Expose live number controls for cooling update interval, trend window/minimum observation, stale-temperature timeout, and recovery trigger/release temperatures. These apply without HA restart or integration reload.
+- Honour the configured emergency temperature instead of silently capping it at 48 C. Temperature thresholds and target deadband support 0.1 C adjustments.
+- Add a native dashboard-card example and a cooling tuning reference. Sunsynk polling remains configured separately in the add-on.
+
 ## v0.6.0b3 — overhaul branch, not released
 
 - Use a 45 C default cooling target instead of 38 C to balance fan noise and thermal headroom. Retain temperature-trend feedback and full-speed activation by 48 C. Existing live options are unchanged.

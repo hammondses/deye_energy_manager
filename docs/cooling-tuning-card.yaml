@@ -1,0 +1,49 @@
+type: vertical-stack
+cards:
+  - type: history-graph
+    title: Inverter temperatures
+    hours_to_show: 2
+    entities:
+      - sensor.deye_ac_temperature
+      - sensor.deye_dc_transformer_temperature
+  - type: history-graph
+    title: External fan response
+    hours_to_show: 2
+    entities:
+      - sensor.garage_deye_energy_manager_cooling_actual_fan_percentage
+      - sensor.garage_deye_energy_manager_cooling_recommended_fan_percentage
+  - type: entities
+    title: Cooling tuning
+    show_header_toggle: false
+    entities:
+      - sensor.garage_deye_energy_manager_cooling_temperature_trend
+      - sensor.garage_deye_energy_manager_cooling_reason
+      - sensor.garage_deye_energy_manager_cooling_fan_rpm
+      - switch.garage_deye_energy_manager_inverter_cooling_control_enabled
+      - switch.garage_deye_energy_manager_cooling_minimum_hunt_enabled
+      - number.garage_deye_energy_manager_cooling_target_temperature
+      - number.garage_deye_energy_manager_cooling_target_deadband
+      - number.garage_deye_energy_manager_cooling_minimum_active_fan
+      - number.garage_deye_energy_manager_cooling_maximum_normal_fan
+      - number.garage_deye_energy_manager_cooling_feedback_step
+      - number.garage_deye_energy_manager_cooling_update_interval
+      - number.garage_deye_energy_manager_cooling_trend_window
+      - number.garage_deye_energy_manager_cooling_trend_minimum_observation
+      - number.garage_deye_energy_manager_cooling_trend_deadband
+      - number.garage_deye_energy_manager_cooling_curve_idle_fan
+      - number.garage_deye_energy_manager_cooling_curve_fan_per_kw
+      - number.garage_deye_energy_manager_cooling_temperature_gain
+  - type: entities
+    title: Cooling safety and recovery
+    show_header_toggle: false
+    entities:
+      - number.garage_deye_energy_manager_cooling_emergency_temperature
+      - number.garage_deye_energy_manager_cooling_recovery_trigger_temperature
+      - number.garage_deye_energy_manager_cooling_recovery_release_temperature
+      - number.garage_deye_energy_manager_cooling_temperature_stale_timeout
+      - number.garage_deye_energy_manager_cooling_failsafe_fan
+      - switch.garage_deye_energy_manager_cooling_fan_failure_protection_enabled
+      - number.garage_deye_energy_manager_cooling_fan_failure_trip_temperature
+      - number.garage_deye_energy_manager_cooling_fan_failure_trip_delay
+      - number.garage_deye_energy_manager_cooling_fan_minimum_running_rpm
+      - sensor.garage_deye_energy_manager_cooling_protection_reason

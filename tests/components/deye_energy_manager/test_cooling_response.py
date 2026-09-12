@@ -47,7 +47,7 @@ def test_recovery_and_missing_temperature_never_release_hot_internal_fans():
     assert cooling_recovery_state(True, float('nan'), True)
     result = inverter_cooling_recommendation(base_inputs(
         inverter_ac_temperature_c=48, cooling_temperature_valid=True, cooling_fan_percentage=30,
-    ), EnergyManagerSettings(cooling_emergency_temp_c=52))
+    ), EnergyManagerSettings(cooling_emergency_temp_c=48))
     assert result.recommended_pct == 100
     for temperature in [None, float('nan')]:
         result = inverter_cooling_recommendation(base_inputs(
@@ -61,14 +61,19 @@ def test_trend_includes_unchanged_reports_and_forgets_old_direction():
     c = SimpleNamespace(
         entity_map={'inverter_ac_temperature': 'sensor.temp'},
         hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: sample)),
-        _cooling_samples=deque(maxlen=120), _cooling_temperature_sample=None,
+        settings=EnergyManagerSettings(),
+        _cooling_samples=deque(maxlen=600), _cooling_temperature_sample=None,
         _cooling_temperature_trend_c_per_min=None, _cooling_internal_fan_recovery=False,
         _cooling_temperature_valid=lambda _: True, _schedule_runtime_save=Mock(),
     )
     read = coordinator_method('_cooling_temperature')
     assert read(c)[2] is None
-    sample.last_reported += timedelta(seconds=30)
+    sample.last_reported += timedelta(seconds=15)
     sample.state = '42.3'
+    assert read(c)[2] is None
+    c.settings = replace(c.settings, cooling_trend_min_observation_s=15)
+    assert round(read(c)[2], 2) == 1.2
+    sample.last_reported += timedelta(seconds=15)
     assert round(read(c)[2], 2) == 0.6
     for _ in range(4):
         sample.last_reported += timedelta(seconds=15)
@@ -114,3 +119,47 @@ def test_fast_loop_only_writes_fans_and_repeated_samples_do_not_step_again():
         await update(c, sample_at)
         assert service.await_count == count
     asyncio.run(run())
+
+
+def test_tuning_uses_configured_thresholds_instead_of_hidden_caps():
+    settings = EnergyManagerSettings(
+        cooling_emergency_temp_c=52,
+        cooling_recovery_trigger_temp_c=49,
+        cooling_recovery_release_temp_c=46,
+    )
+    inputs = base_inputs(inverter_ac_temperature_c=48, cooling_temperature_valid=True, cooling_fan_percentage=30)
+    assert inverter_cooling_recommendation(inputs, settings).recommended_pct < 100
+    assert inverter_cooling_recommendation(replace(inputs, inverter_ac_temperature_c=52), settings).recommended_pct == 100
+    assert cooling_recovery_state(False, 49, True, settings)
+    assert cooling_recovery_state(True, 46.1, True, settings)
+    assert not cooling_recovery_state(True, 46, True, settings)
+    recovered = inverter_cooling_recommendation(replace(inputs, cooling_internal_fan_recovery=True), settings)
+    assert '46C' in recovered.reason
+
+
+def test_interval_changes_replace_only_the_cooling_timer():
+    configure = coordinator_method('_configure_cooling_timer')
+    cancel = Mock()
+    register = Mock(return_value=cancel)
+    configure.__globals__['async_track_time_interval'] = register
+    c = SimpleNamespace(settings=EnergyManagerSettings(), hass=object(),
+        _cooling_timer_cancel=None, _cooling_timer_interval=None, _async_update_cooling=AsyncMock())
+    configure(c)
+    assert register.call_args.args[2] == timedelta(seconds=5)
+    configure(c)
+    assert register.call_count == 1
+    c.settings = replace(c.settings, cooling_update_interval_s=2)
+    configure(c)
+    cancel.assert_called_once()
+    assert register.call_args.args[2] == timedelta(seconds=2)
+
+
+def test_stale_timeout_can_change_live_and_uses_report_timestamp():
+    valid = coordinator_method('_cooling_temperature_valid')
+    now = datetime.now(timezone.utc)
+    state = SimpleNamespace(state='45', last_reported=now-timedelta(seconds=40), last_updated=now-timedelta(hours=1))
+    c = SimpleNamespace(settings=EnergyManagerSettings(), entity_map={'inverter_ac_temperature':'sensor.temp'},
+        hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: state)))
+    assert valid(c, now)
+    c.settings = replace(c.settings, cooling_temperature_stale_s=30)
+    assert not valid(c, now)

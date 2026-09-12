@@ -53,20 +53,21 @@ before installing the branch manager. Do not edit its converter or credentials.
 
 Set the existing manager target number to **45 C** and emergency temperature to
 **48 C** at cutover. The live values inspected were 40 C and 52 C. Defaults do not
-overwrite existing user options. The new controller caps full-speed activation at
-48 C even if an old emergency option is higher; a lower configured value is honoured.
+overwrite existing user options. Full-speed activation now honours the configured
+emergency temperature exactly; the earlier hardcoded 48 C cap has been removed.
 The 45 C target replaces the initial 38 C proposal to balance fan noise against
 thermal headroom. Rising-temperature feedback is retained: the heatsink can
 continue warming after airflow increases. These are initial tuning values,
 not a guarantee that temperature cannot exceed 50 C.
 
-Cooling evaluates every five seconds, using a 30–60 second temperature trend.
+By default cooling evaluates every five seconds, using a 30–60 second temperature
+trend. Those timings are adjustable live; see [Cooling tuning](cooling-tuning.md).
 An ordinary adjustment requires a fresh temperature report; repeated evaluations
 do not keep stepping the fan on the same sample. Emergency and failsafe increases
 bypass that restriction. Energy/EV/climate control retains its 30-second timer.
 
-At 50 C, persist a recovery flag and command 100% external fan until a valid reading
-is at or below 44 C. Missing readings cannot clear recovery. Without stored recovery
+By default, at 50 C persist a recovery flag and command 100% external fan until
+a valid reading is at or below 44 C. Both temperatures are adjustable live. Missing readings cannot clear recovery. Without stored recovery
 state, assume recovery is needed until a cool reading establishes otherwise. This
 tracks a temperature-based inference, not measured internal-fan status. Existing
 hot fan-failure inverter protection and manual restore remain separate.

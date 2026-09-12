@@ -128,7 +128,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._last_cooling_write_at: datetime | None = None
         self._last_cooling_feedback_sample_at: datetime | None = None
         self._cooling_temperature_sample: tuple[datetime, float] | None = None
-        self._cooling_samples: deque[tuple[datetime, float]] = deque(maxlen=120)
+        self._cooling_samples: deque[tuple[datetime, float]] = deque(maxlen=600)
         self._cooling_inputs_snapshot: EnergyManagerInputs | None = None
         # Until a cool reading proves otherwise, internal fans may already be running.
         self._cooling_internal_fan_recovery = True
@@ -152,9 +152,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self._remove_listeners.append(
                 async_track_state_change_event(hass, watch_entities, self._handle_state_change)
             )
-        self._remove_listeners.append(
-            async_track_time_interval(hass, self._async_update_cooling, timedelta(seconds=5))
-        )
+        self._cooling_timer_cancel: Callable[[], None] | None = None
+        self._cooling_timer_interval: float | None = None
+        self._configure_cooling_timer()
         entry.async_on_unload(self._remove_all_listeners)
 
     async def async_load_stored_soc(self) -> None:
@@ -482,6 +482,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             battery_capacity_kwh=float(options["battery_capacity_kwh"]),
             overnight_bedroom_taper_target_temp=float(options["overnight_bedroom_taper_target_temp"]),
             cooling_target_temp_c=float(options["cooling_target_temp_c"]),
+            cooling_update_interval_s=float(options["cooling_update_interval_s"]),
+            cooling_trend_window_s=float(options["cooling_trend_window_s"]),
+            cooling_trend_min_observation_s=float(options["cooling_trend_min_observation_s"]),
+            cooling_temperature_stale_s=float(options["cooling_temperature_stale_s"]),
+            cooling_recovery_trigger_temp_c=float(options["cooling_recovery_trigger_temp_c"]),
+            cooling_recovery_release_temp_c=float(options["cooling_recovery_release_temp_c"]),
             cooling_curve_idle_fan_pct=float(options["cooling_curve_idle_fan_pct"]),
             cooling_curve_fan_pct_per_kw=float(options["cooling_curve_fan_pct_per_kw"]),
             cooling_temperature_gain_pct_per_c=float(options["cooling_temperature_gain_pct_per_c"]),
@@ -627,12 +633,29 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
     @callback
     def _remove_all_listeners(self) -> None:
+        if self._cooling_timer_cancel is not None:
+            self._cooling_timer_cancel()
+            self._cooling_timer_cancel = None
         for remove in self._remove_listeners:
             remove()
         self._remove_listeners.clear()
 
+    @callback
+    def _configure_cooling_timer(self) -> None:
+        """Apply interval edits immediately without reloading the integration."""
+
+        interval = self.settings.cooling_update_interval_s
+        if self._cooling_timer_cancel is not None and interval == self._cooling_timer_interval:
+            return
+        if self._cooling_timer_cancel is not None:
+            self._cooling_timer_cancel()
+        self._cooling_timer_interval = interval
+        self._cooling_timer_cancel = async_track_time_interval(
+            self.hass, self._async_update_cooling, timedelta(seconds=interval)
+        )
+
     async def _async_update_cooling(self, now: datetime) -> None:
-        """Refresh only cooling every five seconds; energy control stays on its own timer."""
+        """Refresh cooling on its configurable timer, independently of energy control."""
 
         async with self._apply_lock:
             if self.data is None or self._cooling_inputs_snapshot is None:
@@ -679,6 +702,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     async def _async_update_data(self) -> EnergyManagerDecision:
         """Fetch data from HA states."""
 
+        self._configure_cooling_timer()
         decision = self._calculate()
         await self.async_apply_decision(decision)
         await async_update_issues(self.hass, self)
@@ -729,7 +753,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return bool(
             state is not None
             and state.state not in UNAVAILABLE
-            and (now - state.last_reported).total_seconds() <= 60
+            and (now - state.last_reported).total_seconds() <= self.settings.cooling_temperature_stale_s
         )
 
     def _cooling_fan_health(self, settings: EnergyManagerSettings) -> tuple[bool, float | None]:
@@ -747,7 +771,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return True, rpm
 
     def _cooling_temperature(self) -> tuple[float | None, datetime | None, float | None]:
-        """Measure a minute of temperature movement, including unchanged reports."""
+        """Measure temperature movement over the configured observation window."""
 
         entity_id = self.entity_map.get("inverter_ac_temperature")
         state = self.hass.states.get(entity_id) if entity_id else None
@@ -762,24 +786,25 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
         sample_at = state.last_reported
         valid = self._cooling_temperature_valid(dt_util.now())
-        recovery = cooling_recovery_state(self._cooling_internal_fan_recovery, temperature, valid)
+        settings = self.settings
+        recovery = cooling_recovery_state(self._cooling_internal_fan_recovery, temperature, valid, settings)
         if recovery != self._cooling_internal_fan_recovery:
             self._cooling_internal_fan_recovery = recovery
             self._schedule_runtime_save()
         previous = self._cooling_temperature_sample
         if previous is None or sample_at != previous[0]:
-            if previous is not None and (sample_at - previous[0]).total_seconds() > 60:
+            if previous is not None and (sample_at - previous[0]).total_seconds() > settings.cooling_trend_window_s:
                 self._cooling_samples.clear()
             self._cooling_samples.append((sample_at, temperature))
-            cutoff = sample_at - timedelta(seconds=60)
-            while len(self._cooling_samples) > 1 and self._cooling_samples[0][0] < cutoff:
-                self._cooling_samples.popleft()
-            elapsed = (sample_at - self._cooling_samples[0][0]).total_seconds()
-            self._cooling_temperature_trend_c_per_min = (
-                (temperature - self._cooling_samples[0][1]) * 60 / elapsed
-                if elapsed >= 30 else None
-            )
             self._cooling_temperature_sample = (sample_at, temperature)
+        cutoff = sample_at - timedelta(seconds=settings.cooling_trend_window_s)
+        while len(self._cooling_samples) > 1 and self._cooling_samples[0][0] < cutoff:
+            self._cooling_samples.popleft()
+        elapsed = (sample_at - self._cooling_samples[0][0]).total_seconds()
+        self._cooling_temperature_trend_c_per_min = (
+            (temperature - self._cooling_samples[0][1]) * 60 / elapsed
+            if elapsed >= settings.cooling_trend_min_observation_s else None
+        )
         return temperature, sample_at, self._cooling_temperature_trend_c_per_min
 
     def _entity_state_string(self, entity_id: str | None) -> str | None:

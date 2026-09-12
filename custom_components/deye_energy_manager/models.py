@@ -154,6 +154,12 @@ class EnergyManagerSettings:
     battery_capacity_kwh: float = 30.0
     overnight_bedroom_taper_target_temp: float = 17.0
     cooling_target_temp_c: float = 45.0
+    cooling_update_interval_s: float = 5.0
+    cooling_trend_window_s: float = 60.0
+    cooling_trend_min_observation_s: float = 30.0
+    cooling_temperature_stale_s: float = 60.0
+    cooling_recovery_trigger_temp_c: float = 50.0
+    cooling_recovery_release_temp_c: float = 44.0
     cooling_curve_idle_fan_pct: float = 15.0
     cooling_curve_fan_pct_per_kw: float = 3.5
     cooling_temperature_gain_pct_per_c: float = 5.0
