@@ -6,7 +6,17 @@ fans and fan-failure protection must remain. The remaining internal fans reporte
 start at AC temperature 50 C. The fan was observed off when HA reported 44 C,
 superseding the earlier reported 40 C threshold. The exact internal cutoff is
 unknown because reporting skips intermediate readings. Use 44 C or lower as
-a conservative recovery endpoint pending observations with faster reporting.
+a provisional recovery endpoint pending observations with faster reporting.
+This is not evidence that AC temperature alone controls the internal fan.
+
+On 12 September 2026, HA recorded DC transformer temperature 39.92 C at
+14:40 NZST while AC was 46.05 C. AC subsequently reached 44.125 C at 14:48;
+the latest DC reading was 38.4 C at 14:47. DC was therefore reported below
+40 C several minutes before the reported AC 44 C observation. This does not
+establish the fan cutoff: reports are averaged and there is no timestamped
+internal-fan state measurement. AC-only, DC-only, and combined conditions
+remain unconfirmed. Observe both temperature channels at the faster schedule
+before treating the provisional recovery endpoint as a hardware rule.
 
 The inspected Sunsynk add-on uses `single-phase-16kw` definitions with
 `/share/hass-addon-sunsynk/mysensors.py`. Radiator temperature comes from the common
@@ -53,6 +63,12 @@ is at or below 44 C. Missing readings cannot clear recovery. Without stored reco
 state, assume recovery is needed until a cool reading establishes otherwise. This
 tracks a temperature-based inference, not measured internal-fan status. Existing
 hot fan-failure inverter protection and manual restore remain separate.
+
+For diagnosis, also give `dc_transformer_temperature` the same 5-second read,
+15-second report and 0.3 C change schedule. Its current five-minute reports
+are too sparse to identify a fan transition reliably. Retain both temperature
+histories during this investigation and note the exact time the internal fan
+starts/stops; reconsider Recorder exclusions after calibration.
 
 ## Recording
 
