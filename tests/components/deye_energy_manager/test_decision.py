@@ -302,7 +302,7 @@ def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> 
 
 
 def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
-    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45)
     holding = inverter_cooling_recommendation(
         base_inputs(
             inverter_pv_power_w=7000,
@@ -338,7 +338,7 @@ def test_inverter_cooling_minimum_hunt_unwinds_cold_fan_during_trend_jitter() ->
             cooling_fan_percentage=70,
             cooling_temperature_trend_c_per_min=0.075,
         ),
-        EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
+        EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45),
     )
 
     assert recommendation.raw_required_pct == 40
@@ -355,7 +355,7 @@ def test_inverter_cooling_minimum_hunt_holds_jitter_inside_target_band() -> None
             cooling_fan_percentage=40,
             cooling_temperature_trend_c_per_min=0.1,
         ),
-        EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
+        EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45),
     )
 
     assert recommendation.recommended_pct == 40
@@ -390,7 +390,7 @@ def test_inverter_cooling_minimum_hunt_responds_to_real_trend_inside_target_band
 
 
 def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
-    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45)
     rising = inverter_cooling_recommendation(
         base_inputs(
             inverter_pv_power_w=7000,
@@ -419,7 +419,7 @@ def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> No
 
 
 def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
-    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45)
     samples = (
         (39.2, 45, 0.25, 45),
         (39.2, 45, 0.1, 40),
@@ -494,7 +494,8 @@ def test_cooling_diagnostics_identify_regime_and_stable_samples() -> None:
             cooling_temperature_valid=True,
             cooling_fan_percentage=10,
             cooling_temperature_trend_c_per_min=0.0,
-        )
+        ),
+        EnergyManagerSettings(cooling_target_temp_c=45),
     )
 
     assert stable.cooling_load_regime == "pv_export"

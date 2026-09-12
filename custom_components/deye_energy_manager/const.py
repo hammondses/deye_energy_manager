@@ -351,7 +351,7 @@ NUMBER_DEFAULTS = {
     "battery_capacity_kwh": 30.0,
     "overnight_bedroom_taper_target_temp": 17.0,
     "max_fallback_soc_age_minutes": 360.0,
-    "cooling_target_temp_c": 45.0,
+    "cooling_target_temp_c": 38.0,
     "cooling_curve_idle_fan_pct": 15.0,
     "cooling_curve_fan_pct_per_kw": 3.5,
     "cooling_temperature_gain_pct_per_c": 5.0,

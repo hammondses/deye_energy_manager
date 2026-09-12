@@ -6,11 +6,13 @@ import asyncio
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from dataclasses import replace
+from math import isfinite
 import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -36,7 +38,7 @@ from .const import (
     PROG_POWER_ENTITIES,
     TEXT_DEFAULTS,
 )
-from .decision import build_deye_plan, cheap_grid_mirror_programs, cooling_load_collapsed, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, resolved_ev_power_w, thermal_load_diagnostics, time_between
+from .decision import build_deye_plan, cooling_recovery_state, inverter_cooling_recommendation, cheap_grid_mirror_programs, cooling_load_collapsed, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, resolved_ev_power_w, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
@@ -126,6 +128,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._last_cooling_write_at: datetime | None = None
         self._last_cooling_feedback_sample_at: datetime | None = None
         self._cooling_temperature_sample: tuple[datetime, float] | None = None
+        self._cooling_samples: deque[tuple[datetime, float]] = deque(maxlen=120)
+        self._cooling_inputs_snapshot: EnergyManagerInputs | None = None
+        # Until a cool reading proves otherwise, internal fans may already be running.
+        self._cooling_internal_fan_recovery = True
         self._cooling_temperature_trend_c_per_min: float | None = None
         self._previous_cooling_throughput_w: float | None = None
         self._cooling_protection_condition_since: datetime | None = None
@@ -146,6 +152,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self._remove_listeners.append(
                 async_track_state_change_event(hass, watch_entities, self._handle_state_change)
             )
+        self._remove_listeners.append(
+            async_track_time_interval(hass, self._async_update_cooling, timedelta(seconds=5))
+        )
         entry.async_on_unload(self._remove_all_listeners)
 
     async def async_load_stored_soc(self) -> None:
@@ -217,6 +226,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.bedroom_night_heating_armed = bool(data.get("bedroom_night_heating_armed", False))
         self.ev_manual_charging_override = bool(data.get("ev_manual_charging_override", False))
         self.cooling_inverter_protection_active = bool(data.get("cooling_inverter_protection_active", False))
+        self._cooling_internal_fan_recovery = bool(data.get("cooling_internal_fan_recovery", True))
         raw_restore = data.get("cooling_protection_restore_values")
         if isinstance(raw_restore, dict):
             self._cooling_protection_restore_values = {
@@ -276,6 +286,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "bedroom_night_heating_armed": self.bedroom_night_heating_armed,
             "ev_manual_charging_override": self.ev_manual_charging_override,
             "cooling_inverter_protection_active": self.cooling_inverter_protection_active,
+            "cooling_internal_fan_recovery": self._cooling_internal_fan_recovery,
             "cooling_protection_restore_values": self._cooling_protection_restore_values,
         }
 
@@ -620,6 +631,51 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             remove()
         self._remove_listeners.clear()
 
+    async def _async_update_cooling(self, now: datetime) -> None:
+        """Refresh only cooling every five seconds; energy control stays on its own timer."""
+
+        async with self._apply_lock:
+            if self.data is None or self._cooling_inputs_snapshot is None:
+                return
+            temperature, sample_at, trend = self._cooling_temperature()
+            inputs = replace(
+                self._cooling_inputs_snapshot,
+                now=dt_util.now(),
+                inverter_ac_temperature_c=temperature,
+                cooling_temperature_valid=self._cooling_temperature_valid(dt_util.now()),
+                cooling_temperature_sample_at=sample_at,
+                cooling_temperature_trend_c_per_min=trend,
+                cooling_internal_fan_recovery=self._cooling_internal_fan_recovery,
+                cooling_fan_percentage=self._cooling_fan_percentage(),
+                inverter_pv_power_w=self._state_float("inverter_pv_power"),
+                inverter_ac_power_w=self._state_float("inverter_ac_power"),
+                battery_power_w=self._state_float("battery_power") or 0.0,
+                # Load changes alone must not repeatedly authorise a fan reduction.
+                cooling_load_change_w=0.0,
+            )
+            settings = self.settings
+            cooling = inverter_cooling_recommendation(inputs, settings)
+            decision = replace(
+                self.data,
+                inverter_ac_temperature_c=temperature,
+                cooling_throughput_w=cooling.throughput_w,
+                cooling_curve_baseline_pct=cooling.baseline_pct,
+                cooling_temperature_trim_pct=cooling.temperature_trim_pct,
+                cooling_raw_required_fan_pct=cooling.raw_required_pct,
+                cooling_recommended_fan_pct=cooling.recommended_pct,
+                cooling_temperature_sample_at=sample_at,
+                cooling_temperature_trend_c_per_min=trend,
+                cooling_temperature_error_c=cooling.temperature_error_c,
+                cooling_reason=cooling.reason,
+                cooling_actual_fan_pct=inputs.cooling_fan_percentage,
+                cooling_load_change_w=0.0,
+            )
+            if settings.enabled and not decision.control_blocked and settings.inverter_cooling_control_enabled:
+                await self._apply_inverter_cooling(decision)
+            self.data = decision
+            # Notify without resetting the independent 30-second energy refresh.
+            self.async_update_listeners()
+
     async def _async_update_data(self) -> EnergyManagerDecision:
         """Fetch data from HA states."""
 
@@ -673,7 +729,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return bool(
             state is not None
             and state.state not in UNAVAILABLE
-            and (now - state.last_updated).total_seconds() <= 600
+            and (now - state.last_reported).total_seconds() <= 60
         )
 
     def _cooling_fan_health(self, settings: EnergyManagerSettings) -> tuple[bool, float | None]:
@@ -691,7 +747,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return True, rpm
 
     def _cooling_temperature(self) -> tuple[float | None, datetime | None, float | None]:
-        """Return the current temperature sample and trend between distinct updates."""
+        """Measure a minute of temperature movement, including unchanged reports."""
 
         entity_id = self.entity_map.get("inverter_ac_temperature")
         state = self.hass.states.get(entity_id) if entity_id else None
@@ -701,16 +757,28 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             temperature = float(state.state)
         except (TypeError, ValueError):
             return None, None, None
+        if not isfinite(temperature):
+            return None, None, None
 
-        sample_at = state.last_updated
+        sample_at = state.last_reported
+        valid = self._cooling_temperature_valid(dt_util.now())
+        recovery = cooling_recovery_state(self._cooling_internal_fan_recovery, temperature, valid)
+        if recovery != self._cooling_internal_fan_recovery:
+            self._cooling_internal_fan_recovery = recovery
+            self._schedule_runtime_save()
         previous = self._cooling_temperature_sample
         if previous is None or sample_at != previous[0]:
-            if previous is not None:
-                elapsed_minutes = (sample_at - previous[0]).total_seconds() / 60.0
-                if elapsed_minutes > 0:
-                    self._cooling_temperature_trend_c_per_min = (
-                        temperature - previous[1]
-                    ) / elapsed_minutes
+            if previous is not None and (sample_at - previous[0]).total_seconds() > 60:
+                self._cooling_samples.clear()
+            self._cooling_samples.append((sample_at, temperature))
+            cutoff = sample_at - timedelta(seconds=60)
+            while len(self._cooling_samples) > 1 and self._cooling_samples[0][0] < cutoff:
+                self._cooling_samples.popleft()
+            elapsed = (sample_at - self._cooling_samples[0][0]).total_seconds()
+            self._cooling_temperature_trend_c_per_min = (
+                (temperature - self._cooling_samples[0][1]) * 60 / elapsed
+                if elapsed >= 30 else None
+            )
             self._cooling_temperature_sample = (sample_at, temperature)
         return temperature, sample_at, self._cooling_temperature_trend_c_per_min
 
@@ -1100,7 +1168,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_fan_rpm=cooling_fan_rpm,
             cooling_protection_condition_minutes=cooling_protection_condition_minutes,
             cooling_inverter_protection_active=self.cooling_inverter_protection_active,
+            cooling_internal_fan_recovery=self._cooling_internal_fan_recovery,
         )
+        self._cooling_inputs_snapshot = inputs
         decision = decide(inputs, settings)
         if decision.solar_arrived and decision.ev_solar_charge_allowed:
             self.ev_solar_arrived_latched = True
@@ -1383,6 +1453,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if (
                 self._last_cooling_write_at is not None
                 and not fresh_temperature
+                and desired < 100
+                and self._cooling_temperature_valid(dt_util.now())
                 and not load_increased
             ):
                 return

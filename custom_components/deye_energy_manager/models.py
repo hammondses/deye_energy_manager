@@ -153,7 +153,7 @@ class EnergyManagerSettings:
     emergency_shed_discharge_w: float = 4000.0
     battery_capacity_kwh: float = 30.0
     overnight_bedroom_taper_target_temp: float = 17.0
-    cooling_target_temp_c: float = 45.0
+    cooling_target_temp_c: float = 38.0
     cooling_curve_idle_fan_pct: float = 15.0
     cooling_curve_fan_pct_per_kw: float = 3.5
     cooling_temperature_gain_pct_per_c: float = 5.0
@@ -288,6 +288,7 @@ class EnergyManagerInputs:
     cooling_fan_rpm: float | None = None
     cooling_protection_condition_minutes: float = 0.0
     cooling_inverter_protection_active: bool = False
+    cooling_internal_fan_recovery: bool = False
 
 
 @dataclass(frozen=True, slots=True)

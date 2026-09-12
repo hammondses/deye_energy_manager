@@ -197,7 +197,10 @@ def test_coordinator_refreshes_are_timer_driven_and_never_query_wican() -> None:
     state_handler = ast.unparse(functions["_handle_state_change"])
     assert "_calculate" not in state_handler
     assert "async_apply_decision" not in state_handler
-    assert "async_track_time_interval" not in ast.unparse(coordinator)
+    fast_cooling = ast.unparse(functions["_async_update_cooling"])
+    assert "async_query_wican_soc" not in fast_cooling
+    assert "async_apply_decision" not in fast_cooling
+    assert "_calculate" not in fast_cooling
 
 
 def test_query_implementation_has_one_post_and_no_retry_loop() -> None:

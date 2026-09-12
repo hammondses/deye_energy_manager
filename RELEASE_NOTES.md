@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.6.0b1 — overhaul branch, not released
+
+- Refresh external-fan cooling every five seconds independently of the 30-second energy/EV loop.
+- Default cooling target to 38 C and command full speed by 48 C, even if an older emergency setting is higher. Existing target options remain unchanged until explicitly configured.
+- Persist internal-fan recovery after 50 C and hold full external airflow until a valid AC reading reaches 40 C; conservatively recover after an untracked startup.
+- Measure temperature direction over up to one minute, distinguish unchanged reports from missing data, and never lower fan speed on missing temperature.
+- Document the matching 5-second Sunsynk polling / 0.3 C reporting change and Recorder exclusions in docs/cooling-response.md.
+
 ## v0.5.69
 
 - Let minimum-hunt cooling follow meaningful rising and falling temperature trends inside the target band while retaining the configured trend deadband for jitter.

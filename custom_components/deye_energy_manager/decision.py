@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
+from math import isfinite
 
 from .models import CoolingRecommendation, DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, ForecastTier, HeatLoadState, ThermalLoadDiagnostic
 
@@ -39,6 +40,18 @@ def cooling_load_collapsed(throughput_w: float, load_change_w: float) -> bool:
     return load_change_w <= -500.0 and throughput_w <= previous_throughput_w * 0.5
 
 
+def cooling_recovery_state(active: bool, temperature: float | None, valid: bool) -> bool:
+    """Remember the internal fans' 50 C on / 40 C off hysteresis."""
+
+    if not valid or temperature is None or not isfinite(temperature):
+        return active
+    if temperature >= 50.0:
+        return True
+    if temperature <= 40.0:
+        return False
+    return active
+
+
 def inverter_cooling_recommendation(
     inputs: EnergyManagerInputs,
     settings: EnergyManagerSettings,
@@ -57,15 +70,15 @@ def inverter_cooling_recommendation(
     temperature = inputs.inverter_ac_temperature_c
     temperature_error_c = (
         temperature - settings.cooling_target_temp_c
-        if temperature is not None and inputs.cooling_temperature_valid
+        if temperature is not None and isfinite(temperature) and inputs.cooling_temperature_valid
         else None
     )
 
     if temperature_error_c is None:
-        raw_pct = max(baseline_pct, settings.cooling_failsafe_fan_pct)
+        raw_pct = max(baseline_pct, settings.cooling_failsafe_fan_pct, inputs.cooling_fan_percentage or 0.0)
         trim_pct = raw_pct - baseline_pct
         reason = "AC temperature unavailable or stale; failsafe cooling"
-    elif temperature >= settings.cooling_emergency_temp_c:
+    elif temperature >= min(settings.cooling_emergency_temp_c, 48.0):
         raw_pct = 100.0
         trim_pct = raw_pct - baseline_pct
         reason = f"emergency cooling: AC temperature {temperature:.1f}C"
@@ -86,7 +99,7 @@ def inverter_cooling_recommendation(
             max(raw_pct, settings.cooling_min_active_fan_pct),
             settings.cooling_max_normal_fan_pct,
         )
-        if temperature >= settings.cooling_emergency_temp_c - 1.0:
+        if temperature >= min(settings.cooling_emergency_temp_c, 48.0) - 1.0:
             raw_pct = max(raw_pct, settings.cooling_max_normal_fan_pct)
         reason = (
             f"curve {baseline_pct:.1f}% + temperature trim {trim_pct:+.1f}% "
@@ -123,7 +136,12 @@ def inverter_cooling_recommendation(
         and current_pct is not None
         and throughput_w >= 500.0
     )
-    if temperature is not None and temperature >= settings.cooling_emergency_temp_c:
+    if inputs.cooling_internal_fan_recovery:
+        recommended_pct = 100.0
+        reason = "internal fan recovery: hold 100% until AC temperature reaches 40C"
+    elif temperature_error_c is None:
+        recommended_pct = max(raw_pct, current_pct or 0.0)
+    elif temperature is not None and temperature >= min(settings.cooling_emergency_temp_c, 48.0):
         recommended_pct = 100.0
         reason = f"emergency cooling: AC temperature {temperature:.1f}C, use 100% fan"
     elif hunt_active:
