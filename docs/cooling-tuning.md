@@ -78,3 +78,20 @@ a new subscriber confirmed retained `online`. The default DC entity mapping and
 HA options-dialog compatibility fix are staged here and require installation.
 The bedroom heating implementation remains in the manager pending a separate
 migration that preserves its current behavior and automation dependencies.
+
+## Unchanged MQTT temperatures (0.6.0b6)
+
+HA's MQTT sensor can receive repeated numeric readings without updating the
+entity's `last_reported`. Treating that timestamp as the polling heartbeat caused
+false 50% failsafe bursts followed by repeated downward steps.
+
+The manager now uses the latest non-retained numeric receipt on that entity's
+configured MQTT state topic, provided its value matches the entity. The existing
+60-second timeout still applies to that receipt. Unrelated MQTT activity cannot
+keep a temperature alive. This also lets an unchanged temperature flatten the
+trend, without forcing duplicate recorder writes.
+
+This uses HA's existing bounded MQTT receive cache. If MQTT metadata is absent or
+its internal layout changes, the manager falls back conservatively to the entity
+timestamp. Tested against the installed HA Core 2026.8.3. AC and DC manual
+observation timestamps use the same receipt handling.
