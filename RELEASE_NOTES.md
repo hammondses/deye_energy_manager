@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.6.0b9 — overhaul branch
+
+- Retire the manager's bedroom night-heating actuator and arm switch. Stored armed state is ignored on restart.
+- Replace with a native HA button automation: only when bedroom is off, set heat to 17°C once. No repeat, restart or climate-state trigger; manual off stays off and existing running settings are untouched.
+- Legacy decision fields remain disarmed for compatibility; ordinary thermal controls retain their existing gates.
+
 ## v0.6.0b8 — overhaul branch
 
 - Add independent 15-second observation sampling with time-weighted five-minute summaries. Persist one compressed JSON row per window off the HA event loop with 90-day retention and no per-sample log messages.

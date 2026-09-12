@@ -1,0 +1,27 @@
+- id: bedroom_night_heat_once
+  alias: Bedroom night heat — button only
+  description: Explicit press only. Starts heat at 17°C only when off; never retries
+    or reasserts settings.
+  triggers:
+  - trigger: state
+    entity_id: input_button.bedroom_night_heat
+    not_from:
+    - unknown
+    - unavailable
+    not_to:
+    - unknown
+    - unavailable
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.from_state is not none }}'
+  - condition: state
+    entity_id: climate.bedroom_heatpump
+    state: 'off'
+  actions:
+  - action: climate.set_temperature
+    target:
+      entity_id: climate.bedroom_heatpump
+    data:
+      hvac_mode: heat
+      temperature: 17
+  mode: single
