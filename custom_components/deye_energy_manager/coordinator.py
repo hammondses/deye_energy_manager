@@ -6,7 +6,7 @@ import asyncio
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from dataclasses import replace
+from dataclasses import asdict, replace
 from math import isfinite
 import logging
 from time import monotonic
@@ -44,6 +44,7 @@ from .decision import build_deye_plan, cooling_recovery_state, inverter_cooling_
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .temperature_freshness import temperature_reported_at
+from .cooling_data import CoolingWindows, SAMPLE_SECONDS, append_window
 from .repairs import async_update_issues
 from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
@@ -161,6 +162,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._cooling_timer_cancel: Callable[[], None] | None = None
         self._cooling_timer_interval: float | None = None
         self._configure_cooling_timer()
+        self._cooling_windows = CoolingWindows()
+        self._collection_lock = asyncio.Lock()
+        self.cooling_collection_status = {"state": "starting", "windows_written": 0, "write_failures": 0}
+        self._remove_listeners.append(async_track_time_interval(
+            hass, self._async_collect_cooling, timedelta(seconds=SAMPLE_SECONDS)
+        ))
         entry.async_on_unload(self._remove_all_listeners)
 
     async def async_load_stored_soc(self) -> None:
@@ -666,6 +673,68 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._cooling_timer_cancel = async_track_time_interval(
             self.hass, self._async_update_cooling, timedelta(seconds=interval)
         )
+
+    async def _async_collect_cooling(self, now: datetime) -> None:
+        """Observe independently of control cadence; one off-thread write per window."""
+        if self._collection_lock.locked():
+            return
+        async with self._collection_lock:
+            if not self.entry.options.get("cooling_data_collection_enabled", True):
+                self._cooling_windows = CoolingWindows()
+                self.cooling_collection_status["state"] = "disabled"
+                return
+            now = dt_util.utcnow()
+            sources = {
+                "pv_w": "inverter_pv_power", "ac_w": "inverter_ac_power",
+                "battery_w": "battery_power", "grid_w": "grid_ct_power",
+                "essential_w": "essential_power", "nonessential_w": "nonessential_power",
+                "reported_load_w": "reported_load_power", "grid_v": "grid_voltage",
+                "grid_a": "grid_current", "ac_a": "inverter_ac_current",
+                "battery_v": "battery_voltage", "battery_a": "battery_current",
+                "soc_pct": "battery_soc", "ac_c": "inverter_ac_temperature",
+                "dc_c": "inverter_dc_temperature", "garage_c": "cooling_ambient_temperature",
+                "humidity_pct": "cooling_ambient_humidity", "fan_rpm": "inverter_cooling_fan_rpm",
+            }
+            values = {"fan_pct": self._cooling_fan_percentage()}
+            for field, key in sources.items():
+                state = self.hass.states.get(self.entity_map.get(key, ""))
+                value = self._state_float(key)
+                if state is not None and value is not None:
+                    age = max(0, (now - self._temperature_reported_at(state)).total_seconds())
+                    values[field + "_age_s"] = age
+                    limit = 3600 if field in {"garage_c", "humidity_pct", "soc_pct"} else 120
+                    values[field] = value if age <= limit else None
+            values["ac_trend_c_min"] = self._cooling_temperature_trend_c_per_min
+            settings = self.settings
+            flags = {
+                "temperature_invalid": not self._cooling_temperature_valid(now),
+                "recovery": self._cooling_internal_fan_recovery,
+                "protection": self.cooling_inverter_protection_active,
+                "fan_unhealthy": not self._cooling_fan_health(settings)[0],
+                "control_disabled": not (settings.enabled and settings.inverter_cooling_control_enabled),
+                "control_blocked": bool(self.data and self.data.control_blocked),
+            }
+            context = {
+                "manager_version": "0.6.0b8",
+                "settings": {k: v for k, v in asdict(settings).items()
+                             if k.startswith("cooling_") or k in {"enabled", "inverter_cooling_control_enabled"}},
+                "sources": {field: self.entity_map.get(key) for field, key in sources.items()},
+            }
+            rows = self._cooling_windows.add(now.timestamp(), values, flags, context)
+            directory = self.hass.config.path("deye_energy_manager_data", self.entry.entry_id)
+            for row in rows:
+                try:
+                    await self.hass.async_add_executor_job(append_window, directory, row)
+                except OSError:
+                    if self.cooling_collection_status["state"] != "write_error":
+                        _LOGGER.exception("Cooling data could not be written to %s", directory)
+                    self.cooling_collection_status["state"] = "write_error"
+                    self.cooling_collection_status["write_failures"] += 1
+                else:
+                    self.cooling_collection_status.update(state="collecting", last_window=row["end"], path=directory)
+                    self.cooling_collection_status["windows_written"] += 1
+            if rows:
+                self.async_update_listeners()
 
     async def _async_update_cooling(self, now: datetime) -> None:
         """Refresh cooling on its configurable timer, independently of energy control."""

@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.6.0b8 — overhaul branch
+
+- Add independent 15-second observation sampling with time-weighted five-minute summaries. Persist one compressed JSON row per window off the HA event loop with 90-day retention and no per-sample log messages.
+- Capture signed and directional power/energy, destination shares, import/export-specific voltage/current, ambient temperature/humidity, AC/DC temperatures, fan speed/RPM, source ages, coverage, safety flags and controller settings/version. Power-balance errors remain visible; no exact PV provenance or physical heat-loss claim is inferred.
+- Add a live collection switch and status sensor. File-write failures are reported once per failure run. Collection does not write actuators or change protection settings.
+- Add `tools/review_cooling_data.py` for a rolling-week report/CSV and `docs/cooling-data.md` for field definitions, limitations and review procedure. Includes the b7 fan corrections below.
+- Validation: 169 tests, including reversals, weighted energy shares, conditional voltage, gaps, partial windows, compressed append/read/export and retention.
+
 ## v0.6.0b7 — overhaul branch, not deployed
 
 - Cache each MQTT receipt's UTC timestamp once so clock conversion jitter cannot repeatedly authorise fan adjustments on the same report. Older samples also cannot advance feedback.

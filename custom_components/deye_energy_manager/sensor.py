@@ -25,6 +25,7 @@ class DeyeSensorDescription(SensorEntityDescription):
 
 SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="decision_timeline", name="Decision timeline", value_fn=lambda d: None),
+    DeyeSensorDescription(key="cooling_data_collection", name="Cooling data collection", value_fn=lambda d: None),
     DeyeSensorDescription(key="cooling_saved_preset", name="Cooling saved preset", value_fn=lambda d: None),
     DeyeSensorDescription(key="active_plan", name="Active plan", value_fn=lambda d: ",".join(d.proposed_actions) or "advisory_only"),
     DeyeSensorDescription(key="active_policy", name="Active policy", value_fn=lambda d: d.active_policy),
@@ -177,6 +178,8 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
     def _raw_native_value(self) -> Any:
         if self.coordinator.data is None:
             return None
+        if self.entity_description.key == "cooling_data_collection":
+            return self.coordinator.cooling_collection_status["state"]
         if self.entity_description.key == "decision_timeline":
             rows = self.coordinator.decision_timeline
             return rows[-1]["timestamp"] if rows else "none"
@@ -214,6 +217,8 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
+        if self.entity_description.key == "cooling_data_collection":
+            return dict(self.coordinator.cooling_collection_status)
         if self.entity_description.key == "decision_timeline":
             return {"entries": list(self.coordinator.decision_timeline)}
         if self.entity_description.key == "cooling_saved_preset":

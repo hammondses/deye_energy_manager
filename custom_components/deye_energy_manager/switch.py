@@ -11,6 +11,7 @@ from .const import DOMAIN, FEATURE_DEFAULTS
 from .entity import DeyeEnergyManagerEntity
 
 SWITCHES = {
+    "cooling_data_collection_enabled": "Cooling data collection enabled",
     "enabled": "Enabled",
     "advisory_enabled": "Advisory enabled",
     "deye_control_enabled": "Deye control enabled",

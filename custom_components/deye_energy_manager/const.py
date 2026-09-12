@@ -39,6 +39,13 @@ DEFAULT_ENTITY_MAP = {
     "battery_power": "sensor.deye_battery_power",
     "grid_ct_power": "sensor.deye_grid_ct_power",
     "grid_voltage": "sensor.deye_grid_voltage",
+    "grid_current": "sensor.deye_grid_current",
+    "inverter_ac_current": "sensor.deye_inverter_current",
+    "battery_current": "sensor.deye_battery_current",
+    "nonessential_power": "sensor.deye_non_essential_power",
+    "reported_load_power": "sensor.deye_load_power",
+    "cooling_ambient_temperature": "sensor.temperature_garage_temperature",
+    "cooling_ambient_humidity": "sensor.temperature_garage_humidity",
     "essential_power": "sensor.deye_essential_power",
     "battery_rated_capacity": "sensor.deye_battery_rated_capacity",
     "battery_voltage": "sensor.deye_battery_voltage",
@@ -215,6 +222,7 @@ PROG_CHARGE_SELECT_ENTITIES = [
 ]
 
 FEATURE_DEFAULTS = {
+    "cooling_data_collection_enabled": True,
     "enabled": True,
     "advisory_enabled": True,
     "deye_control_enabled": False,
