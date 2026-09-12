@@ -21,13 +21,16 @@ SWITCHES = {
     "ev_grid_bypass_enabled": "EV grid bypass enabled",
     "ev_solar_charging_enabled": "EV solar charging enabled",
     "ev_cheap_grid_charging_enabled": "EV cheap grid charging enabled",
+    "wican_soc_enabled": "WiCAN Taycan SOC enabled",
     "grid_loss_notification_enabled": "Grid loss notification enabled",
     "heat_control_enabled": "Heat control enabled",
     "thermal_control_enabled": "Thermal control enabled",
     "direct_climate_control_enabled": "Direct climate control enabled",
-    "pv_load_test_control_enabled": "PV load test control enabled",
+    "pv_load_test_control_enabled": "Curtailment soak control enabled",
     "inverter_cooling_control_enabled": "Inverter cooling control enabled",
-    "export_limited_mode_enabled": "Export limited mode enabled",
+    "cooling_minimum_hunt_enabled": "Cooling minimum hunt enabled",
+    "cooling_fan_failure_protection_enabled": "Cooling fan failure protection enabled",
+    "export_limited_mode_enabled": "Export constrained mode enabled",
     "return_to_normal_on_shed_enabled": "Return to normal on shed enabled",
     "forecast_full_override_enabled": "Forecast full override enabled",
     "thermal_rotation_enabled": "Thermal rotation enabled",
@@ -47,7 +50,11 @@ SWITCHES = {
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [*(DeyeFeatureSwitch(coordinator, key, name) for key, name in SWITCHES.items()), BedroomNightHeatingSwitch(coordinator)]
+        [
+            *(DeyeFeatureSwitch(coordinator, key, name) for key, name in SWITCHES.items()),
+            BedroomNightHeatingSwitch(coordinator),
+            EVManualChargingOverrideSwitch(coordinator),
+        ]
     )
 
 
@@ -86,3 +93,22 @@ class BedroomNightHeatingSwitch(DeyeEnergyManagerEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_bedroom_night_heating(False)
+
+
+class EVManualChargingOverrideSwitch(DeyeEnergyManagerEntity, SwitchEntity):
+    """Persisted manual charging request with an SOC stop target."""
+
+    _attr_icon = "mdi:battery-charging-high"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "ev_manual_charging_override", "EV manual charging override")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.ev_manual_charging_override
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_ev_manual_charging_override(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_ev_manual_charging_override(False)

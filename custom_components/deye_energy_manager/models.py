@@ -26,6 +26,8 @@ class EnergyManagerSettings:
     bedroom_night_heating_armed: bool = False
     pv_load_test_control_enabled: bool = False
     inverter_cooling_control_enabled: bool = False
+    cooling_minimum_hunt_enabled: bool = False
+    cooling_fan_failure_protection_enabled: bool = False
     export_limited_mode_enabled: bool = False
     return_to_normal_on_shed_enabled: bool = True
     forecast_full_override_enabled: bool = True
@@ -114,6 +116,7 @@ class EnergyManagerSettings:
     room_satisfied_delta_c: float = 0.7
     room_resume_delta_c: float = 1.5
     forecast_full_confidence_buffer_kwh: float = 3.0
+    ev_solar_start_min_pv_w: float = 1800.0
     ev_start_load_jump_w: float = 5000.0
     ev_stop_load_drop_w: float = 6000.0
     ev_active_load_threshold_w: float = 1000.0
@@ -122,6 +125,7 @@ class EnergyManagerSettings:
     ev_fallback_hold_minutes: float = 15.0
     ev_bypass_program_power_w: float = 2000.0
     ev_restore_program_power_w: float = 12000.0
+    ev_manual_target_soc: float = 90.0
     grid_loss_notification_enabled: bool = False
     grid_loss_voltage_threshold: float = 50.0
     grid_loss_notification_cooldown_minutes: float = 30.0
@@ -149,16 +153,22 @@ class EnergyManagerSettings:
     emergency_shed_discharge_w: float = 4000.0
     battery_capacity_kwh: float = 30.0
     overnight_bedroom_taper_target_temp: float = 17.0
-    cooling_target_temp_c: float = 43.0
+    cooling_target_temp_c: float = 45.0
     cooling_curve_idle_fan_pct: float = 15.0
     cooling_curve_fan_pct_per_kw: float = 3.5
     cooling_temperature_gain_pct_per_c: float = 5.0
     cooling_feedback_step_pct: float = 5.0
     cooling_target_deadband_c: float = 1.0
+    cooling_trend_deadband_c_per_min: float = 0.2
     cooling_min_active_fan_pct: float = 10.0
     cooling_max_normal_fan_pct: float = 70.0
     cooling_emergency_temp_c: float = 48.0
     cooling_failsafe_fan_pct: float = 50.0
+    cooling_fan_failure_temp_c: float = 50.0
+    cooling_fan_failure_delay_min: float = 5.0
+    cooling_fan_min_rpm: float = 200.0
+    cooling_protection_restore_max_sell_w: float = 10000.0
+    cooling_protection_restore_max_solar_w: float = 15000.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +268,8 @@ class EnergyManagerInputs:
     ev_current_a: float | None = None
     ev_connector_status: str | None = None
     ev_low_since: datetime | None = None
+    ev_solar_arrived_latched: bool = False
+    ev_manual_charging_override: bool = False
     porsche_soc: float | None = None
     porsche_charging_status: str | None = None
     porsche_charging_ends: datetime | None = None
@@ -272,6 +284,10 @@ class EnergyManagerInputs:
     cooling_temperature_sample_at: datetime | None = None
     cooling_temperature_trend_c_per_min: float | None = None
     cooling_load_change_w: float = 0.0
+    cooling_fan_healthy: bool | None = None
+    cooling_fan_rpm: float | None = None
+    cooling_protection_condition_minutes: float = 0.0
+    cooling_inverter_protection_active: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +442,8 @@ class EnergyManagerDecision:
     ev_decision_reason: str
     ev_expected_action: str
     ev_detected_power_w: float | None
+    ev_active_target_soc: float
+    ev_soc_cutoff_reached: bool
     pre_peak_preserve_required: bool
     control_blocked: bool
     expected_action: str
@@ -463,6 +481,14 @@ class EnergyManagerDecision:
     cooling_raw_required_fan_pct: float = 0.0
     cooling_recommended_fan_pct: float = 0.0
     cooling_reason: str = "unavailable"
+    cooling_load_regime: str = "unknown"
+    cooling_calibration_state: str = "temperature_unavailable"
+    cooling_fan_healthy: bool | None = None
+    cooling_fan_rpm: float | None = None
+    cooling_protection_condition_minutes: float = 0.0
+    cooling_inverter_protection_required: bool = False
+    cooling_inverter_protection_active: bool = False
+    cooling_protection_reason: str = "inactive"
 
 
 @dataclass(frozen=True, slots=True)

@@ -301,6 +301,7 @@ def _thermal_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
     ev_keys = [
+        "ev_solar_start_min_pv_w",
         "ev_start_load_jump_w",
         "ev_stop_load_drop_w",
         "ev_active_load_threshold_w",
@@ -316,6 +317,17 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("ev_grid_bypass_enabled", default=defaults.get("ev_grid_bypass_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_solar_charging_enabled", default=defaults.get("ev_solar_charging_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_cheap_grid_charging_enabled", default=defaults.get("ev_cheap_grid_charging_enabled", True)): selector.BooleanSelector(),
+            vol.Required("wican_soc_enabled", default=defaults.get("wican_soc_enabled", False)): selector.BooleanSelector(),
+            vol.Required("wican_base_url", default=defaults.get("wican_base_url", TEXT_DEFAULTS["wican_base_url"])): selector.TextSelector(),
+            vol.Required("wican_soc_energy_threshold_kwh", default=defaults.get("wican_soc_energy_threshold_kwh", NUMBER_DEFAULTS["wican_soc_energy_threshold_kwh"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=0.1, step=0.1)
+            ),
+            vol.Required("wican_soc_fresh_minutes", default=defaults.get("wican_soc_fresh_minutes", NUMBER_DEFAULTS["wican_soc_fresh_minutes"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=1, step=1)
+            ),
+            vol.Required("ev_manual_target_soc", default=defaults.get("ev_manual_target_soc", NUMBER_DEFAULTS["ev_manual_target_soc"])): selector.NumberSelector(
+                selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, min=40, max=100, step=1, unit_of_measurement="%")
+            ),
             vol.Required("grid_loss_notification_enabled", default=defaults.get("grid_loss_notification_enabled", FEATURE_DEFAULTS["grid_loss_notification_enabled"])): selector.BooleanSelector(),
             vol.Required("grid_loss_notify_service", default=defaults.get("grid_loss_notify_service", TEXT_DEFAULTS["grid_loss_notify_service"])): selector.TextSelector(),
             vol.Required("grid_loss_voltage_threshold", default=defaults.get("grid_loss_voltage_threshold", NUMBER_DEFAULTS["grid_loss_voltage_threshold"])): selector.NumberSelector(
@@ -341,6 +353,14 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                 "inverter_cooling_control_enabled",
                 default=defaults.get("inverter_cooling_control_enabled", False),
             ): selector.BooleanSelector(),
+            vol.Required(
+                "cooling_minimum_hunt_enabled",
+                default=defaults.get("cooling_minimum_hunt_enabled", False),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                "cooling_fan_failure_protection_enabled",
+                default=defaults.get("cooling_fan_failure_protection_enabled", False),
+            ): selector.BooleanSelector(),
             **{
                 vol.Required(key, default=defaults.get(key, NUMBER_DEFAULTS[key])): selector.NumberSelector(
                     selector.NumberSelectorConfig(
@@ -351,16 +371,22 @@ def _cooling_schema(defaults: dict[str, Any]) -> vol.Schema:
                     )
                 )
                 for key, minimum, maximum, step in (
-                    ("cooling_target_temp_c", 35, 47, 0.5),
+                    ("cooling_target_temp_c", 35, 55, 0.5),
                     ("cooling_curve_idle_fan_pct", 0, 50, 1),
                     ("cooling_curve_fan_pct_per_kw", 0, 10, 0.1),
                     ("cooling_temperature_gain_pct_per_c", 0, 20, 0.5),
                     ("cooling_feedback_step_pct", 1, 20, 1),
                     ("cooling_target_deadband_c", 0, 5, 0.5),
+                    ("cooling_trend_deadband_c_per_min", 0.05, 2, 0.05),
                     ("cooling_min_active_fan_pct", 0, 50, 1),
                     ("cooling_max_normal_fan_pct", 30, 100, 1),
                     ("cooling_emergency_temp_c", 45, 55, 0.5),
                     ("cooling_failsafe_fan_pct", 0, 100, 1),
+                    ("cooling_fan_failure_temp_c", 45, 65, 0.5),
+                    ("cooling_fan_failure_delay_min", 1, 30, 1),
+                    ("cooling_fan_min_rpm", 0, 5000, 50),
+                    ("cooling_protection_restore_max_sell_w", 0, 12000, 100),
+                    ("cooling_protection_restore_max_solar_w", 0, 18000, 100),
                 )
             },
         }

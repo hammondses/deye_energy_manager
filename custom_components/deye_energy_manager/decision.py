@@ -103,27 +103,76 @@ def inverter_cooling_recommendation(
         temperature_error_c is not None
         and temperature_error_c > settings.cooling_target_deadband_c
     )
-    still_rising = trend is not None and trend > 0.05
+    still_rising = (
+        trend is not None
+        and trend > settings.cooling_trend_deadband_c_per_min
+    )
     below_target = (
         temperature_error_c is not None
         and temperature_error_c < -settings.cooling_target_deadband_c
     )
-    if current_pct is None or raw_pct == current_pct:
+    clearly_falling = (
+        trend is not None
+        and trend < -settings.cooling_trend_deadband_c_per_min
+    )
+    hunt_active = (
+        settings.cooling_minimum_hunt_enabled
+        and temperature_error_c is not None
+        and temperature is not None
+        and temperature < settings.cooling_emergency_temp_c
+        and current_pct is not None
+        and throughput_w >= 500.0
+    )
+    if temperature is not None and temperature >= settings.cooling_emergency_temp_c:
+        recommended_pct = 100.0
+        reason = f"emergency cooling: AC temperature {temperature:.1f}C, use 100% fan"
+    elif hunt_active:
+        if above_target and not clearly_falling:
+            recommended_pct = min(
+                settings.cooling_max_normal_fan_pct,
+                current_pct + settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: above target band, +{settings.cooling_feedback_step_pct:g}%"
+        elif below_target and still_rising:
+            recommended_pct = current_pct
+            reason = "minimum hunt: warming toward target band, hold"
+        elif below_target:
+            recommended_pct = max(
+                settings.cooling_min_active_fan_pct,
+                current_pct - settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: below target, -{settings.cooling_feedback_step_pct:g}%"
+        elif still_rising:
+            recommended_pct = min(
+                settings.cooling_max_normal_fan_pct,
+                current_pct + settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: rising inside target band, +{settings.cooling_feedback_step_pct:g}%"
+        elif not above_target and clearly_falling:
+            recommended_pct = max(
+                settings.cooling_min_active_fan_pct,
+                current_pct - settings.cooling_feedback_step_pct,
+            )
+            reason = f"minimum hunt: falling inside target band, -{settings.cooling_feedback_step_pct:g}%"
+        else:
+            recommended_pct = current_pct
+            reason = "minimum hunt: inside target band, hold"
+    elif current_pct is None or raw_pct == current_pct:
         recommended_pct = raw_pct
     elif raw_pct < current_pct:
-        if above_target or still_rising:
+        if still_rising or (above_target and not clearly_falling):
             recommended_pct = current_pct
             reason += "; temperature high or rising, hold"
         elif load_decreased:
             recommended_pct = raw_pct
             reason += "; load fell, reduce"
-        elif below_target:
+        elif below_target or clearly_falling:
             recommended_pct = max(raw_pct, current_pct - settings.cooling_feedback_step_pct)
             reason += f"; feedback authorises -{settings.cooling_feedback_step_pct:g}%"
         else:
             recommended_pct = current_pct
             reason += "; inside target deadband, hold"
-    elif load_increased or trend is None or above_target or still_rising:
+    elif trend is None or still_rising or ((load_increased or above_target) and not clearly_falling):
         recommended_pct = min(raw_pct, current_pct + settings.cooling_feedback_step_pct)
         reason += f"; feedback authorises +{settings.cooling_feedback_step_pct:g}%"
     else:
@@ -141,6 +190,74 @@ def inverter_cooling_recommendation(
         recommended_pct=round(recommended_pct),
         reason=reason,
     )
+
+
+def cooling_protection_state(
+    inputs: EnergyManagerInputs,
+    settings: EnergyManagerSettings,
+) -> tuple[bool, bool, str]:
+    """Return fan-failure detection, trip requirement, and a diagnostic reason."""
+
+    failed = inputs.cooling_fan_healthy is False
+    hot = (
+        inputs.cooling_temperature_valid
+        and inputs.inverter_ac_temperature_c is not None
+        and inputs.inverter_ac_temperature_c >= settings.cooling_fan_failure_temp_c
+    )
+    sustained = inputs.cooling_protection_condition_minutes >= settings.cooling_fan_failure_delay_min
+    required = settings.cooling_fan_failure_protection_enabled and failed and hot and sustained
+    if inputs.cooling_inverter_protection_active:
+        return failed, True, "latched; use Restore Deye normal after checking the fans"
+    if not settings.cooling_fan_failure_protection_enabled:
+        return failed, False, "protection disabled"
+    if not failed:
+        return False, False, "external fan telemetry healthy"
+    if not hot:
+        return True, False, "external fans unavailable, inverter below trip temperature"
+    if not sustained:
+        return True, False, f"hot fan failure pending {inputs.cooling_protection_condition_minutes:.1f}/{settings.cooling_fan_failure_delay_min:g} min"
+    return True, required, "external fans failed while inverter remained hot"
+
+
+def cooling_load_regime(inputs: EnergyManagerInputs) -> str:
+    """Classify the dominant inverter conversion path for recorder analysis."""
+
+    export_w = max(inputs.export_power_w, max(-inputs.grid_power_w, 0.0))
+    if export_w >= 500.0:
+        return "pv_export"
+    if inputs.battery_power_w <= -500.0:
+        return "battery_charging"
+    if inputs.battery_power_w >= 500.0:
+        return "battery_discharge"
+    if (inputs.inverter_pv_power_w or 0.0) >= 500.0:
+        return "pv_self_consumption"
+    if abs(inputs.inverter_ac_power_w or inputs.essential_power_w) >= 500.0:
+        return "ac_output"
+    return "idle"
+
+
+def cooling_calibration_state(
+    inputs: EnergyManagerInputs,
+    cooling: CoolingRecommendation,
+    settings: EnergyManagerSettings,
+) -> str:
+    """Return whether this sample belongs to a useful steady calibration window."""
+
+    if not inputs.cooling_temperature_valid or cooling.temperature_error_c is None:
+        return "temperature_unavailable"
+    if inputs.inverter_ac_temperature_c is not None and inputs.inverter_ac_temperature_c >= settings.cooling_emergency_temp_c:
+        return "emergency"
+    if inputs.cooling_fan_percentage is None:
+        return "fan_unavailable"
+    if abs(inputs.cooling_fan_percentage - cooling.recommended_pct) >= 2.0:
+        return "fan_adjusting"
+    if abs(cooling.load_change_w) >= 250.0:
+        return "load_changing"
+    if cooling.temperature_trend_c_per_min is None:
+        return "temperature_settling"
+    if abs(cooling.temperature_trend_c_per_min) > 0.05:
+        return "temperature_changing"
+    return "stable"
 
 
 def deye_capacity_percent(value: float) -> int:
@@ -363,14 +480,11 @@ def solar_arrived(
     """Return whether real solar has arrived, not just forecast solar."""
 
     pv_now = inputs.pv_power_now_w or 0.0
-    grid_import_w = max(inputs.grid_power_w, 0.0)
     pv_surplus_w = pv_now - inputs.essential_power_w
     if battery_charge_w >= settings.solar_arrived_charge_threshold_w:
         return True, f"battery charging {battery_charge_w:.0f}W >= {settings.solar_arrived_charge_threshold_w:.0f}W"
     if pv_surplus_w >= settings.solar_arrived_pv_surplus_threshold_w:
         return True, f"PV surplus {pv_surplus_w:.0f}W >= {settings.solar_arrived_pv_surplus_threshold_w:.0f}W"
-    if grid_import_w <= settings.paid_grid_import_threshold_w and battery_charge_w > 0:
-        return True, f"grid import {grid_import_w:.0f}W low and battery charging"
     return False, "PV has not arrived strongly enough"
 
 
@@ -1414,8 +1528,8 @@ def ev_decision(
     cheap_window: bool,
     battery_recovered: bool,
     battery_priority_satisfied: bool,
-    forecast_override: bool,
-) -> tuple[bool, bool, bool, bool, str, str, float | None, datetime | None]:
+    solar_has_arrived: bool,
+) -> tuple[bool, bool, bool, bool, str, str, float | None, float, bool, datetime | None]:
     """Return EV detection, bypass, solar permission, latch, reason, action, power, hold."""
 
     essential_jump_w = None
@@ -1430,6 +1544,21 @@ def ev_decision(
     connector_status = (inputs.ev_connector_status or "").lower()
     connector_charging = connector_status == "charging"
     connector_suspended_by_ev = connector_status == "suspendedev"
+    connector_can_start = connector_status in {"preparing", "charging", "suspendedev", "suspendedevse"}
+    solar_ready = solar_has_arrived or (charge_control_detected and inputs.ev_solar_arrived_latched)
+    pv_now_w = inputs.pv_power_now_w or 0.0
+    pv_start_ready = charge_control_detected or pv_now_w >= settings.ev_solar_start_min_pv_w
+    power_deficit = (
+        inputs.battery_power_w >= settings.thermal_shed_discharge_w
+        or inputs.grid_power_w >= settings.paid_grid_import_threshold_w
+    )
+    startup_power_deficit = power_deficit and not charge_control_detected
+    active_target_soc = (
+        min(max(settings.ev_manual_target_soc, 40.0), 100.0)
+        if inputs.ev_manual_charging_override
+        else 80.0
+    )
+    soc_cutoff_reached = inputs.porsche_soc is not None and inputs.porsche_soc >= active_target_soc
     power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
     jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w
     high_load_detected = inputs.ev_power_w is None and cheap_window and inputs.essential_power_w > 6500.0
@@ -1469,7 +1598,6 @@ def ev_decision(
     )
     load_drop_stopped = essential_jump_w is not None and essential_jump_w <= -settings.ev_stop_load_drop_w
     grid_drop_stopped = grid_jump_w is not None and grid_jump_w <= -settings.ev_stop_load_drop_w
-    soc_stopped = inputs.porsche_soc is not None and inputs.porsche_soc >= 99.0
     porsche_status_or_end_stopped = (
         inputs.ev_latch_on
         and not power_detected
@@ -1488,13 +1616,13 @@ def ev_decision(
         and inputs.essential_power_w < 2500.0
         and (inputs.ev_power_w is None or inputs.ev_power_w < settings.ev_active_load_threshold_w)
     )
-    failsafe_0700 = inputs.ev_latch_on and not cheap_window
+    failsafe_0700 = inputs.ev_latch_on and not cheap_window and not inputs.ev_manual_charging_override
     legacy_ev_stop = (
         low_power_stopped
         or inferred_low_load_stopped
         or load_drop_stopped
         or grid_drop_stopped
-        or soc_stopped
+        or soc_cutoff_reached
         or porsche_status_or_end_stopped
         or hold_expired_low
     )
@@ -1503,11 +1631,25 @@ def ev_decision(
         and connector_suspended_by_ev
         and not (settings.ev_solar_charging_enabled and not cheap_window)
     )
-    charge_control_stopped = not charge_control_detected or charge_control_done
+    charge_control_stopped = (
+        (not charge_control_detected and not inputs.ev_manual_charging_override)
+        or charge_control_done
+    )
     ev_stop = (
-        inputs.manual_clear_ev_latch
+        soc_cutoff_reached
+        or inputs.manual_clear_ev_latch
         or failsafe_0700
         or (charge_control_stopped if charge_control_available else legacy_ev_stop)
+    )
+
+    manual_start_requested = (
+        settings.enabled
+        and settings.ev_control_enabled
+        and inputs.ev_manual_charging_override
+        and inputs.porsche_soc is not None
+        and not soc_cutoff_reached
+        and not charge_control_detected
+        and connector_can_start
     )
 
     ev_grid_bypass_required = (
@@ -1517,7 +1659,7 @@ def ev_decision(
         and settings.ev_cheap_grid_charging_enabled
         and cheap_window
         and not ev_stop
-        and (inputs.ev_latch_on or ev_charging_detected)
+        and (inputs.ev_manual_charging_override or inputs.ev_latch_on or ev_charging_detected)
     )
     ev_latch_active = ev_grid_bypass_required
 
@@ -1535,14 +1677,23 @@ def ev_decision(
         settings.enabled
         and settings.ev_control_enabled
         and settings.ev_solar_charging_enabled
+        and not cheap_window
+        and not inputs.ev_manual_charging_override
+        and not soc_cutoff_reached
         and battery_recovered
         and battery_priority_satisfied
-        and forecast_override
+        and solar_ready
+        and pv_start_ready
+        and not startup_power_deficit
         and settings.flexible_load_priority in {"ev_before_thermal", "battery_first"}
     )
 
     action = "none"
-    if charge_control_detected and (
+    if soc_cutoff_reached and (charge_control_detected or inputs.ev_manual_charging_override):
+        action = "ev_charger_stop"
+    elif manual_start_requested:
+        action = "ev_charger_start"
+    elif charge_control_detected and (
         charge_control_done or (failsafe_0700 and not settings.ev_solar_charging_enabled)
     ):
         action = "ev_charger_stop"
@@ -1555,10 +1706,26 @@ def ev_decision(
     elif ev_solar_charge_allowed:
         action = "allow_solar_charge"
 
-    if charge_control_done:
+    if soc_cutoff_reached:
+        mode = "manual" if inputs.ev_manual_charging_override else "normal"
+        reason = f"EV {mode} SOC cutoff reached: Porsche {inputs.porsche_soc:.0f}% >= {active_target_soc:.0f}% target"
+    elif inputs.ev_manual_charging_override and inputs.porsche_soc is None:
+        reason = "EV manual charging blocked: Porsche SOC unavailable"
+    elif inputs.ev_manual_charging_override and not connector_can_start and not charge_control_detected:
+        reason = f"EV manual charging waiting: connector status {inputs.ev_connector_status or 'unavailable'}"
+    elif manual_start_requested:
+        reason = f"EV manual charging start requested to {active_target_soc:.0f}%"
+    elif inputs.ev_manual_charging_override and charge_control_detected:
+        reason = f"EV manual charging active to {active_target_soc:.0f}%"
+    elif charge_control_done:
         reason = "EV charging complete: connector status SuspendedEV"
     elif charge_control_detected and failsafe_0700:
         reason = "EV cheap-grid window ended: stop charger and restore inverter"
+    elif settings.ev_solar_charging_enabled and startup_power_deficit:
+        reason = (
+            f"EV solar charge blocked: battery discharge {max(inputs.battery_power_w, 0.0):.0f}W, "
+            f"grid import {max(inputs.grid_power_w, 0.0):.0f}W"
+        )
     elif charge_control_detected and connector_charging:
         reason = "EV charging confirmed: connector status Charging"
     elif charge_control_detected:
@@ -1574,7 +1741,16 @@ def ev_decision(
     elif ev_grid_bypass_required and inputs.ev_latch_on:
         reason = "EV bypass latch holding from previous detection"
     elif ev_solar_charge_allowed:
-        reason = "EV solar charge allowed: morning battery reserve recovered and forecast budget available"
+        reason = "EV solar charge allowed: solar arrived, morning battery reserve recovered, and forecast budget available"
+    elif settings.ev_solar_charging_enabled and cheap_window:
+        reason = "EV solar charge blocked: outside daytime window"
+    elif settings.ev_solar_charging_enabled and not solar_ready:
+        reason = "EV solar charge blocked: solar has not arrived"
+    elif settings.ev_solar_charging_enabled and not pv_start_ready:
+        reason = (
+            f"EV solar charge blocked: PV {pv_now_w:.0f}W < "
+            f"{settings.ev_solar_start_min_pv_w:.0f}W startup minimum"
+        )
     else:
         reason = "EV idle"
 
@@ -1586,6 +1762,8 @@ def ev_decision(
         reason,
         action,
         inputs.ev_power_w,
+        active_target_soc,
+        soc_cutoff_reached,
         hold_until,
     )
 
@@ -1595,6 +1773,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
 
     settings = settings or EnergyManagerSettings()
     cooling = inverter_cooling_recommendation(inputs, settings)
+    cooling_fan_failed, cooling_protection_required, cooling_protection_reason = cooling_protection_state(inputs, settings)
     tier = forecast_tier(inputs.forecast_tomorrow_kwh, settings)
     active_prog_range = active_program_range(inputs.now, settings)
     actual_active_prog = str(active_prog_range["program"])
@@ -1921,34 +2100,38 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     )
 
     thermal_should_shed = (
-        discharge_shed_required
-        or (
-            not inputs.free_power_active
-            and any(load.solar_owned and load.lease_reason == "free_power" for load in inputs.heat_loads)
-        )
-        or (
-            inputs.any_solar_owned_heat_load_on
-            and (
-                (
-                    not forecast_override
-                    and soc_known
-                    and soc < thermal_start_min_soc
-                    and battery_charge_w < settings.thermal_keep_running_min_charge_w
-                    and not export_soak_keep_available
+        thermal_control_enabled
+        and (
+            discharge_shed_required
+            or (
+                not inputs.free_power_active
+                and any(load.solar_owned and load.lease_reason == "free_power" for load in inputs.heat_loads)
+            )
+            or (
+                inputs.any_solar_owned_heat_load_on
+                and (
+                    (
+                        not forecast_override
+                        and soc_known
+                        and soc < thermal_start_min_soc
+                        and battery_charge_w < settings.thermal_keep_running_min_charge_w
+                        and not export_soak_keep_available
+                    )
+                    or (
+                        pre_peak_preserve_required
+                        and not forecast_override
+                        and soc_known
+                        and soc < thermal_start_min_soc
+                    )
+                    or overnight_protection_required
                 )
-                or (
-                    pre_peak_preserve_required
-                    and not forecast_override
-                    and soc_known
-                    and soc < thermal_start_min_soc
-                )
-                or overnight_protection_required
             )
         )
     )
 
     thermal_should_emergency_shed = (
         settings.enabled
+        and thermal_control_enabled
         and (
             battery_discharge_w >= settings.thermal_emergency_shed_w
             or battery_discharge_w >= settings.emergency_shed_discharge_w
@@ -2039,6 +2222,86 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     active_thermal_loads = [load.name for load in inputs.heat_loads if load.solar_owned and load_is_active(load, thermal_mode)]
     thermal_should_return_to_normal = thermal_should_shed and settings.return_to_normal_on_shed_enabled
 
+    # Thermal control is deliberately limited to one job: absorb PV that cannot
+    # be exported or accepted by the battery.  The old forecast/comfort matrix
+    # remains calculated for compatibility diagnostics, but cannot select an
+    # actuator action.
+    current_expected_pv_w = max(inputs.pv_power_now_w or 0.0, 0.0)
+    curtailment_managed_loads = sorted(
+        [
+            load
+            for load in inputs.heat_loads
+            if load.solar_owned
+            and load.is_on
+            and load.lease_reason != "bedroom_night_heating"
+        ],
+        key=lambda load: load.priority,
+        reverse=True,
+    )
+    curtailment_add_candidates = sorted(
+        [
+            load
+            for load in needy_heat_loads(inputs.heat_loads, settings, "heating", inputs.now)
+            if cooldown_block_reason(load, settings, inputs.now, "add") is None
+        ],
+        key=lambda load: load.priority,
+    )
+    curtailment_signal = (
+        settings.enabled
+        and thermal_control_enabled
+        and settings.export_limited_mode_enabled
+        and thermal_mode == "heating"
+        and inputs.heat_available
+        and inputs.cooldown_passed
+        and soc_known
+        and soc >= settings.pv_load_test_min_soc
+        and current_expected_pv_w >= settings.pv_load_test_min_expected_power_w
+        and battery_charge_w <= settings.pv_load_test_max_battery_charge_w
+        and battery_discharge_w < 200.0
+        and grid_import_w <= settings.thermal_export_import_tolerance_w
+        and export_power_w <= settings.thermal_export_keep_w
+    )
+    curtailment_control_allowed = curtailment_signal and settings.pv_load_test_control_enabled
+    pv_load_test_recommended = (
+        curtailment_signal
+        and not curtailment_managed_loads
+        and bool(curtailment_add_candidates)
+    )
+    thermal_allowed = curtailment_control_allowed
+    solar_soak_allowed = curtailment_control_allowed
+    full_send_soak_allowed = False
+    export_soak_available = curtailment_signal
+    thermal_export_margin_w = settings.thermal_export_keep_w - export_power_w
+    export_soak_reason = (
+        f"curtailment available: expected PV {current_expected_pv_w:.0f}W, "
+        f"battery charge {battery_charge_w:.0f}W, export {export_power_w:.0f}W"
+        if curtailment_signal
+        else "curtailment unavailable"
+    )
+    morning_preheat_allowed = False
+    overnight_dining_comfort_allowed = False
+    underfloor_comfort_allowed = False
+    comfort_heat_allowed = False
+    thermal_rotation_recommended = False
+    overnight_protection_required = False
+    bedroom_heat_taper_recommended = False
+    thermal_should_emergency_shed = False
+    thermal_should_shed = (
+        thermal_control_enabled
+        and bool(curtailment_managed_loads)
+        and not curtailment_control_allowed
+    )
+    thermal_load_to_shed = curtailment_managed_loads[0].name if thermal_should_shed else None
+    thermal_load_to_normalise = thermal_load_to_shed
+    thermal_load_to_add = (
+        curtailment_add_candidates[0].name
+        if curtailment_control_allowed
+        and not curtailment_managed_loads
+        and curtailment_add_candidates
+        else None
+    )
+    thermal_should_return_to_normal = False
+
     (
         ev_charging_detected,
         ev_grid_bypass_required,
@@ -2047,6 +2310,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ev_reason,
         ev_action,
         ev_detected_power_w,
+        ev_active_target_soc,
+        ev_soc_cutoff_reached,
         ev_hold_until,
     ) = ev_decision(
         inputs,
@@ -2054,7 +2319,7 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cheap_window,
         soc_known and soc >= morning_start_soc_target,
         battery_priority_satisfied,
-        forecast_override,
+        solar_has_arrived,
     )
     if not discretionary_budget_positive and ev_solar_charge_allowed:
         ev_solar_charge_allowed = False
@@ -2094,53 +2359,24 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
     effective_grid_charge_target_soc = cheap_grid_charge_target_soc if grid_charge_required else tier.grid_charge_target_soc
 
     thermal_action = "none"
-    shed_blocked_no_loads = thermal_should_shed and not inputs.any_solar_owned_heat_load_on and thermal_load_to_shed is None
-    if thermal_should_emergency_shed:
-        thermal_action = "emergency_shed_all"
-    elif thermal_rotation_recommended:
-        thermal_action = "rotate"
-    elif shed_blocked_no_loads:
-        thermal_action = "shed_blocked_no_owned_loads"
-    elif thermal_should_shed:
-        thermal_action = "return_to_normal" if settings.return_to_normal_on_shed_enabled else "shed_one"
-    elif free_power_thermal_allowed and thermal_allowed and thermal_load_to_add:
+    if thermal_should_shed:
+        thermal_action = "shed_one"
+    elif thermal_load_to_add:
         thermal_action = "add_one"
-    elif morning_preheat_allowed and thermal_load_to_add:
-        thermal_action = "morning_preheat"
-    elif overnight_dining_comfort_allowed and thermal_load_to_add:
-        thermal_action = "overnight_dining_comfort"
-    elif underfloor_comfort_allowed and thermal_load_to_add:
-        thermal_action = "underfloor_comfort"
-    elif comfort_heat_allowed and thermal_load_to_add:
-        thermal_action = "comfort_heat"
-    elif thermal_allowed and thermal_load_to_add:
-        thermal_action = "add_one"
-    elif thermal_allowed:
+    elif thermal_allowed and curtailment_managed_loads:
         thermal_action = "hold"
 
-    thermal_policy_state = "battery_priority"
-    if thermal_should_emergency_shed:
-        thermal_policy_state = "emergency_shed"
-    elif thermal_should_shed:
-        thermal_policy_state = "shed"
-    elif paid_grid_avoidance_required:
-        thermal_policy_state = "battery_priority"
-    elif free_power_thermal_allowed and thermal_allowed:
-        thermal_policy_state = "free_power"
-    elif morning_preheat_allowed:
-        thermal_policy_state = "morning_preheat"
-    elif overnight_dining_comfort_allowed:
-        thermal_policy_state = "overnight_dining_comfort"
-    elif underfloor_comfort_allowed:
-        thermal_policy_state = "underfloor_comfort"
-    elif comfort_heat_allowed:
-        thermal_policy_state = "comfort_only"
-    elif full_send_soak_allowed and thermal_allowed:
-        thermal_policy_state = "solar_soak_full_send"
-    elif thermal_allowed:
-        thermal_policy_state = "solar_soak_allowed"
-    elif inputs.any_solar_owned_heat_load_on:
-        thermal_policy_state = "normalise"
+    thermal_policy_state = (
+        "curtailment_cleanup"
+        if thermal_should_shed
+        else "curtailment_soak"
+        if thermal_action in {"add_one", "hold"}
+        else "curtailment_ready"
+        if pv_load_test_recommended
+        else "disabled"
+        if not thermal_control_enabled
+        else "idle"
+    )
 
     target_temperature: float | None = None
     target_fan_mode: str | None = None
@@ -2171,10 +2407,10 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         target_hvac_mode = "heat"
         lease_reason = "comfort_heat"
     elif thermal_action == "add_one":
-        target_temperature = settings.cool_soak_target_temp if thermal_mode == "cooling" else settings.heat_soak_target_temp
-        target_fan_mode = settings.cool_soak_fan_mode if thermal_mode == "cooling" else settings.heat_soak_fan_mode
-        target_hvac_mode = "cool" if thermal_mode == "cooling" else "heat"
-        lease_reason = "free_power" if free_power_thermal_allowed else "solar_soak"
+        target_temperature = settings.heat_soak_target_temp
+        target_fan_mode = settings.heat_soak_fan_mode
+        target_hvac_mode = "heat"
+        lease_reason = "curtailment_soak"
 
     proposed_actions: list[str] = []
     reason_parts = []
@@ -2190,118 +2426,38 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         reason_parts.append(f"SOC last-known-good: {soc:.0f}%, age {inputs.soc_age_minutes or 0:.0f}m")
     else:
         reason_parts.append(f"SOC unavailable: raw {inputs.raw_soc or 'missing'} and fallback stale")
-    if thermal_allowed:
-        reason = "thermal_allowed=true: free power active" if free_power_thermal_allowed else "thermal_allowed=true"
-        if not free_power_thermal_allowed:
-            reason += f": {export_soak_reason}" if export_soak_available else f": {energy_budget_reason}"
-        reason_parts.append(reason)
-        thermal_reason_parts.append(reason)
+    if not thermal_control_enabled:
+        thermal_reason = "thermal control disabled"
+    elif not settings.export_limited_mode_enabled:
+        thermal_reason = "curtailment idle: export-limited mode disabled"
+    elif export_power_w > settings.thermal_export_keep_w:
+        thermal_reason = f"curtailment blocked: preserving {export_power_w:.0f}W live export"
+    elif not soc_known or soc < settings.pv_load_test_min_soc:
+        thermal_reason = f"curtailment blocked: SOC below {settings.pv_load_test_min_soc:.0f}% or unavailable"
+    elif current_expected_pv_w < settings.pv_load_test_min_expected_power_w:
+        thermal_reason = f"curtailment blocked: expected PV {current_expected_pv_w:.0f}W"
+    elif battery_charge_w > settings.pv_load_test_max_battery_charge_w:
+        thermal_reason = f"curtailment blocked: battery accepting {battery_charge_w:.0f}W"
+    elif battery_discharge_w >= 200.0 or grid_import_w > settings.thermal_export_import_tolerance_w:
+        thermal_reason = f"curtailment blocked: discharge {battery_discharge_w:.0f}W, import {grid_import_w:.0f}W"
+    elif not settings.pv_load_test_control_enabled:
+        thermal_reason = "curtailment recommended: automatic control disabled"
     else:
-        if thermal_mode == "off":
-            reason = "thermal_allowed=false: thermal mode off"
-        elif not thermal_control_enabled:
-            reason = "thermal_allowed=false: thermal control disabled"
-        elif battery_discharge_w >= thermal_shed_discharge_w:
-            reason = f"thermal_allowed=false: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W"
-        elif paid_grid_avoidance_required:
-            reason = "thermal_allowed=false: paid grid avoidance required"
-        elif passive_warming_likely:
-            reason = "thermal_allowed=false: passive warming likely and battery priority active"
-        elif discretionary_budget_kwh is not None and discretionary_budget_kwh <= 0:
-            reason = f"thermal_allowed=false: battery_priority: {energy_budget_reason}; {export_soak_reason}"
-        elif not soc_known:
-            reason = (
-                "thermal_allowed=false: "
-                f"SOC unavailable, charge {battery_charge_w:.0f}W < {thermal_start_min_charge_w:.0f}W, "
-                f"forecast_full_override={forecast_override}"
-            )
-        elif not thermal_start_gate:
-            reason = (
-                "thermal_allowed=false: "
-                f"SOC {soc:.0f}% < thermal_start_min_soc {thermal_start_min_soc:.0f}, "
-                f"charge {battery_charge_w:.0f}W < thermal_start_min_charge {thermal_start_min_charge_w:.0f}, "
-                f"forecast_full_override={forecast_override}"
-            )
-        else:
-            reason = (
-                "thermal_allowed=false: "
-                f"{energy_budget_reason}; "
-                f"forecast_full_override={forecast_override}"
-            )
-        reason_parts.append(reason)
-        thermal_reason_parts.append(reason)
-    if thermal_allowed and thermal_load_to_add:
-        proposed_actions.append("add_one_heat_load")
-    if export_soak_available:
-        reason_parts.append(export_soak_reason)
-    if morning_preheat_allowed and thermal_load_to_add:
-        proposed_actions.append("morning_preheat")
-        reason_parts.append(morning_preheat_reason)
-        thermal_reason_parts.append(morning_preheat_reason)
-    elif overnight_dining_comfort_allowed and thermal_load_to_add:
-        proposed_actions.append("overnight_dining_comfort")
-        reason_parts.append(overnight_dining_comfort_reason)
-        thermal_reason_parts.append(overnight_dining_comfort_reason)
-    elif underfloor_comfort_allowed and thermal_load_to_add:
-        proposed_actions.append("underfloor_comfort")
-        reason_parts.append(underfloor_reason)
-        thermal_reason_parts.append(underfloor_reason)
-    elif comfort_heat_allowed and thermal_load_to_add:
-        proposed_actions.append("comfort_heat")
-        reason_parts.append(f"comfort_only: {thermal_load_to_add} below {settings.comfort_min_room_temp:.1f}C")
-        thermal_reason_parts.append(f"comfort_only: {thermal_load_to_add} below {settings.comfort_min_room_temp:.1f}C")
-    if thermal_should_shed:
-        if thermal_load_to_shed:
-            proposed_actions.append("shed_one_heat_load")
-        if not thermal_load_to_shed:
-            shed_reason = (
-                f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W; "
-                "no owned thermal loads to shed"
-            )
-            if not settings.shed_unowned_managed_loads_on_battery_discharge:
-                shed_reason += "; unowned shedding disabled"
-        elif unowned_shed_allowed and not inputs.any_solar_owned_heat_load_on:
-            shed_reason = (
-                f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= threshold {thermal_shed_discharge_w:.0f}W; "
-                f"normalising unowned managed load due to battery discharge"
-            )
-        else:
-            shed_reason = f"thermal_should_shed=true: battery discharging {battery_discharge_w:.0f}W >= shed threshold {thermal_shed_discharge_w:.0f}W" if battery_discharge_w >= thermal_shed_discharge_w else "thermal_should_shed=true"
-        reason_parts.append(shed_reason)
-        thermal_reason_parts.append(shed_reason)
-    else:
-        if battery_discharge_w >= thermal_shed_discharge_w and not inputs.any_solar_owned_heat_load_on:
-            reason_parts.append(
-                f"thermal_should_shed=false: battery discharging {battery_discharge_w:.0f}W >= threshold {thermal_shed_discharge_w:.0f}W, "
-                "but no owned thermal loads and unowned shedding disabled"
-            )
-        else:
-            reason_parts.append(f"thermal_should_shed=false: battery charge {battery_charge_w:.0f}W, forecast_full_override={forecast_override}")
-    if thermal_should_emergency_shed and not shed_blocked_no_loads:
-        proposed_actions.append("emergency_shed_all_heat_loads")
-        reason_parts.append(
-            f"thermal_should_emergency_shed=true: discharge {battery_discharge_w:.0f}W >= {settings.thermal_emergency_shed_w:.0f}W"
-        )
-    if overnight_protection_required:
-        proposed_actions.append("overnight_shed_nonessential_heat")
-        reason_parts.append(
-            f"overnight_protection_required=true: projected SOC 07:00 {projected_soc_07:.1f}% < morning target {morning_start_soc_target:.0f}% + margin {settings.overnight_dining_soc_margin:.0f}%"
-        )
-    if bedroom_heat_taper_recommended:
-        proposed_actions.append("taper_bedroom_heat")
-        reason_parts.append(f"bedroom_heat_taper_recommended=true: target {settings.overnight_bedroom_taper_target_temp:.1f}C")
+        thermal_reason = export_soak_reason
+    thermal_reason_parts.append(thermal_reason)
+    reason_parts.append(thermal_reason)
+    if thermal_action == "add_one":
+        proposed_actions.append("add_one_curtailment_load")
+    elif thermal_should_shed:
+        proposed_actions.append("stop_curtailment_load")
+    elif pv_load_test_recommended and not settings.pv_load_test_control_enabled:
+        proposed_actions.append("curtailment_soak_recommended")
     if bedroom_night_heating_should_disarm:
         proposed_actions.append("disarm_bedroom_night_heating")
         reason_parts.append(bedroom_night_heating_reason)
     elif bedroom_night_heating_active:
         proposed_actions.append("hold_bedroom_night_heating")
         reason_parts.append(bedroom_night_heating_reason)
-    if thermal_rotation_recommended:
-        proposed_actions.append("rotate_heat_load")
-        proposed_actions.append("rotate_thermal_load")
-        reason_parts.append(
-            f"rotation_recommended=true: {thermal_load_to_shed} satisfied/tapering, {thermal_load_to_add} needs {thermal_mode}"
-        )
     if grid_charge_required:
         proposed_actions.append("enable_grid_charge")
         reason_parts.append(
@@ -2500,6 +2656,8 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         ev_decision_reason=ev_reason,
         ev_expected_action=ev_action,
         ev_detected_power_w=ev_detected_power_w,
+        ev_active_target_soc=ev_active_target_soc,
+        ev_soc_cutoff_reached=ev_soc_cutoff_reached,
         pre_peak_preserve_required=pre_peak_preserve_required,
         control_blocked=control_blocked,
         expected_action=expected_action,
@@ -2537,6 +2695,14 @@ def decide(inputs: EnergyManagerInputs, settings: EnergyManagerSettings | None =
         cooling_raw_required_fan_pct=cooling.raw_required_pct,
         cooling_recommended_fan_pct=cooling.recommended_pct,
         cooling_reason=cooling.reason,
+        cooling_load_regime=cooling_load_regime(inputs),
+        cooling_calibration_state=cooling_calibration_state(inputs, cooling, settings),
+        cooling_fan_healthy=None if inputs.cooling_fan_healthy is None else not cooling_fan_failed,
+        cooling_fan_rpm=inputs.cooling_fan_rpm,
+        cooling_protection_condition_minutes=round(inputs.cooling_protection_condition_minutes, 1),
+        cooling_inverter_protection_required=cooling_protection_required,
+        cooling_inverter_protection_active=inputs.cooling_inverter_protection_active or cooling_protection_required,
+        cooling_protection_reason=cooling_protection_reason,
     )
 
 

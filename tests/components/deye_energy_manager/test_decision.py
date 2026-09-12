@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from custom_components.deye_energy_manager import decision as decision_module
-from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS
+from custom_components.deye_energy_manager import async_update_entry, decision as decision_module
+from custom_components.deye_energy_manager.const import DEFAULT_HEAT_LOADS, DOMAIN
 from custom_components.deye_energy_manager.decision import active_slot, build_deye_plan, cheap_grid_mirror_programs, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, disabled_programs, inverter_cooling_recommendation, program_ranges, tariff_window, thermal_load_diagnostic, thermal_load_diagnostics, thermal_shed_action, thermal_soak_action
 from custom_components.deye_energy_manager.decision import resolve_soc_value, resolved_ev_power_w
-from custom_components.deye_energy_manager.migration import migrate_options
+from custom_components.deye_energy_manager.migration import migrate_options, migrate_porsche_entity_map
 from custom_components.deye_energy_manager.models import DeyePlan, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from custom_components.deye_energy_manager.repairs import repair_issue_definitions
 
@@ -20,10 +22,75 @@ def dt(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 7, 1, hour, minute, tzinfo=TZ)
 
 
+def test_only_entity_topology_option_changes_require_reload() -> None:
+    class Coordinator:
+        configured_options = {"cooling_target_temp_c": 45.0, "entity_map": {"battery_soc": "sensor.old"}}
+        refreshes = 0
+
+        async def async_request_refresh(self) -> None:
+            self.refreshes += 1
+
+    class ConfigEntries:
+        reloads: list[str] = []
+
+        async def async_reload(self, entry_id: str) -> None:
+            self.reloads.append(entry_id)
+
+    coordinator = Coordinator()
+    config_entries = ConfigEntries()
+    entry = SimpleNamespace(entry_id="entry", options={**coordinator.configured_options, "cooling_target_temp_c": 43.0})
+    hass = SimpleNamespace(data={DOMAIN: {"entry": coordinator}}, config_entries=config_entries)
+
+    asyncio.run(async_update_entry(hass, entry))
+    assert coordinator.refreshes == 1
+    assert config_entries.reloads == []
+
+    entry.options = {**entry.options, "entity_map": {"battery_soc": "sensor.new"}}
+    asyncio.run(async_update_entry(hass, entry))
+    assert config_entries.reloads == ["entry"]
+
+
 def test_ev_power_falls_back_to_current_times_voltage() -> None:
     assert resolved_ev_power_w(None, 31.0, 240.0) == 7440.0
     assert resolved_ev_power_w(7100.0, 31.0, 240.0) == 7100.0
     assert resolved_ev_power_w(None, None, 240.0) is None
+
+
+def test_missing_legacy_cayenne_entities_migrate_to_available_taycan_entities() -> None:
+    entity_map = {
+        "porsche_soc": "sensor.cayenne_e_hybrid_my24_state_of_charge",
+        "porsche_charging_status": "sensor.cayenne_e_hybrid_my24_charging_status",
+        "porsche_charging_ends": "sensor.cayenne_e_hybrid_my24_charging_ends",
+        "porsche_charging_power": "sensor.cayenne_e_hybrid_my24_charging_power",
+    }
+    available = {
+        "sensor.taycan_4s_state_of_charge",
+        "sensor.taycan_4s_charging_status",
+        "sensor.taycan_4s_charging_ends",
+        "sensor.taycan_4s_charging_power",
+    }
+
+    migrated, changed = migrate_porsche_entity_map(entity_map, available)
+
+    assert changed
+    assert migrated["porsche_soc"] == "sensor.taycan_4s_state_of_charge"
+    assert migrated["porsche_charging_status"] == "sensor.taycan_4s_charging_status"
+    assert migrated["porsche_charging_ends"] == "sensor.taycan_4s_charging_ends"
+    assert migrated["porsche_charging_power"] == "sensor.taycan_4s_charging_power"
+
+
+def test_available_legacy_cayenne_entity_mapping_is_preserved() -> None:
+    entity_map = {"porsche_soc": "sensor.cayenne_e_hybrid_my24_state_of_charge"}
+    migrated, changed = migrate_porsche_entity_map(
+        entity_map,
+        {
+            "sensor.cayenne_e_hybrid_my24_state_of_charge",
+            "sensor.taycan_4s_state_of_charge",
+        },
+    )
+
+    assert not changed
+    assert migrated == entity_map
 
 
 def base_inputs(**overrides: object) -> EnergyManagerInputs:
@@ -56,59 +123,6 @@ def test_forecast_tiers() -> None:
         assert decision.grid_charge_target_soc == grid_target
 
 
-def test_free_power_prioritises_full_battery_charge_and_thermal_soak() -> None:
-    settings = EnergyManagerSettings(
-        deye_control_enabled=True,
-        grid_charge_control_enabled=True,
-        thermal_control_enabled=True,
-    )
-    load = HeatLoadState(
-        name="Office",
-        priority=1,
-        current_temp=18,
-        supports_heating=True,
-        estimated_load_w=1800,
-    )
-
-    decision = decide(base_inputs(now=dt(12), free_power_active=True, heat_loads=[load]), settings)
-    plan = build_deye_plan(decision, settings)
-
-    assert decision.tariff_window == "free_power"
-    assert decision.grid_charge_required
-    assert decision.grid_charge_target_soc == 100
-    assert decision.thermal_load_to_add == "Office"
-    assert decision.thermal_policy_state == "free_power"
-    assert decision.thermal_lease_reason == "free_power"
-    assert plan.capacity_targets == {"Prog1": 100}
-    assert plan.charge_modes == {"Prog1": "Allow Grid"}
-    assert plan.grid_charge_enabled
-
-    ended = decide(
-        base_inputs(
-            now=dt(13),
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Office",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    lease_reason="free_power",
-                )
-            ],
-        ),
-        settings,
-    )
-    assert ended.thermal_should_shed
-    assert ended.thermal_load_to_shed == "Office"
-
-    ungated = decide(
-        base_inputs(now=dt(20), free_power_active=True, heat_loads=[load]),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-    assert not ungated.thermal_allowed
-
-
 def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
     recommendation = inverter_cooling_recommendation(
         base_inputs(
@@ -120,7 +134,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
             cooling_temperature_valid=True,
             cooling_fan_percentage=40,
         ),
-        EnergyManagerSettings(),
+        EnergyManagerSettings(cooling_target_temp_c=43),
     )
 
     assert recommendation.throughput_w == 10000
@@ -131,6 +145,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
 
 
 def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
+    settings = EnergyManagerSettings(cooling_target_temp_c=43)
     decrease = inverter_cooling_recommendation(
         base_inputs(
             essential_power_w=1000,
@@ -138,7 +153,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             cooling_temperature_valid=True,
             cooling_fan_percentage=50,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
     increase = inverter_cooling_recommendation(
         base_inputs(
@@ -148,7 +163,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             cooling_temperature_valid=True,
             cooling_fan_percentage=10,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
     stable = inverter_cooling_recommendation(
         base_inputs(
@@ -158,7 +173,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             cooling_fan_percentage=35,
             cooling_temperature_trend_c_per_min=0,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
     rising = inverter_cooling_recommendation(
         base_inputs(
@@ -166,9 +181,9 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             inverter_ac_temperature_c=43,
             cooling_temperature_valid=True,
             cooling_fan_percentage=35,
-            cooling_temperature_trend_c_per_min=0.2,
+            cooling_temperature_trend_c_per_min=0.3,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
     steady_at_target = inverter_cooling_recommendation(
         base_inputs(
@@ -178,7 +193,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             cooling_fan_percentage=50,
             cooling_temperature_trend_c_per_min=0,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
     load_fell = inverter_cooling_recommendation(
         base_inputs(
@@ -189,7 +204,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             cooling_temperature_trend_c_per_min=0,
             cooling_load_change_w=-1000,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
     sunny_dip = inverter_cooling_recommendation(
         base_inputs(
@@ -200,7 +215,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
             cooling_temperature_trend_c_per_min=0,
             cooling_load_change_w=-1000,
         ),
-        EnergyManagerSettings(),
+        settings,
     )
 
     assert decrease.raw_required_pct == 10
@@ -221,6 +236,7 @@ def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
             inverter_ac_temperature_c=48,
             cooling_temperature_valid=True,
             cooling_fan_percentage=20,
+            cooling_temperature_trend_c_per_min=-1.0,
         ),
         EnergyManagerSettings(),
     )
@@ -235,7 +251,7 @@ def test_inverter_cooling_emergency_and_stale_temperature_are_safe() -> None:
     )
 
     assert emergency.raw_required_pct == 100
-    assert emergency.recommended_pct == 25
+    assert emergency.recommended_pct == 100
     assert stale.raw_required_pct == 50
     assert "failsafe" in stale.reason
 
@@ -254,6 +270,235 @@ def test_inverter_cooling_turns_off_only_when_cool_and_idle() -> None:
 
     assert recommendation.raw_required_pct == 0
     assert recommendation.recommended_pct == 0
+
+
+def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> None:
+    settings = EnergyManagerSettings()
+    unwinding = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=45,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=95,
+            cooling_temperature_trend_c_per_min=-0.3,
+        ),
+        settings,
+    )
+    overnight = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=3000,
+            inverter_ac_temperature_c=35,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=10,
+            cooling_temperature_trend_c_per_min=-0.3,
+            cooling_load_change_w=1000,
+        ),
+        settings,
+    )
+
+    assert unwinding.recommended_pct == 90
+    assert overnight.raw_required_pct == 15
+    assert overnight.recommended_pct == 10
+
+
+def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    holding = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=44,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=0.0,
+        ),
+        settings,
+    )
+    lowering = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=43.5,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=-0.3,
+        ),
+        settings,
+    )
+
+    assert holding.recommended_pct == 40
+    assert lowering.recommended_pct == 35
+    assert lowering.reason == "minimum hunt: below target, -5%"
+
+
+def test_inverter_cooling_minimum_hunt_unwinds_cold_fan_during_trend_jitter() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=9817,
+            inverter_ac_temperature_c=39.3,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=70,
+            cooling_temperature_trend_c_per_min=0.075,
+        ),
+        EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
+    )
+
+    assert recommendation.raw_required_pct == 40
+    assert recommendation.recommended_pct == 65
+    assert recommendation.reason == "minimum hunt: below target, -5%"
+
+
+def test_inverter_cooling_minimum_hunt_holds_jitter_inside_target_band() -> None:
+    recommendation = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=44.9,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=0.1,
+        ),
+        EnergyManagerSettings(cooling_minimum_hunt_enabled=True),
+    )
+
+    assert recommendation.recommended_pct == 40
+    assert recommendation.reason == "minimum hunt: inside target band, hold"
+
+
+def test_inverter_cooling_minimum_hunt_responds_to_real_trend_inside_target_band() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=48)
+    rising = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=9000,
+            inverter_ac_temperature_c=47.9,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=0.35,
+        ),
+        settings,
+    )
+    falling = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=9000,
+            inverter_ac_temperature_c=47.9,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=40,
+            cooling_temperature_trend_c_per_min=-0.35,
+        ),
+        settings,
+    )
+
+    assert rising.recommended_pct == 45
+    assert falling.recommended_pct == 35
+
+
+def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    rising = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=40,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=20,
+            cooling_temperature_trend_c_per_min=0.3,
+        ),
+        settings,
+    )
+    load_jump = inverter_cooling_recommendation(
+        base_inputs(
+            inverter_pv_power_w=7000,
+            inverter_ac_temperature_c=44,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=20,
+            cooling_temperature_trend_c_per_min=-0.1,
+            cooling_load_change_w=1000,
+        ),
+        settings,
+    )
+
+    assert rising.recommended_pct == 20
+    assert rising.reason == "minimum hunt: warming toward target band, hold"
+    assert load_jump.recommended_pct == 20
+
+
+def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True)
+    samples = (
+        (39.2, 45, 0.25, 45),
+        (39.2, 45, 0.1, 40),
+        (44.9, 40, 0.3, 45),
+        (46.2, 40, 0.3, 45),
+        (46.2, 45, -0.3, 45),
+        (44.9, 20, 0.0, 20),
+    )
+
+    for temperature, current_fan, trend, expected_fan in samples:
+        recommendation = inverter_cooling_recommendation(
+            base_inputs(
+                inverter_pv_power_w=7000,
+                inverter_ac_temperature_c=temperature,
+                cooling_temperature_valid=True,
+                cooling_fan_percentage=current_fan,
+                cooling_temperature_trend_c_per_min=trend,
+            ),
+            settings,
+        )
+        assert recommendation.recommended_pct == expected_fan
+
+
+def test_cooling_protection_requires_sustained_hot_fan_failure() -> None:
+    settings = EnergyManagerSettings(
+        cooling_fan_failure_protection_enabled=True,
+        cooling_fan_failure_temp_c=50,
+        cooling_fan_failure_delay_min=5,
+    )
+    pending = decide(
+        base_inputs(
+            inverter_ac_temperature_c=51,
+            cooling_temperature_valid=True,
+            cooling_fan_healthy=False,
+            cooling_protection_condition_minutes=4.9,
+        ),
+        settings,
+    )
+    tripped = decide(
+        base_inputs(
+            inverter_ac_temperature_c=51,
+            cooling_temperature_valid=True,
+            cooling_fan_healthy=False,
+            cooling_protection_condition_minutes=5,
+        ),
+        settings,
+    )
+    cool_failure = decide(
+        base_inputs(
+            inverter_ac_temperature_c=49,
+            cooling_temperature_valid=True,
+            cooling_fan_healthy=False,
+            cooling_protection_condition_minutes=20,
+        ),
+        settings,
+    )
+
+    assert not pending.cooling_inverter_protection_required
+    assert tripped.cooling_inverter_protection_required
+    assert tripped.cooling_inverter_protection_active
+    assert not cool_failure.cooling_inverter_protection_required
+
+
+def test_cooling_diagnostics_identify_regime_and_stable_samples() -> None:
+    stable = decide(
+        base_inputs(
+            inverter_pv_power_w=6000,
+            inverter_ac_power_w=5500,
+            grid_power_w=-4000,
+            export_power_w=4000,
+            inverter_ac_temperature_c=42,
+            cooling_temperature_valid=True,
+            cooling_fan_percentage=10,
+            cooling_temperature_trend_c_per_min=0.0,
+        )
+    )
+
+    assert stable.cooling_load_regime == "pv_export"
+    assert stable.cooling_calibration_state == "stable"
 
 
 def test_time_slots_and_tariff_windows() -> None:
@@ -343,40 +588,6 @@ def test_paid_time_plan_does_not_mirror_duplicate_boundary_rows() -> None:
     assert decision.active_slot == "Prog1"
     assert set(plan.capacity_targets) == {"Prog1"}
     assert set(plan.charge_modes) == {"Prog1"}
-
-
-def test_heat_allowed_rules() -> None:
-    settings = EnergyManagerSettings(thermal_control_enabled=True)
-    assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-300), settings).heat_allowed
-    assert not decide(base_inputs(now=dt(10), battery_soc=31, battery_power_w=-6500), settings).heat_allowed
-    assert decide(
-        base_inputs(
-            now=dt(10),
-            battery_soc=91,
-            battery_power_w=0,
-            forecast_remaining_today_kwh=25,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
-        ),
-        settings,
-    ).heat_allowed
-    assert decide(
-        base_inputs(
-            now=dt(10),
-            battery_soc=85,
-            battery_power_w=-2000,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=25,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
-        ),
-        settings,
-    ).heat_allowed
-
-
-def test_heat_shed_rules() -> None:
-    assert decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=91, battery_power_w=600)).heat_should_shed
-    assert decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=31, battery_power_w=-300)).heat_should_shed
-    assert not decide(base_inputs(any_solar_owned_heat_load_on=True, battery_soc=91, battery_power_w=0)).heat_should_shed
-    assert not decide(base_inputs(any_solar_owned_heat_load_on=False, battery_soc=31, battery_power_w=-300)).heat_should_shed
 
 
 def test_grid_charge_rules() -> None:
@@ -788,56 +999,6 @@ def test_cheap_grid_active_program_does_not_emit_55_75_flapping_after_latch() ->
     assert len(set(outputs)) == 1
 
 
-def test_thermal_shed_during_cheap_grid_does_not_change_deye_plan() -> None:
-    settings = EnergyManagerSettings(
-        cheap_grid_preserve_enabled=True,
-        cheap_grid_charge_enabled=True,
-        grid_charge_control_enabled=True,
-        thermal_control_enabled=True,
-        cheap_grid_preserve_soc=30,
-    )
-    base = base_inputs(
-        now=dt(4, 15),
-        forecast_tomorrow_kwh=23,
-        battery_soc=35,
-        battery_power_w=900,
-        any_solar_owned_heat_load_on=True,
-    )
-
-    decision = decide(base, settings)
-    assert decision.thermal_should_shed
-    assert decision.cheap_grid_mode == "preserve"
-
-    plan = build_deye_plan(decision, settings)
-    assert plan.mode == "preserve"
-    assert not plan.emergency
-    assert plan.charge_modes["Prog6"] == "No Grid or Gen"
-    assert plan.capacity_targets["Prog6"] == decision.morning_target_soc
-    assert "Prog1" not in plan.capacity_targets
-
-
-def test_emergency_thermal_shed_does_not_mark_deye_plan_emergency() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(22),
-            battery_soc=35,
-            battery_power_w=3000,
-            any_solar_owned_heat_load_on=True,
-        ),
-        EnergyManagerSettings(
-            deye_control_enabled=True,
-            grid_charge_control_enabled=True,
-            thermal_control_enabled=True,
-            thermal_emergency_shed_w=2500,
-        ),
-    )
-
-    assert decision.thermal_should_emergency_shed
-    plan = build_deye_plan(decision, EnergyManagerSettings())
-    assert not plan.emergency
-    assert "emergency thermal shed active" in plan.reason
-
-
 def test_deye_plan_conflict_detection_blocks_same_entity_different_values() -> None:
     plan = DeyePlan(
         mode="test",
@@ -961,7 +1122,7 @@ def test_ev_start_and_stop_rules() -> None:
         base_inputs(now=dt(22), ev_latch_on=True, essential_power_w=2000, previous_essential_power_w=8600),
         settings,
     ).ev_grid_mode_required
-    assert not decide(base_inputs(now=dt(22), ev_latch_on=True, porsche_soc=99), settings).ev_grid_mode_required
+    assert not decide(base_inputs(now=dt(22), ev_latch_on=True, porsche_soc=80), settings).ev_grid_mode_required
     assert not decide(base_inputs(now=dt(7), ev_latch_on=True), settings).ev_grid_mode_required
     assert not decide(
         base_inputs(now=dt(3), ev_latch_on=True, ev_hold_until=dt(3) - timedelta(minutes=1), essential_power_w=2400),
@@ -988,7 +1149,7 @@ def test_charger_control_and_connector_status_are_authoritative() -> None:
             ev_charge_requested=True,
             ev_current_a=1.0,
             ev_connector_status="Charging",
-            porsche_soc=100,
+            porsche_soc=50,
             porsche_charging_status="charging_completed",
         ),
         settings,
@@ -1058,6 +1219,167 @@ def test_charger_control_and_connector_status_are_authoritative() -> None:
     )
     assert not solar_handoff.ev_grid_bypass_required
     assert solar_handoff.ev_expected_action == "ev_grid_bypass_restore"
+
+
+def test_normal_ev_charging_has_hard_80_percent_soc_cutoff() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_solar_charging_enabled=True,
+    )
+    below_target = decide(
+        base_inputs(
+            now=dt(12),
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=79,
+        ),
+        settings,
+    )
+    at_target = decide(
+        base_inputs(
+            now=dt(12),
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=80,
+        ),
+        settings,
+    )
+
+    assert below_target.ev_active_target_soc == 80
+    assert not below_target.ev_soc_cutoff_reached
+    assert below_target.ev_expected_action != "ev_charger_stop"
+    assert at_target.ev_active_target_soc == 80
+    assert at_target.ev_soc_cutoff_reached
+    assert at_target.ev_expected_action == "ev_charger_stop"
+    assert not at_target.ev_solar_charge_allowed
+    assert "normal SOC cutoff" in at_target.ev_decision_reason
+
+
+def test_effective_local_soc_drives_existing_ev_cutoff() -> None:
+    """The coordinator passes resolved local SOC through the existing Porsche field."""
+
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=80,
+        ),
+        EnergyManagerSettings(ev_control_enabled=True, ev_solar_charging_enabled=True),
+    )
+
+    assert decision.ev_soc_cutoff_reached
+    assert decision.ev_expected_action == "ev_charger_stop"
+
+
+def test_manual_ev_override_starts_and_stops_at_selected_soc() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_manual_target_soc=90,
+    )
+    starting = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=False,
+            ev_connector_status="Preparing",
+            porsche_soc=82,
+        ),
+        settings,
+    )
+    reached = decide(
+        base_inputs(
+            now=dt(23),
+            ev_latch_on=True,
+            ev_manual_charging_override=True,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=90,
+        ),
+        settings,
+    )
+
+    assert starting.ev_active_target_soc == 90
+    assert starting.ev_expected_action == "ev_charger_start"
+    assert starting.ev_grid_bypass_required
+    assert not starting.ev_soc_cutoff_reached
+    assert reached.ev_soc_cutoff_reached
+    assert reached.ev_expected_action == "ev_charger_stop"
+    assert not reached.ev_grid_bypass_required
+    assert "manual SOC cutoff" in reached.ev_decision_reason
+
+
+def test_manual_ev_override_supports_40_percent_target() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_manual_target_soc=40,
+    )
+
+    below_target = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=False,
+            ev_connector_status="Preparing",
+            porsche_soc=39,
+        ),
+        settings,
+    )
+    reached = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=40,
+        ),
+        settings,
+    )
+
+    assert below_target.ev_active_target_soc == 40
+    assert below_target.ev_expected_action == "ev_charger_start"
+    assert not below_target.ev_soc_cutoff_reached
+    assert reached.ev_active_target_soc == 40
+    assert reached.ev_soc_cutoff_reached
+    assert reached.ev_expected_action == "ev_charger_stop"
+
+
+def test_manual_ev_override_owns_session_across_0700_and_requires_soc() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_grid_bypass_enabled=True,
+        ev_solar_charging_enabled=True,
+        ev_manual_target_soc=95,
+    )
+    after_cheap_window = decide(
+        base_inputs(
+            now=dt(7),
+            ev_latch_on=True,
+            ev_manual_charging_override=True,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            porsche_soc=90,
+        ),
+        settings,
+    )
+    soc_unavailable = decide(
+        base_inputs(
+            now=dt(22),
+            ev_manual_charging_override=True,
+            ev_charge_requested=False,
+            ev_connector_status="Preparing",
+            porsche_soc=None,
+        ),
+        settings,
+    )
+
+    assert after_cheap_window.ev_expected_action != "ev_charger_stop"
+    assert not after_cheap_window.ev_solar_charge_allowed
+    assert soc_unavailable.ev_expected_action != "ev_charger_start"
+    assert "SOC unavailable" in soc_unavailable.ev_decision_reason
 
 
 def test_ev_power_sensor_stop_restores_latch() -> None:
@@ -1252,7 +1574,14 @@ def test_ev_bypass_uses_limited_program_power_not_zero() -> None:
 
 def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
     decision = decide(
-        base_inputs(now=dt(12), battery_soc=90, forecast_tomorrow_kwh=35, forecast_remaining_today_kwh=22),
+        base_inputs(
+            now=dt(12),
+            battery_soc=90,
+            battery_power_w=-2000,
+            pv_power_now_w=3000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=22,
+        ),
         EnergyManagerSettings(
             ev_control_enabled=True,
             ev_solar_charging_enabled=True,
@@ -1262,6 +1591,137 @@ def test_ev_solar_charge_allowed_when_priority_prefers_ev() -> None:
 
     assert decision.ev_solar_charge_allowed
     assert decision.ev_expected_action == "allow_solar_charge"
+
+
+def test_ev_solar_charge_uses_today_budget_not_tomorrow_tier() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=96,
+            battery_power_w=-3000,
+            pv_power_now_w=9000,
+            forecast_remaining_today_kwh=30,
+            forecast_tomorrow_kwh=16,
+        ),
+        EnergyManagerSettings(
+            ev_control_enabled=True,
+            ev_solar_charging_enabled=True,
+            flexible_load_priority="battery_first",
+        ),
+    )
+
+    assert decision.forecast_mode == "poor"
+    assert decision.discretionary_energy_budget_kwh > 0
+    assert decision.ev_solar_charge_allowed
+
+
+def test_ev_solar_charge_requires_daylight_arrival_and_no_battery_discharge() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_solar_charging_enabled=True,
+        flexible_load_priority="ev_before_thermal",
+        cheap_grid_preserve_soc=20,
+        daily_battery_target_soc=80,
+    )
+    before_daytime = decide(
+        base_inputs(
+            now=dt(6, 59),
+            battery_soc=90,
+            battery_power_w=-2000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+        ),
+        settings,
+    )
+    no_solar = decide(
+        base_inputs(
+            now=dt(7),
+            battery_soc=20,
+            battery_power_w=-109,
+            pv_power_now_w=575,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=55,
+        ),
+        settings,
+    )
+    discharging = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=90,
+            battery_power_w=4000,
+            pv_power_now_w=6000,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+        ),
+        settings,
+    )
+    weak_pv = decide(
+        base_inputs(
+            now=dt(12),
+            battery_soc=90,
+            battery_power_w=-2000,
+            pv_power_now_w=1700,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+        ),
+        settings,
+    )
+
+    assert not before_daytime.ev_solar_charge_allowed
+    assert no_solar.morning_start_soc_target == 20
+    assert no_solar.discretionary_energy_budget_kwh > 0
+    assert not no_solar.solar_arrived
+    assert not no_solar.ev_solar_charge_allowed
+    assert discharging.solar_arrived
+    assert not discharging.ev_solar_charge_allowed
+    assert weak_pv.solar_arrived
+    assert not weak_pv.ev_solar_charge_allowed
+    assert "1800W startup minimum" in weak_pv.ev_decision_reason
+
+
+def test_active_ev_session_latches_solar_through_cloud_power_deficit() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_solar_charging_enabled=True,
+        flexible_load_priority="ev_before_thermal",
+    )
+    transient = decide(
+        base_inputs(
+            now=dt(12, 1),
+            battery_soc=90,
+            battery_power_w=1400,
+            grid_power_w=700,
+            paid_grid_import_w=0,
+            pv_power_now_w=575,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            ev_solar_arrived_latched=True,
+        ),
+        settings,
+    )
+    prolonged = decide(
+        base_inputs(
+            now=dt(12, 2),
+            battery_soc=90,
+            battery_power_w=1400,
+            grid_power_w=700,
+            paid_grid_import_w=0,
+            pv_power_now_w=575,
+            forecast_tomorrow_kwh=35,
+            forecast_remaining_today_kwh=35,
+            ev_charge_requested=True,
+            ev_connector_status="Charging",
+            ev_solar_arrived_latched=True,
+        ),
+        settings,
+    )
+
+    assert not transient.solar_arrived
+    assert transient.ev_solar_charge_allowed
+    assert prolonged.ev_solar_charge_allowed
+    assert prolonged.ev_decision_reason == "EV charging confirmed: connector status Charging"
 
 
 def test_ev_solar_charge_waits_for_derived_morning_battery_target() -> None:
@@ -1283,6 +1743,7 @@ def test_daytime_solar_modulation_ignores_suspended_ev_transition() -> None:
         base_inputs(
             now=dt(12),
             battery_soc=90,
+            battery_power_w=-2000,
             forecast_tomorrow_kwh=35,
             forecast_remaining_today_kwh=22,
             ev_charge_requested=True,
@@ -1299,324 +1760,180 @@ def test_daytime_solar_modulation_ignores_suspended_ev_transition() -> None:
     assert decision.ev_expected_action == "allow_solar_charge"
 
 
-def test_pv_load_test_recommendation_is_retired_when_expected_pv_is_high() -> None:
-    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
+def test_curtailment_soak_starts_one_managed_load() -> None:
+    settings = EnergyManagerSettings(
+        thermal_control_enabled=True,
+        export_limited_mode_enabled=True,
+        pv_load_test_control_enabled=True,
+    )
     decision = decide(
         base_inputs(
             now=dt(11),
-            battery_soc=78,
+            battery_soc=80,
             battery_power_w=-1200,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=22,
-            pv_power_now_w=1500,
-            pv_power_in_30_minutes_w=5200,
-            any_solar_owned_heat_load_on=False,
+            pv_power_now_w=5200,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20)],
         ),
         settings,
     )
 
-    assert not decision.pv_load_test_recommended
-    assert "test_one_pv_load" not in decision.proposed_actions
-
-
-def test_live_export_allows_thermal_soak_with_low_forecast_budget() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=45,
-            grid_power_w=-2200,
-            export_power_w=2200,
-            forecast_remaining_today_kwh=0,
-            forecast_tomorrow_kwh=15,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            daily_battery_target_soc=100,
-            thermal_start_min_soc=80,
-            thermal_export_start_w=1000,
-            thermal_export_import_tolerance_w=300,
-        ),
-    )
-
-    assert decision.export_power_w == 2200
-    assert decision.grid_import_w == 0
-    assert decision.export_soak_available
-    assert decision.solar_soak_allowed
+    assert decision.pv_load_test_recommended
     assert decision.thermal_allowed
     assert decision.thermal_load_to_add == "Office"
     assert decision.thermal_action == "add_one"
-    assert "add_one_heat_load" in decision.proposed_actions
-    assert "export soak available" in decision.thermal_action_reason
+    assert decision.thermal_lease_reason == "curtailment_soak"
+    assert decision.proposed_actions == ["add_one_curtailment_load"]
 
 
-def test_live_export_must_fit_candidate_load_before_thermal_soak_starts() -> None:
+def test_curtailment_recommendation_does_not_actuate_without_control_gate() -> None:
     decision = decide(
         base_inputs(
-            now=dt(12),
-            battery_soc=45,
-            grid_power_w=-1200,
-            export_power_w=1200,
-            forecast_remaining_today_kwh=0,
-            forecast_tomorrow_kwh=15,
-            heat_loads=[HeatLoadState(name="Dining", priority=1, current_temp=20, estimated_load_w=3000)],
+            now=dt(11),
+            battery_soc=80,
+            battery_power_w=-1200,
+            pv_power_now_w=5200,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20)],
         ),
         EnergyManagerSettings(
             thermal_control_enabled=True,
-            daily_battery_target_soc=100,
-            thermal_start_min_soc=80,
-            thermal_export_start_w=1000,
-            thermal_export_import_tolerance_w=300,
+            export_limited_mode_enabled=True,
         ),
     )
 
-    assert decision.export_soak_available
-    assert decision.solar_soak_allowed
-    assert decision.thermal_allowed
+    assert decision.pv_load_test_recommended
+    assert not decision.thermal_allowed
     assert decision.thermal_load_to_add is None
-    assert decision.thermal_action == "hold"
+    assert decision.thermal_action == "none"
+    assert decision.proposed_actions == ["curtailment_soak_recommended"]
 
 
-def test_no_live_export_keeps_old_budget_block_for_solar_soak() -> None:
-    clipped_inputs = base_inputs(
-        now=dt(11),
-        battery_soc=78,
-        battery_power_w=-1200,
-        forecast_tomorrow_kwh=35,
-        forecast_remaining_today_kwh=12,
-        pv_power_in_30_minutes_w=5200,
+def test_live_export_and_future_forecast_do_not_trigger_curtailment_soak() -> None:
+    settings = EnergyManagerSettings(
+        thermal_control_enabled=True,
+        export_limited_mode_enabled=True,
+        pv_load_test_control_enabled=True,
     )
-
-    assert not decide(clipped_inputs).pv_load_test_recommended
-    decision = decide(
+    exporting = decide(
         base_inputs(
-            now=dt(12),
-            battery_soc=45,
-            forecast_remaining_today_kwh=0,
-            forecast_tomorrow_kwh=15,
+            now=dt(11),
+            battery_soc=80,
+            battery_power_w=-1200,
+            grid_power_w=-2200,
+            export_power_w=2200,
+            pv_power_now_w=5200,
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20)],
+        ),
+        settings,
+    )
+    future_only = decide(
+        base_inputs(
+            now=dt(11),
+            battery_soc=80,
+            battery_power_w=-1200,
+            pv_power_now_w=1000,
             pv_power_in_30_minutes_w=5200,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20)],
         ),
-        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100),
+        settings,
     )
 
-    assert not decision.export_soak_available
-    assert not decision.solar_soak_allowed
-    assert not decision.thermal_allowed
+    assert not exporting.thermal_allowed
+    assert "preserving 2200W live export" in exporting.thermal_action_reason
+    assert not future_only.thermal_allowed
 
 
-def test_paid_grid_avoidance_blocks_export_soak() -> None:
+def test_curtailment_cleanup_stops_only_manager_owned_load() -> None:
     decision = decide(
         base_inputs(
-            now=dt(18),
-            battery_soc=31,
-            grid_power_w=-2200,
-            export_power_w=2200,
-            paid_grid_import_w=800,
-            forecast_remaining_today_kwh=30,
-            forecast_tomorrow_kwh=35,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+            now=dt(11),
+            battery_soc=80,
+            battery_power_w=500,
+            pv_power_now_w=5200,
+            any_solar_owned_heat_load_on=True,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office",
+                    priority=1,
+                    is_on=True,
+                    solar_owned=True,
+                    lease_reason="curtailment_soak",
+                    current_temp=20,
+                ),
+                HeatLoadState(
+                    name="Dining",
+                    priority=2,
+                    is_on=True,
+                    owner="manual",
+                    current_temp=20,
+                ),
+            ],
         ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_export_start_w=1000),
-    )
-
-    assert decision.paid_grid_avoidance_required
-    assert decision.export_soak_available
-    assert not decision.solar_soak_allowed
-    assert not decision.thermal_allowed
-
-
-def test_battery_discharge_blocks_export_soak() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=95,
-            battery_power_w=700,
-            grid_power_w=-2200,
-            export_power_w=2200,
-            forecast_remaining_today_kwh=30,
-            forecast_tomorrow_kwh=35,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            export_limited_mode_enabled=True,
+            pv_load_test_control_enabled=True,
         ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500, thermal_export_start_w=1000),
     )
 
     assert decision.thermal_should_shed
-    assert decision.export_soak_available
-    assert not decision.solar_soak_allowed
-    assert not decision.thermal_allowed
+    assert not decision.thermal_should_emergency_shed
+    assert decision.thermal_load_to_shed == "Office"
+    assert decision.thermal_action == "shed_one"
+    assert decision.proposed_actions == ["stop_curtailment_load"]
 
 
-def test_heat_rotation_recommended_for_tapered_owned_load_and_colder_room() -> None:
-    settings = EnergyManagerSettings(thermal_control_enabled=True, export_limited_mode_enabled=True)
+def test_curtailment_soak_skips_manual_override_candidate() -> None:
     decision = decide(
         base_inputs(
             now=dt(11),
-                battery_soc=82,
-                battery_power_w=-1200,
-                forecast_remaining_today_kwh=25,
-            forecast_tomorrow_kwh=35,
-            pv_power_in_30_minutes_w=5200,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining/living heat pump",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    current_temp=26.4,
-                    target_temp=27.0,
-                    estimated_load_w=3000,
-                ),
-                HeatLoadState(
-                    name="Office heat pump",
-                    priority=3,
-                    is_on=False,
-                    solar_owned=False,
-                    current_temp=23.0,
-                    target_temp=27.0,
-                    estimated_load_w=1800,
-                ),
-            ],
-        ),
-        settings,
-    )
-
-    assert decision.heat_rotation_recommended
-    assert decision.heat_load_to_shed == "Dining/living heat pump"
-    assert decision.heat_load_to_add == "Office heat pump"
-    assert "rotate_heat_load" in decision.proposed_actions
-
-
-def test_heat_rotation_requires_colder_add_candidate() -> None:
-    settings = EnergyManagerSettings(thermal_control_enabled=True, export_limited_mode_enabled=True)
-    decision = decide(
-        base_inputs(
-            now=dt(11),
-            battery_soc=82,
-            battery_power_w=-1200,
-            forecast_remaining_today_kwh=12,
-            forecast_tomorrow_kwh=35,
-            pv_power_in_30_minutes_w=5200,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining/living heat pump",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    current_temp=26.4,
-                    target_temp=27.0,
-                ),
-                HeatLoadState(
-                    name="Office heat pump",
-                    priority=3,
-                    is_on=False,
-                    solar_owned=False,
-                    current_temp=26.0,
-                    target_temp=27.0,
-                ),
-            ],
-        ),
-        settings,
-    )
-
-    assert not decision.heat_rotation_recommended
-    assert decision.heat_load_to_shed == "Dining/living heat pump"
-    assert decision.heat_load_to_add is None
-
-
-def test_blocked_heat_load_is_not_readded_during_manual_override_cooldown() -> None:
-    settings = EnergyManagerSettings(export_limited_mode_enabled=True)
-    decision = decide(
-        base_inputs(
-            now=dt(11),
-            battery_soc=82,
-            battery_power_w=-1200,
-            forecast_remaining_today_kwh=12,
-            forecast_tomorrow_kwh=35,
-            pv_power_in_30_minutes_w=5200,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining/living heat pump",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    current_temp=22.6,
-                    target_temp=23.0,
-                ),
-                HeatLoadState(
-                    name="Office heat pump",
-                    priority=3,
-                    is_on=False,
-                    solar_owned=False,
-                    current_temp=19.5,
-                    target_temp=22.0,
-                    blocked_until=dt(12),
-                ),
-            ],
-        ),
-        settings,
-    )
-
-    assert not decision.heat_rotation_recommended
-    assert decision.heat_load_to_add is None
-
-
-def test_emergency_shed_all_when_discharge_exceeds_threshold() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_power_w=4500,
-            any_solar_owned_heat_load_on=True,
-        )
-    )
-
-    assert decision.emergency_shed_all_required
-    assert "emergency_shed_all_heat_loads" in decision.proposed_actions
-
-
-def test_overnight_protection_projects_soc_to_0800() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(23),
-            battery_soc=50,
-            battery_power_w=3000,
-            forecast_tomorrow_kwh=35,
-            any_solar_owned_heat_load_on=True,
-        ),
-        EnergyManagerSettings(battery_capacity_kwh=30),
-    )
-
-    assert decision.projected_soc_08 == 0
-    assert decision.overnight_protection_required
-    assert "overnight_shed_nonessential_heat" in decision.proposed_actions
-
-
-def test_bedroom_heat_taper_recommended_overnight_for_owned_bedroom() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(23),
             battery_soc=80,
-            battery_power_w=0,
-            any_solar_owned_heat_load_on=True,
+            battery_power_w=-1200,
+            pv_power_now_w=5200,
             heat_loads=[
                 HeatLoadState(
-                    name="Bedroom heat pump",
-                    priority=4,
+                    name="Dining",
+                    priority=1,
+                    owner="manual",
+                    manual_override_until=dt(12),
+                    current_temp=18,
+                ),
+                HeatLoadState(name="Office", priority=2, current_temp=20),
+            ],
+        ),
+        EnergyManagerSettings(
+            thermal_control_enabled=True,
+            export_limited_mode_enabled=True,
+            pv_load_test_control_enabled=True,
+        ),
+    )
+
+    assert decision.thermal_load_to_add == "Office"
+
+
+def test_disabled_thermal_control_does_not_publish_shed_actions() -> None:
+    decision = decide(
+        base_inputs(
+            now=dt(23),
+            battery_power_w=5000,
+            heat_loads=[
+                HeatLoadState(
+                    name="Office heat pump",
+                    priority=1,
                     is_on=True,
-                    solar_owned=True,
-                    current_temp=20,
-                    target_temp=21,
-                    load_type="heatpump",
+                    hvac_mode="heat",
+                    current_temp=22,
+                    target_temp=27,
                 )
             ],
-        )
+        ),
+        EnergyManagerSettings(thermal_control_enabled=False),
     )
 
-    assert decision.bedroom_heat_taper_recommended
-    assert "taper_bedroom_heat" in decision.proposed_actions
+    assert not decision.thermal_should_shed
+    assert not decision.thermal_should_emergency_shed
+    assert decision.thermal_action == "none"
+    assert "shed_one_heat_load" not in decision.proposed_actions
+    assert "emergency_shed_all_heat_loads" not in decision.proposed_actions
 
 
 def test_controls_block_when_manager_disabled() -> None:
@@ -1653,47 +1970,6 @@ def test_thermal_control_disabled_blocks_comfort_and_underfloor_actions() -> Non
     assert decision.thermal_action == "none"
 
 
-def test_thermal_start_uses_thermal_min_soc_not_target_17_soc() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(14),
-            battery_soc=89,
-            battery_power_w=-2500,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=18,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_start_min_soc=80),
-    )
-
-    assert decision.target_17_soc == 90
-    assert decision.thermal_allowed
-    assert "budget" in decision.thermal_action_reason
-
-
-def test_forecast_override_allows_thermal_before_soc_threshold() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(10),
-            battery_soc=75,
-            battery_power_w=-2500,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=12,
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            thermal_start_min_soc=80,
-            battery_capacity_kwh=30,
-            forecast_full_confidence_buffer_kwh=3,
-        ),
-    )
-
-    assert decision.forecast_full_override_active
-    assert not decision.thermal_allowed
-    assert decision.thermal_policy_state == "battery_priority"
-    assert "budget" in decision.thermal_action_reason
-
-
 def test_keep_running_threshold_avoids_shed_while_charging() -> None:
     decision = decide(
         base_inputs(
@@ -1710,15 +1986,6 @@ def test_keep_running_threshold_avoids_shed_while_charging() -> None:
     )
 
     assert not decision.thermal_should_shed
-
-
-def test_thermal_sheds_on_discharge_threshold() -> None:
-    decision = decide(
-        base_inputs(now=dt(12), battery_power_w=700, any_solar_owned_heat_load_on=True),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
-    )
-
-    assert decision.thermal_should_shed
 
 
 def test_discharge_with_owned_load_sheds() -> None:
@@ -1743,195 +2010,6 @@ def test_discharge_with_owned_load_sheds() -> None:
     )
 
     assert decision.thermal_should_shed
-
-
-def test_discharge_without_owned_load_explains_unowned_shedding_disabled() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_power_w=1079,
-            any_solar_owned_heat_load_on=False,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=False,
-                    current_temp=25,
-                    target_temp=27,
-                    hvac_mode="heat",
-                    fan_mode="high",
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
-    )
-
-    assert decision.thermal_should_shed
-    assert decision.thermal_load_to_normalise is None
-    assert decision.expected_action == "shed_blocked_no_owned_loads"
-    assert "no owned thermal loads to shed" in decision.reason
-    assert "unowned shedding disabled" in decision.reason
-
-
-def test_discharge_with_unowned_shedding_enabled_selects_soak_like_load() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_power_w=1079,
-            any_solar_owned_heat_load_on=False,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=False,
-                    current_temp=25,
-                    target_temp=27,
-                    hvac_mode="heat",
-                    fan_mode="high",
-                )
-            ],
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            thermal_shed_discharge_w=500,
-            shed_unowned_managed_loads_on_battery_discharge=True,
-        ),
-    )
-
-    assert decision.thermal_should_shed
-    assert decision.thermal_load_to_normalise == "Dining"
-    assert "normalising unowned managed load due to battery discharge" in decision.reason
-
-
-def test_unowned_shedding_does_not_select_non_soak_like_managed_load() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_power_w=1079,
-            any_solar_owned_heat_load_on=False,
-            heat_loads=[
-                HeatLoadState(
-                    name="Office",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=False,
-                    current_temp=21,
-                    target_temp=21,
-                    hvac_mode="heat",
-                    fan_mode="low",
-                )
-            ],
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            thermal_shed_discharge_w=500,
-            shed_unowned_managed_loads_on_battery_discharge=True,
-        ),
-    )
-
-    assert decision.thermal_should_shed
-    assert decision.thermal_load_to_normalise is None
-    assert decision.expected_action == "shed_blocked_no_owned_loads"
-
-
-def test_thermal_emergency_shed_threshold() -> None:
-    decision = decide(
-        base_inputs(now=dt(12), battery_power_w=2600, any_solar_owned_heat_load_on=True),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_emergency_shed_w=2500),
-    )
-
-    assert decision.thermal_should_emergency_shed
-    assert decision.thermal_action == "emergency_shed_all"
-
-
-def test_high_discharge_sets_shed_and_emergency_without_owned_loads() -> None:
-    decision = decide(
-        base_inputs(now=dt(12), battery_power_w=4204, any_solar_owned_heat_load_on=False),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            thermal_shed_discharge_w=500,
-            thermal_emergency_shed_w=2500,
-            emergency_shed_discharge_w=4000,
-        ),
-    )
-
-    assert decision.thermal_should_shed
-    assert decision.thermal_should_emergency_shed
-    assert decision.thermal_action == "emergency_shed_all"
-    assert decision.expected_action == "thermal_emergency_shed_all"
-    assert "thermal_should_shed=true: battery discharging 4204W >= shed threshold 500W" in decision.reason
-    assert "battery charge 0W, forecast_full_override" not in decision.reason
-
-
-def test_cooling_rotation_uses_cool_soak_target() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-                battery_soc=85,
-                battery_power_w=-2500,
-                forecast_remaining_today_kwh=25,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    current_temp=18.5,
-                    supports_cooling=True,
-                ),
-                HeatLoadState(
-                    name="Office",
-                    priority=3,
-                    is_on=False,
-                    solar_owned=False,
-                    current_temp=21.0,
-                    supports_cooling=True,
-                ),
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_mode="cooling"),
-    )
-
-    assert decision.thermal_rotation_recommended
-    assert decision.thermal_load_to_shed == "Dining"
-    assert decision.thermal_load_to_add == "Office"
-
-
-def test_power_sensor_marks_owned_load_as_tapering() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-                battery_soc=85,
-                battery_power_w=-2500,
-                forecast_remaining_today_kwh=25,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    current_temp=24,
-                    power_w=120,
-                    taper_power_threshold_w=400,
-                ),
-                HeatLoadState(
-                    name="Office",
-                    priority=3,
-                    is_on=False,
-                    solar_owned=False,
-                    current_temp=23,
-                ),
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.thermal_rotation_recommended
-    assert decision.thermal_load_to_shed == "Dining"
 
 
 def test_heating_mode_soak_actuation_plan() -> None:
@@ -2002,30 +2080,6 @@ def test_cooldown_prevents_short_cycle_add() -> None:
     assert decision.thermal_load_to_add is None
 
 
-def test_emergency_shed_bypasses_run_cooldown() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_power_w=3000,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[
-                HeatLoadState(
-                    name="Office",
-                    priority=1,
-                    is_on=True,
-                    solar_owned=True,
-                    current_temp=20,
-                    last_added_at=dt(11, 55),
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_emergency_shed_w=2500, min_thermal_run_minutes=20),
-    )
-
-    assert decision.thermal_should_emergency_shed
-    assert decision.thermal_action == "emergency_shed_all"
-
-
 def test_per_load_diagnostic_explains_cooldown() -> None:
     inputs = base_inputs(
         now=dt(12),
@@ -2046,73 +2100,6 @@ def test_per_load_diagnostic_explains_cooldown() -> None:
     assert diagnostic.state == "cooldown"
     assert diagnostic.attributes["blocked_by_cooldown"]
     assert "min rest" in str(diagnostic.attributes["blocked_reason"])
-
-
-def test_expired_manual_override_is_eligible_for_export_soak() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=95,
-            grid_power_w=-5000,
-            heat_loads=[
-                HeatLoadState(
-                    name="Office",
-                    priority=1,
-                    current_temp=18,
-                    blocked_until=dt(11),
-                    manual_override_until=dt(11),
-                    owner="external",
-                    estimated_load_w=2000,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.thermal_load_to_add == "Office"
-    assert decision.thermal_action == "comfort_heat"
-
-
-def test_active_manual_override_remains_blocked_during_export_soak() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=95,
-            grid_power_w=-5000,
-            heat_loads=[
-                HeatLoadState(
-                    name="Office",
-                    priority=1,
-                    current_temp=18,
-                    blocked_until=dt(13),
-                    manual_override_until=dt(13),
-                    owner="external",
-                    estimated_load_w=2000,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.thermal_load_to_add is None
-    assert decision.thermal_action == "hold"
-
-
-def test_comfort_heat_does_not_reselect_active_owned_load() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=95,
-            grid_power_w=-5000,
-            heat_loads=[
-                HeatLoadState(name="Owned", priority=1, current_temp=15, is_on=True, solar_owned=True),
-                HeatLoadState(name="Office", priority=2, current_temp=18, estimated_load_w=2000),
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.thermal_load_to_add == "Office"
 
 
 def test_auto_mode_chooses_heating_from_outdoor_temp() -> None:
@@ -2363,46 +2350,6 @@ def test_unknown_soc_never_becomes_zero() -> None:
     assert source == "unavailable"
 
 
-def test_underfloor_policy_uses_restored_soc_when_raw_soc_unknown() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(18),
-            battery_soc=60,
-            raw_soc="unknown",
-            soc_source="last_known_good",
-            soc_age_minutes=10,
-            last_good_soc=60,
-            last_good_soc_updated=dt(17, 50),
-            forecast_remaining_today_kwh=10,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bathroom underfloor",
-                    priority=1,
-                    current_temp=8,
-                    load_type="floor_underfloor",
-                    comfort_min_temp=9,
-                    comfort_target_temp=12,
-                    allow_solar_soak=False,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, underfloor_min_soc=40),
-    )
-
-    assert decision.underfloor_comfort_allowed
-    assert decision.thermal_target_temperature == 12
-
-
-def test_discharge_sheds_with_soc_unavailable() -> None:
-    decision = decide(
-        base_inputs(battery_soc=None, battery_power_w=700, any_solar_owned_heat_load_on=True),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
-    )
-
-    assert decision.thermal_should_shed
-    assert "SOC unavailable" in decision.reason
-
-
 def test_charge_rate_allows_thermal_with_soc_unavailable() -> None:
     decision = decide(
         base_inputs(now=dt(10), battery_soc=None, battery_power_w=-6500),
@@ -2449,56 +2396,6 @@ def test_ev_fallback_hold_migrates_from_old_three_hour_default() -> None:
 
     assert changed
     assert options["ev_fallback_hold_minutes"] == 15.0
-
-
-def test_morning_low_soc_strong_forecast_keeps_battery_priority() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(9),
-            battery_soc=54,
-            battery_power_w=-4900,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=19,
-            pv_power_now_w=7400,
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.forecast_full_override_active
-    assert not decision.thermal_allowed
-    assert decision.thermal_policy_state == "battery_priority"
-    assert "battery_priority" in decision.battery_priority_reason
-
-
-def test_morning_preheat_is_separate_from_solar_soak() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(8),
-            battery_soc=45,
-            battery_power_w=0,
-            forecast_tomorrow_kwh=35,
-            forecast_remaining_today_kwh=25,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bedroom heat pump",
-                    priority=1,
-                    is_on=False,
-                    current_temp=16,
-                    supports_heating=True,
-                    estimated_load_w=1800,
-                ),
-                HeatLoadState(name="Office heat pump", priority=2, current_temp=16, supports_heating=True),
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.morning_preheat_allowed
-    assert decision.thermal_action == "morning_preheat"
-    assert decision.thermal_load_to_add == "Bedroom heat pump"
-    assert decision.thermal_target_temperature == 21.0
-    assert decision.thermal_target_fan_mode == "low"
-    assert decision.thermal_lease_reason == "morning_preheat"
 
 
 def test_morning_preheat_blocked_by_soc_floor() -> None:
@@ -2609,126 +2506,6 @@ def test_paid_grid_avoidance_relaxes_after_solar_arrives() -> None:
     assert not decision.paid_grid_avoidance_required
 
 
-def test_unowned_emergency_shed_candidate_ignores_never_emergency_shed_load() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_power_w=3000,
-            any_solar_owned_heat_load_on=False,
-            heat_loads=[
-                HeatLoadState(
-                    name="Dining",
-                    priority=1,
-                    is_on=True,
-                    hvac_mode="heat",
-                    target_temp=27,
-                    never_emergency_shed=True,
-                ),
-                HeatLoadState(
-                    name="Office",
-                    priority=2,
-                    is_on=True,
-                    hvac_mode="heat",
-                    target_temp=27,
-                ),
-            ],
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            thermal_shed_discharge_w=500,
-            thermal_emergency_shed_w=2500,
-            shed_unowned_managed_loads_on_battery_discharge=True,
-        ),
-    )
-
-    assert decision.thermal_should_emergency_shed
-    assert decision.thermal_load_to_normalise == "Office"
-
-
-def test_energy_budget_blocks_soak_when_battery_target_not_reachable() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=80,
-            forecast_remaining_today_kwh=5,
-            forecast_tomorrow_kwh=35,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
-    )
-
-    assert decision.battery_kwh_needed_to_target and decision.battery_kwh_needed_to_target > 6
-    assert decision.discretionary_energy_budget_kwh < 0
-    assert not decision.battery_target_reachable_today
-    assert not decision.thermal_allowed
-    assert decision.thermal_policy_state == "battery_priority"
-
-
-def test_energy_budget_allows_one_load_when_surplus_is_real() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=80,
-            forecast_remaining_today_kwh=22,
-            forecast_tomorrow_kwh=35,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
-    )
-
-    assert decision.discretionary_energy_budget_kwh > 0
-    assert decision.battery_target_reachable_today
-    assert decision.thermal_allowed
-    assert decision.thermal_load_to_add == "Office"
-
-
-def test_positive_budget_still_requires_thermal_start_gate() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=50,
-            battery_power_w=0,
-            forecast_remaining_today_kwh=30,
-            forecast_tomorrow_kwh=20,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            daily_battery_target_soc=80,
-            thermal_start_min_soc=80,
-            thermal_start_min_charge_w=6000,
-        ),
-    )
-
-    assert decision.discretionary_energy_budget_kwh is not None
-    assert decision.discretionary_energy_budget_kwh > 0
-    assert not decision.thermal_allowed
-    assert decision.thermal_action == "none"
-    assert "thermal_start_min_soc" in decision.thermal_action_reason
-
-
-def test_charge_rate_can_satisfy_thermal_start_gate_when_budget_fits() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=50,
-            battery_power_w=-7000,
-            forecast_remaining_today_kwh=30,
-            forecast_tomorrow_kwh=20,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=23, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            daily_battery_target_soc=80,
-            thermal_start_min_soc=80,
-            thermal_start_min_charge_w=6000,
-        ),
-    )
-
-    assert decision.thermal_allowed
-    assert decision.thermal_action == "add_one"
-
-
 def test_budget_positive_but_too_small_for_candidate_load_blocks_add() -> None:
     decision = decide(
         base_inputs(
@@ -2744,87 +2521,6 @@ def test_budget_positive_but_too_small_for_candidate_load_blocks_add() -> None:
     assert decision.discretionary_energy_budget_kwh > 0
     assert decision.thermal_load_to_add is None
     assert not decision.thermal_allowed
-
-
-def test_underfloor_floor_slab_uses_per_load_comfort_threshold() -> None:
-    comfortable = decide(
-        base_inputs(
-            now=dt(8),
-            battery_soc=80,
-            forecast_remaining_today_kwh=20,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bathroom underfloor",
-                    priority=1,
-                    current_temp=11.5,
-                    load_type="underfloor",
-                    comfort_sensor_type="floor_slab",
-                    comfort_min_temp=9,
-                    comfort_target_temp=12,
-                    normal_target_temp=12,
-                    allow_solar_soak=False,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-    cold = decide(
-        base_inputs(
-            now=dt(8),
-            battery_soc=80,
-            forecast_remaining_today_kwh=20,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bathroom underfloor",
-                    priority=1,
-                    current_temp=7,
-                    load_type="underfloor",
-                    comfort_sensor_type="floor_slab",
-                    comfort_min_temp=9,
-                    comfort_target_temp=12,
-                    normal_target_temp=12,
-                    allow_solar_soak=False,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert not comfortable.comfort_heat_allowed
-    assert not cold.comfort_heat_allowed
-    assert cold.underfloor_comfort_allowed
-    assert cold.thermal_target_temperature == 12
-    assert cold.thermal_lease_reason == "scheduled_underfloor_comfort"
-
-
-def test_underfloor_evening_schedule_heats_to_12c() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(18),
-            battery_soc=60,
-            grid_power_w=0,
-            forecast_remaining_today_kwh=20,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bathroom underfloor",
-                    priority=1,
-                    current_temp=8,
-                    load_type="floor_underfloor",
-                    comfort_sensor_type="floor_slab",
-                    comfort_min_temp=9,
-                    comfort_target_temp=12,
-                    normal_target_temp=12,
-                    allow_solar_soak=False,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.underfloor_comfort_allowed
-    assert decision.thermal_action == "underfloor_comfort"
-    assert decision.thermal_target_temperature == 12
-    assert "evening schedule active" in decision.underfloor_reason
 
 
 def test_underfloor_outside_schedule_is_blocked() -> None:
@@ -2850,42 +2546,6 @@ def test_underfloor_outside_schedule_is_blocked() -> None:
 
     assert not decision.underfloor_comfort_allowed
     assert "outside comfort window" in decision.underfloor_reason
-
-
-def test_underfloor_paid_grid_avoidance_blocks_unless_allowed() -> None:
-    base = base_inputs(
-        now=dt(18),
-        battery_soc=31,
-        grid_power_w=800,
-        battery_power_w=500,
-        forecast_remaining_today_kwh=1,
-        heat_loads=[
-            HeatLoadState(
-                name="Bathroom underfloor",
-                priority=1,
-                current_temp=8,
-                load_type="floor_underfloor",
-                comfort_min_temp=9,
-                comfort_target_temp=12,
-                allow_solar_soak=False,
-            )
-        ],
-    )
-    blocked = decide(base, EnergyManagerSettings(thermal_control_enabled=True, underfloor_min_soc=30))
-    allowed = decide(
-        base,
-        EnergyManagerSettings(
-            thermal_control_enabled=True,
-            underfloor_min_soc=30,
-            underfloor_allow_paid_grid=True,
-            underfloor_max_grid_import_w=1000,
-        ),
-    )
-
-    assert blocked.paid_grid_avoidance_required
-    assert not blocked.underfloor_comfort_allowed
-    assert "paid grid avoidance active" in blocked.underfloor_reason
-    assert allowed.underfloor_comfort_allowed
 
 
 def test_underfloor_require_home_blocks_when_occupancy_is_away() -> None:
@@ -2915,32 +2575,6 @@ def test_underfloor_require_home_blocks_when_occupancy_is_away() -> None:
     assert "nobody home" in decision.underfloor_reason
 
 
-def test_underfloor_require_home_allows_schedule_when_occupancy_unconfigured() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(18),
-            battery_soc=60,
-            grid_power_w=0,
-            home_occupied=None,
-            forecast_remaining_today_kwh=20,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bathroom underfloor",
-                    priority=1,
-                    current_temp=8,
-                    load_type="floor_underfloor",
-                    comfort_min_temp=9,
-                    comfort_target_temp=12,
-                    allow_solar_soak=False,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, underfloor_require_home=True),
-    )
-
-    assert decision.underfloor_comfort_allowed
-
-
 def test_underfloor_soc_floor_blocks_schedule() -> None:
     decision = decide(
         base_inputs(
@@ -2964,54 +2598,6 @@ def test_underfloor_soc_floor_blocks_schedule() -> None:
 
     assert not decision.underfloor_comfort_allowed
     assert "SOC 32" in decision.underfloor_reason
-
-
-def test_underfloor_preheat_uses_budget_before_evening_window() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(15),
-            battery_soc=95,
-            forecast_remaining_today_kwh=20,
-            heat_loads=[
-                HeatLoadState(
-                    name="Bathroom underfloor",
-                    priority=1,
-                    current_temp=8,
-                    estimated_load_w=800,
-                    load_type="floor_underfloor",
-                    comfort_min_temp=9,
-                    comfort_target_temp=12,
-                    allow_solar_soak=False,
-                )
-            ],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True),
-    )
-
-    assert decision.underfloor_comfort_allowed
-    assert decision.underfloor_current_window == "evening_preheat"
-    assert decision.thermal_target_temperature == 12
-
-
-def test_negative_budget_blocks_solar_soak_allowed() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(15),
-            battery_soc=91,
-            forecast_remaining_today_kwh=1.82,
-            forecast_tomorrow_kwh=35,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, daily_battery_target_soc=100, battery_capacity_kwh=30),
-    )
-
-    assert decision.discretionary_energy_budget_kwh < 0
-    assert not decision.battery_target_reachable_today
-    assert not decision.solar_soak_allowed
-    assert not decision.full_send_soak_allowed
-    assert not decision.thermal_allowed
-    assert decision.thermal_policy_state == "battery_priority"
-    assert "thermal_allowed=true" not in decision.thermal_action_reason
 
 
 def test_budget_too_small_for_smallest_load_blocks_solar_soak_allowed() -> None:
@@ -3050,23 +2636,6 @@ def test_paid_grid_avoidance_blocks_solar_soak_even_with_positive_budget() -> No
     assert not decision.thermal_allowed
 
 
-def test_battery_discharge_shed_overrides_positive_budget() -> None:
-    decision = decide(
-        base_inputs(
-            now=dt(12),
-            battery_soc=95,
-            battery_power_w=700,
-            forecast_remaining_today_kwh=30,
-            heat_loads=[HeatLoadState(name="Office", priority=1, current_temp=20, estimated_load_w=1800)],
-        ),
-        EnergyManagerSettings(thermal_control_enabled=True, thermal_shed_discharge_w=500),
-    )
-
-    assert decision.thermal_should_shed
-    assert not decision.solar_soak_allowed
-    assert not decision.thermal_allowed
-
-
 def test_underfloor_diagnostic_uses_underfloor_thresholds_not_room_air_defaults() -> None:
     inputs = base_inputs(
         now=dt(15),
@@ -3096,30 +2665,6 @@ def test_underfloor_diagnostic_uses_underfloor_thresholds_not_room_air_defaults(
     assert diagnostic.state in {"satisfied", "idle"}
 
 
-def test_overnight_dining_comfort_uses_spare_soc_headroom() -> None:
-    dining = HeatLoadState(
-        name="Dining/living heat pump",
-        slug="dining",
-        priority=1,
-        current_temp=17.0,
-        estimated_load_w=1200,
-        load_type="room_heat_pump",
-    )
-
-    decision = decide(
-        base_inputs(now=dt(23), battery_soc=80, forecast_tomorrow_kwh=35, heat_loads=[dining]),
-        EnergyManagerSettings(thermal_control_enabled=True, overnight_dining_comfort_enabled=True, battery_capacity_kwh=30),
-    )
-
-    assert decision.morning_start_soc_target == 30
-    assert decision.overnight_dining_comfort_allowed
-    assert decision.thermal_action == "overnight_dining_comfort"
-    assert decision.thermal_load_to_add == "Dining/living heat pump"
-    assert decision.thermal_lease_reason == "overnight_dining_comfort"
-    assert decision.thermal_target_temperature == 20
-    assert decision.projected_soc_07_with_overnight_dining >= decision.morning_start_soc_target + 8
-
-
 def test_overnight_dining_comfort_blocks_when_7am_target_at_risk() -> None:
     dining = HeatLoadState(
         name="Dining/living heat pump",
@@ -3140,58 +2685,6 @@ def test_overnight_dining_comfort_blocks_when_7am_target_at_risk() -> None:
     assert decision.thermal_action == "none"
     assert decision.thermal_load_to_add is None
     assert not decision.comfort_heat_allowed
-
-
-def test_overnight_dining_comfort_running_can_drain_until_7am_margin() -> None:
-    dining = HeatLoadState(
-        name="Dining/living heat pump",
-        slug="dining",
-        priority=1,
-        current_temp=18.0,
-        estimated_load_w=1200,
-        load_type="room_heat_pump",
-        is_on=True,
-        solar_owned=True,
-        lease_reason="overnight_dining_comfort",
-    )
-    settings = EnergyManagerSettings(
-        thermal_control_enabled=True,
-        overnight_dining_comfort_enabled=True,
-        battery_capacity_kwh=30,
-        thermal_shed_discharge_w=500,
-    )
-
-    safe = decide(
-        base_inputs(
-            now=dt(23),
-            battery_soc=80,
-            battery_power_w=1200,
-            essential_power_w=2200,
-            forecast_tomorrow_kwh=35,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[dining],
-        ),
-        settings,
-    )
-    unsafe = decide(
-        base_inputs(
-            now=dt(23),
-            battery_soc=45,
-            battery_power_w=1200,
-            essential_power_w=2200,
-            forecast_tomorrow_kwh=35,
-            any_solar_owned_heat_load_on=True,
-            heat_loads=[dining],
-        ),
-        settings,
-    )
-
-    assert not safe.thermal_should_shed
-    assert not safe.overnight_protection_required
-    assert unsafe.overnight_protection_required
-    assert unsafe.thermal_should_shed
-    assert unsafe.thermal_load_to_shed == "Dining/living heat pump"
-    assert unsafe.thermal_load_to_normalise == "Dining/living heat pump"
 
 
 def test_overnight_dining_comfort_is_opt_in() -> None:

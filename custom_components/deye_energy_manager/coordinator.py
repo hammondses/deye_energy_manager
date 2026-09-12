@@ -10,7 +10,8 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -39,12 +40,14 @@ from .decision import build_deye_plan, cheap_grid_mirror_programs, cooling_load_
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .repairs import async_update_issues
+from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
 _LOGGER = logging.getLogger(__name__)
 
 UNAVAILABLE = {"unknown", "unavailable", None}
 SOC_CACHE_STORAGE_VERSION = 1
 THERMAL_RUNTIME_STORAGE_VERSION = 1
+WICAN_STORAGE_VERSION = 1
 THERMAL_RUNTIME_DATETIME_FIELDS = {
     "lease_started_at",
     "lease_until",
@@ -68,6 +71,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             update_interval=DEFAULT_SCAN_INTERVAL,
         )
         self.entry = entry
+        self.configured_options = dict(entry.options)
         self.started_at = dt_util.utcnow()
         self.previous_essential_power_w: float | None = None
         self.previous_grid_power_w: float | None = None
@@ -82,11 +86,23 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             THERMAL_RUNTIME_STORAGE_VERSION,
             f"{DOMAIN}_{entry.entry_id}_thermal_runtime",
         )
+        self._wican_store: Store[dict[str, object]] = Store(
+            hass,
+            WICAN_STORAGE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_wican_soc",
+        )
+        self.wican = WicanSocState()
+        self._wican_query_lock = asyncio.Lock()
         self._last_good_soc: float | None = None
         self._last_good_soc_updated: datetime | None = None
         self.ev_latch_on = False
         self.ev_hold_until: datetime | None = None
         self.ev_low_since: datetime | None = None
+        self.ev_solar_arrived_latched = False
+        self.ev_manual_charging_override = False
+        self.effective_taycan_soc: float | None = None
+        self.taycan_soc_source = "unavailable"
+        self.taycan_soc_age_minutes: float | None = None
         self.last_control_action = "none"
         self._apply_lock = asyncio.Lock()
         self._last_written: dict[str, object] = {}
@@ -112,19 +128,24 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._cooling_temperature_sample: tuple[datetime, float] | None = None
         self._cooling_temperature_trend_c_per_min: float | None = None
         self._previous_cooling_throughput_w: float | None = None
+        self._cooling_protection_condition_since: datetime | None = None
+        self.cooling_inverter_protection_active = False
+        self._cooling_protection_restore_values: dict[str, float] = {}
         self._cheap_grid_session_date: str | None = None
         self._cheap_grid_charge_blocked_target_soc: float | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
         self.load_diagnostics: dict[str, object] = {}
         self._remove_listeners: list[Callable[[], None]] = []
 
-        watch_entities = [entity for entity in self.entity_map.values() if entity]
-        self._remove_listeners.append(
-            async_track_state_change_event(hass, watch_entities, self._handle_state_change)
-        )
-        self._remove_listeners.append(
-            async_track_time_interval(hass, self._handle_time_interval, DEFAULT_SCAN_INTERVAL)
-        )
+        watch_entities = [
+            self.entity_map[key]
+            for key in ("ev_connector_status", "ev_current", "ev_power", "ev_energy_session")
+            if self.entity_map.get(key)
+        ]
+        if watch_entities:
+            self._remove_listeners.append(
+                async_track_state_change_event(hass, watch_entities, self._handle_state_change)
+            )
         entry.async_on_unload(self._remove_all_listeners)
 
     async def async_load_stored_soc(self) -> None:
@@ -145,6 +166,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             updated = dt_util.as_local(updated)
         self._last_good_soc = soc
         self._last_good_soc_updated = updated
+
+    async def async_load_stored_wican_soc(self) -> None:
+        """Restore WiCAN result and event state without querying the vehicle."""
+
+        self.wican = WicanSocState.restore(await self._wican_store.async_load())
+
+    def _schedule_wican_save(self) -> None:
+        self._wican_store.async_delay_save(self.wican.payload, 1)
 
     def _set_last_good_soc(self, soc: float, updated: datetime) -> None:
         """Update persisted last-known-good SOC cache."""
@@ -186,6 +215,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 if isinstance(value, dict)
             }
         self.bedroom_night_heating_armed = bool(data.get("bedroom_night_heating_armed", False))
+        self.ev_manual_charging_override = bool(data.get("ev_manual_charging_override", False))
+        self.cooling_inverter_protection_active = bool(data.get("cooling_inverter_protection_active", False))
+        raw_restore = data.get("cooling_protection_restore_values")
+        if isinstance(raw_restore, dict):
+            self._cooling_protection_restore_values = {
+                str(entity_id): float(value)
+                for entity_id, value in raw_restore.items()
+                if isinstance(value, (int, float))
+            }
 
     def _datetime_map(self, raw: object) -> dict[str, datetime]:
         """Return a string to datetime map from stored JSON data."""
@@ -236,6 +274,9 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "thermal_last_action": {name: [action, reason] for name, (action, reason) in self._thermal_last_action.items()},
             "thermal_leases": {name: self._serialize_lease(lease) for name, lease in self._thermal_leases.items()},
             "bedroom_night_heating_armed": self.bedroom_night_heating_armed,
+            "ev_manual_charging_override": self.ev_manual_charging_override,
+            "cooling_inverter_protection_active": self.cooling_inverter_protection_active,
+            "cooling_protection_restore_values": self._cooling_protection_restore_values,
         }
 
     def _serialize_datetime_map(self, values: dict[str, datetime]) -> dict[str, str]:
@@ -303,6 +344,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             bedroom_night_heating_armed=self.bedroom_night_heating_armed,
             pv_load_test_control_enabled=bool(options["pv_load_test_control_enabled"]),
             inverter_cooling_control_enabled=bool(options["inverter_cooling_control_enabled"]),
+            cooling_minimum_hunt_enabled=bool(options["cooling_minimum_hunt_enabled"]),
+            cooling_fan_failure_protection_enabled=bool(options["cooling_fan_failure_protection_enabled"]),
             export_limited_mode_enabled=bool(options["export_limited_mode_enabled"]),
             return_to_normal_on_shed_enabled=bool(options["return_to_normal_on_shed_enabled"]),
             forecast_full_override_enabled=bool(options["forecast_full_override_enabled"]),
@@ -390,6 +433,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             room_satisfied_delta_c=float(options["room_satisfied_delta_c"]),
             room_resume_delta_c=float(options["room_resume_delta_c"]),
             forecast_full_confidence_buffer_kwh=float(options["forecast_full_confidence_buffer_kwh"]),
+            ev_solar_start_min_pv_w=float(options["ev_solar_start_min_pv_w"]),
             ev_start_load_jump_w=float(options["ev_start_load_jump_w"]),
             ev_stop_load_drop_w=float(options["ev_stop_load_drop_w"]),
             ev_active_load_threshold_w=float(options["ev_active_load_threshold_w"]),
@@ -398,6 +442,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_fallback_hold_minutes=float(options["ev_fallback_hold_minutes"]),
             ev_bypass_program_power_w=float(options["ev_bypass_program_power_w"]),
             ev_restore_program_power_w=float(options["ev_restore_program_power_w"]),
+            ev_manual_target_soc=float(options["ev_manual_target_soc"]),
             grid_loss_notification_enabled=bool(options["grid_loss_notification_enabled"]),
             grid_loss_voltage_threshold=float(options["grid_loss_voltage_threshold"]),
             grid_loss_notification_cooldown_minutes=float(options["grid_loss_notification_cooldown_minutes"]),
@@ -431,10 +476,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_temperature_gain_pct_per_c=float(options["cooling_temperature_gain_pct_per_c"]),
             cooling_feedback_step_pct=float(options["cooling_feedback_step_pct"]),
             cooling_target_deadband_c=float(options["cooling_target_deadband_c"]),
+            cooling_trend_deadband_c_per_min=float(options["cooling_trend_deadband_c_per_min"]),
             cooling_min_active_fan_pct=float(options["cooling_min_active_fan_pct"]),
             cooling_max_normal_fan_pct=float(options["cooling_max_normal_fan_pct"]),
             cooling_emergency_temp_c=float(options["cooling_emergency_temp_c"]),
             cooling_failsafe_fan_pct=float(options["cooling_failsafe_fan_pct"]),
+            cooling_fan_failure_temp_c=float(options["cooling_fan_failure_temp_c"]),
+            cooling_fan_failure_delay_min=float(options["cooling_fan_failure_delay_min"]),
+            cooling_fan_min_rpm=float(options["cooling_fan_min_rpm"]),
+            cooling_protection_restore_max_sell_w=float(options["cooling_protection_restore_max_sell_w"]),
+            cooling_protection_restore_max_solar_w=float(options["cooling_protection_restore_max_solar_w"]),
         )
 
     def _legacy_thermal_actuation_mode(self, options: dict[str, object]) -> str:
@@ -459,13 +510,109 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         return thermal_mode
 
     @callback
-    def _handle_state_change(self, _event) -> None:
-        self.async_set_updated_data(self._calculate())
-        self.hass.async_create_task(self.async_apply_decision())
+    def _handle_state_change(self, event) -> None:
+        self._handle_wican_event(event)
 
-    @callback
-    def _handle_time_interval(self, _now) -> None:
-        self.hass.async_create_task(self.async_request_refresh())
+    def _handle_wican_event(self, event) -> None:
+        """Observe only charger state events; timer refreshes never enter here."""
+
+        entity_id = str(event.data.get("entity_id", ""))
+        relevant = {
+            self.entity_map.get("ev_connector_status"),
+            self.entity_map.get("ev_current"),
+            self.entity_map.get("ev_power"),
+            self.entity_map.get("ev_energy_session"),
+        }
+        if not entity_id or entity_id not in relevant:
+            return
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        if new_state is None or (old_state is not None and old_state.state == new_state.state):
+            return
+        restoring = old_state is None or old_state.state in UNAVAILABLE
+
+        connector_entity = self.entity_map.get("ev_connector_status")
+        current_entity = self.entity_map.get("ev_current")
+        power_entity = self.entity_map.get("ev_power")
+        connector_now = self._state_string("ev_connector_status")
+        current_now = self._state_float("ev_current")
+        power_now = self._state_float("ev_power")
+        connected_now = connector_connected(connector_now)
+        charging_now = charging_active(connector_now, current_now, power_now)
+
+        if old_state is not None:
+            connector_old = str(old_state.state) if entity_id == connector_entity else connector_now
+            current_old = self._wican_float(old_state.state) if entity_id == current_entity else current_now
+            power_old = self._wican_float(old_state.state) if entity_id == power_entity else power_now
+            self.wican.connector_connected = connector_connected(connector_old)
+            self.wican.charging_active = charging_active(connector_old, current_old, power_old)
+
+        identity = f"{entity_id}:{getattr(new_state, 'last_updated', '')}:{new_state.state}"
+        energy = self._state_float("ev_energy_session")
+        trigger = self.wican.automatic_trigger(
+            event_identity=identity,
+            connected=connected_now,
+            charging=charging_now,
+            energy_kwh=energy,
+            threshold_kwh=self.wican_energy_threshold_kwh,
+            enabled=self.wican_soc_enabled and not restoring,
+        )
+        self._schedule_wican_save()
+        if trigger:
+            self.hass.async_create_task(self.async_query_wican_soc(trigger, automatic=True))
+
+    @staticmethod
+    def _wican_float(value: object) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed == parsed else None
+
+    @property
+    def wican_soc_enabled(self) -> bool:
+        return bool(self.entry.options.get("wican_soc_enabled", FEATURE_DEFAULTS["wican_soc_enabled"]))
+
+    @property
+    def wican_energy_threshold_kwh(self) -> float:
+        return float(self.entry.options.get("wican_soc_energy_threshold_kwh", NUMBER_DEFAULTS["wican_soc_energy_threshold_kwh"]))
+
+    @property
+    def wican_energy_until_next_query(self) -> float | None:
+        return self.wican.energy_until_next_query(self._state_float("ev_energy_session"), self.wican_energy_threshold_kwh)
+
+    async def async_query_wican_soc(self, trigger: str = "manual", *, automatic: bool = False) -> None:
+        """Perform exactly one SOC_D HTTP request, without retries."""
+
+        now = dt_util.utcnow()
+        if self._wican_query_lock.locked():
+            return
+        if automatic and self.wican.last_attempt_at and now - self.wican.last_attempt_at < timedelta(seconds=5):
+            return
+        async with self._wican_query_lock:
+            self.wican.last_attempt_at = now
+            self.wican.last_trigger = trigger
+            self._schedule_wican_save()
+            base_url = str(self.entry.options.get("wican_base_url", TEXT_DEFAULTS["wican_base_url"])).strip().rstrip("/")
+            try:
+                if not base_url.startswith(("http://", "https://")):
+                    raise ValueError("WiCAN base URL must use HTTP or HTTPS")
+                async with asyncio.timeout(5):
+                    async with async_get_clientsession(self.hass).post(
+                        f"{base_url}/autopid/test_pid",
+                        json=WICAN_SOC_REQUEST,
+                    ) as response:
+                        if response.status != 200:
+                            raise ValueError(f"WiCAN HTTP {response.status}")
+                        data = await response.json(content_type=None)
+                soc, raw = parse_wican_soc_response(data)
+                self.wican.record_success(soc, raw, now, trigger, self._state_float("ev_energy_session"))
+            except (TimeoutError, ValueError, TypeError, OSError) as err:
+                self.wican.record_failure(trigger, str(err), self._state_float("ev_energy_session"))
+            except Exception as err:  # aiohttp and JSON decoder errors are non-fatal
+                self.wican.record_failure(trigger, f"{type(err).__name__}: {err}", self._state_float("ev_energy_session"))
+            self._schedule_wican_save()
+        await self.async_request_refresh()
 
     @callback
     def _remove_all_listeners(self) -> None:
@@ -529,6 +676,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             and (now - state.last_updated).total_seconds() <= 600
         )
 
+    def _cooling_fan_health(self, settings: EnergyManagerSettings) -> tuple[bool, float | None]:
+        """Return whether the external controller and a commanded fan are responding."""
+
+        connected = self._state_optional_on("inverter_cooling_fan_status")
+        rpm = self._state_float("inverter_cooling_fan_rpm")
+        percentage = self._cooling_fan_percentage()
+        if connected is not True:
+            return False, rpm
+        if percentage is None:
+            return False, rpm
+        if rpm is None or rpm < settings.cooling_fan_min_rpm:
+            return False, rpm
+        return True, rpm
+
     def _cooling_temperature(self) -> tuple[float | None, datetime | None, float | None]:
         """Return the current temperature sample and trend between distinct updates."""
 
@@ -569,6 +730,28 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if state is None or state.state in UNAVAILABLE:
             return None
         return dt_util.parse_datetime(state.state)
+
+    def _resolve_taycan_soc(self, now: datetime) -> float | None:
+        """Resolve the SOC used by the existing EV policy."""
+
+        cloud_entity = self.entity_map.get("porsche_soc")
+        cloud_state = self.hass.states.get(cloud_entity) if cloud_entity else None
+        cloud_soc = self._entity_float(cloud_entity) if cloud_entity else None
+        cloud_updated = cloud_state.last_changed if cloud_state is not None else None
+        local_soc = self.wican.soc if self.wican_soc_enabled else None
+        local_updated = self.wican.updated_at if self.wican_soc_enabled else None
+        resolved, source, age = resolve_taycan_soc(
+            local_soc,
+            local_updated,
+            cloud_soc,
+            cloud_updated,
+            now,
+            float(self.entry.options.get("wican_soc_fresh_minutes", NUMBER_DEFAULTS["wican_soc_fresh_minutes"])),
+        )
+        self.effective_taycan_soc = resolved
+        self.taycan_soc_source = source
+        self.taycan_soc_age_minutes = age
+        return resolved
 
     def _resolve_soc(self, now: datetime, settings: EnergyManagerSettings) -> tuple[float | None, str | None, str, float | None, float | None, datetime | None]:
         primary_entity = self.entity_map.get("primary_soc_entity") or self.entity_map.get("battery_soc")
@@ -833,11 +1016,30 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             if self._previous_cooling_throughput_w is not None
             else 0.0
         )
+        cooling_fan_healthy, cooling_fan_rpm = self._cooling_fan_health(settings)
+        cooling_protection_condition = (
+            not cooling_fan_healthy
+            and self._cooling_temperature_valid(now)
+            and inverter_ac_temperature_c is not None
+            and inverter_ac_temperature_c >= settings.cooling_fan_failure_temp_c
+        )
+        if cooling_protection_condition:
+            self._cooling_protection_condition_since = self._cooling_protection_condition_since or now
+        else:
+            self._cooling_protection_condition_since = None
+        cooling_protection_condition_minutes = (
+            (now - self._cooling_protection_condition_since).total_seconds() / 60.0
+            if self._cooling_protection_condition_since is not None
+            else 0.0
+        )
         grid_power_w = self._state_float("grid_ct_power") or 0.0
+        ev_charge_requested = self._state_optional_on("ev_charge_control")
+        ev_connector_status = self._state_string("ev_connector_status")
         export_power_w = max(-grid_power_w, 0.0)
         paid_grid_import_w = self._paid_grid_import_after_grace(now, grid_power_w, settings)
         base_load_estimate = self._update_base_load_estimate(now, essential_power, ev_power, settings)
         resolved_soc, raw_soc, soc_source, soc_age_minutes, last_good_soc, last_good_updated = self._resolve_soc(now, settings)
+        taycan_soc = self._resolve_taycan_soc(now)
         ev_idle = ev_current <= 0.5 if ev_current is not None else ev_power is not None and ev_power < settings.ev_stopped_load_threshold_w
         if ev_idle:
             self.ev_low_since = self.ev_low_since or now
@@ -875,11 +1077,13 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_latch_on=self.ev_latch_on,
             ev_hold_until=self.ev_hold_until,
             ev_power_w=ev_power,
-            ev_charge_requested=self._state_optional_on("ev_charge_control"),
+            ev_charge_requested=ev_charge_requested,
             ev_current_a=ev_current,
-            ev_connector_status=self._state_string("ev_connector_status"),
+            ev_connector_status=ev_connector_status,
             ev_low_since=self.ev_low_since,
-            porsche_soc=self._state_float("porsche_soc"),
+            ev_solar_arrived_latched=self.ev_solar_arrived_latched,
+            ev_manual_charging_override=self.ev_manual_charging_override,
+            porsche_soc=taycan_soc,
             porsche_charging_status=self._state_string("porsche_charging_status"),
             porsche_charging_ends=self._state_datetime("porsche_charging_ends"),
             cheap_grid_charge_blocked_target_soc=self._cheap_grid_charge_blocked_target_soc,
@@ -892,8 +1096,21 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             cooling_temperature_sample_at=cooling_temperature_sample_at,
             cooling_temperature_trend_c_per_min=cooling_temperature_trend,
             cooling_load_change_w=cooling_load_change_w,
+            cooling_fan_healthy=cooling_fan_healthy,
+            cooling_fan_rpm=cooling_fan_rpm,
+            cooling_protection_condition_minutes=cooling_protection_condition_minutes,
+            cooling_inverter_protection_active=self.cooling_inverter_protection_active,
         )
         decision = decide(inputs, settings)
+        if decision.solar_arrived and decision.ev_solar_charge_allowed:
+            self.ev_solar_arrived_latched = True
+        elif (
+            not settings.enabled
+            or not settings.ev_solar_charging_enabled
+            or time_between(now, "21:00", "07:00")
+            or (ev_connector_status or "").lower() == "available"
+        ):
+            self.ev_solar_arrived_latched = False
         self._update_cheap_grid_session_state(decision)
         self._update_load_diagnostics(inputs, settings, decision)
         self._append_proposed_action(decision)
@@ -961,7 +1178,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 and settings.direct_climate_control_enabled
             )
         if subsystem == "ev":
-            return settings.ev_control_enabled and settings.ev_grid_bypass_enabled
+            return settings.ev_control_enabled
         return False
 
     def _blocked_reason(self, subsystem: str) -> str | None:
@@ -1066,6 +1283,26 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             await self._direct_stop_bedroom_night_heating("disarmed manually")
         await self.async_request_refresh()
 
+    async def async_set_ev_manual_charging_override(self, enabled: bool) -> None:
+        """Start or stop a persisted manual charge-to-target session."""
+
+        if enabled and (not self.settings.enabled or not self.settings.ev_control_enabled):
+            self.last_control_action = "manual EV charging blocked: EV control disabled"
+            await self.async_request_refresh()
+            return
+        self.ev_manual_charging_override = enabled
+        self._schedule_runtime_save()
+        if not enabled:
+            async with self._apply_lock:
+                await self._call_switch(
+                    self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
+                    False,
+                    reason="manual EV charging override turned off",
+                    force=True,
+                )
+                await self._apply_deye_plan(self._manual_restore_deye_plan(), force=True, override_gates=True)
+        await self.async_request_refresh()
+
     async def async_force_ev_grid_bypass(self, required: bool) -> None:
         """Force EV grid bypass start/restore once."""
 
@@ -1081,6 +1318,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_latch_on = False
         self.ev_hold_until = None
         async with self._apply_lock:
+            await self._restore_cooling_protection()
             await self._apply_deye_plan(self._manual_restore_deye_plan(), force=True, override_gates=True)
         await self.async_request_refresh()
 
@@ -1089,19 +1327,32 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
 
         async with self._apply_lock:
             decision = decision or self.data
-            if decision is None or decision.control_blocked:
+            if decision is None:
                 return
             if dt_util.utcnow() - self.started_at < timedelta(seconds=60):
                 return
             settings = self.settings
+            if decision.cooling_inverter_protection_required or self.cooling_inverter_protection_active:
+                await self._apply_cooling_protection(decision)
+                return
+            if decision.control_blocked:
+                return
             if settings.inverter_cooling_control_enabled:
                 await self._apply_inverter_cooling(decision)
+            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_start":
+                await self._call_script(
+                    self.entity_map.get("ev_start_script", "script.timxon_ev_charger_start"),
+                    reason=decision.ev_decision_reason,
+                )
             if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_stop":
                 await self._call_switch(
                     self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
                     False,
                     reason=decision.ev_decision_reason,
                 )
+                if decision.ev_soc_cutoff_reached and self.ev_manual_charging_override:
+                    self.ev_manual_charging_override = False
+                    self._schedule_runtime_save()
             if settings.deye_control_enabled or settings.ev_control_enabled or settings.grid_charge_control_enabled:
                 await self._apply_deye_plan(build_deye_plan(decision, settings))
             await self._apply_bedroom_night_heating(decision)
@@ -1167,6 +1418,78 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.last_control_action = (
             f"inverter cooling fan -> {desired}%: {decision.cooling_reason}"
         )
+
+    def _capture_cooling_protection_restore_values(self) -> None:
+        """Remember only the numeric settings changed by the protection latch."""
+
+        entity_ids = [
+            self.entity_map.get("inverter_max_sell_power", ""),
+            self.entity_map.get("inverter_max_solar_power", ""),
+            *PROG_CAPACITY_ENTITIES,
+        ]
+        self._cooling_protection_restore_values = {
+            entity_id: value
+            for entity_id in entity_ids
+            if entity_id and (value := self._entity_float(entity_id)) is not None
+        }
+
+    def _cooling_protection_plan(self) -> DeyePlan:
+        slots = self._enabled_program_slots()
+        return DeyePlan(
+            mode="cooling_fan_failure_protection",
+            reason="external fan failure while inverter is hot: block export, PV and battery discharge",
+            capacity_targets={slot: 100.0 for slot in slots},
+            charge_modes={slot: CHARGE_OPTION_NO_GRID for slot in slots},
+            grid_charge_enabled=False,
+            emergency=True,
+        )
+
+    async def _apply_cooling_protection(self, decision: EnergyManagerDecision) -> None:
+        """Latch and enforce grid pass-through after a sustained hot fan failure."""
+
+        if not self.cooling_inverter_protection_active:
+            self._capture_cooling_protection_restore_values()
+            self.cooling_inverter_protection_active = True
+            self._schedule_runtime_save()
+        await self._call_number_set(
+            self.entity_map.get("inverter_max_sell_power", "number.deye_max_sell_power"),
+            0.0,
+            reason=decision.cooling_protection_reason,
+            emergency=True,
+        )
+        await self._call_number_set(
+            self.entity_map.get("inverter_max_solar_power", "number.deye_max_solar_power"),
+            0.0,
+            reason=decision.cooling_protection_reason,
+            emergency=True,
+        )
+        await self._apply_deye_plan(self._cooling_protection_plan(), override_gates=True)
+        self.last_control_action = "cooling protection latched: inverter forced to grid pass-through"
+
+    async def _restore_cooling_protection(self) -> None:
+        """Restore the exact numeric state captured before cooling protection tripped."""
+
+        if not self.cooling_inverter_protection_active:
+            return
+        restore_values = dict(self._cooling_protection_restore_values)
+        restore_values.setdefault(
+            self.entity_map.get("inverter_max_sell_power", "number.deye_max_sell_power"),
+            self.settings.cooling_protection_restore_max_sell_w,
+        )
+        restore_values.setdefault(
+            self.entity_map.get("inverter_max_solar_power", "number.deye_max_solar_power"),
+            self.settings.cooling_protection_restore_max_solar_w,
+        )
+        for entity_id, value in restore_values.items():
+            await self._call_number_set(
+                entity_id,
+                value,
+                reason="manual cooling protection restore",
+                force=True,
+            )
+        self.cooling_inverter_protection_active = False
+        self._cooling_protection_restore_values = {}
+        self._schedule_runtime_save()
 
     async def _call_number_set(self, entity_id: str, value: float, *, reason: str = "", emergency: bool = False, force: bool = False) -> bool:
         if entity_id in PROG_CAPACITY_ENTITIES:
@@ -1243,6 +1566,20 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         )
         self._last_written[entity_id] = on
         self._record_deye_write(entity_id, on, reason)
+        return True
+
+    async def _call_script(self, entity_id: str, *, reason: str = "") -> bool:
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE:
+            self.last_control_action = f"EV start blocked: {entity_id} unavailable"
+            return False
+        await self.hass.services.async_call(
+            "script",
+            "turn_on",
+            {"entity_id": entity_id},
+            blocking=False,
+        )
+        self.last_control_action = reason or f"started {entity_id}"
         return True
 
     def _suppress_deye_write(self, entity_id: str, desired: object, *, emergency: bool) -> bool:
@@ -1435,10 +1772,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, nonessential_only=True, turn_off=True)
             elif decision.thermal_should_shed:
                 await self._direct_shed_one_heat_load(decision.thermal_load_to_normalise, turn_off=True)
-            elif decision.thermal_rotation_recommended and self.settings.thermal_rotation_enabled:
-                await self._direct_rotate_heat_load(decision)
-            elif decision.thermal_load_to_add and (
-                decision.thermal_action in {"morning_preheat", "overnight_dining_comfort", "underfloor_comfort", "comfort_heat", "add_one"}
+            elif (
+                self.settings.pv_load_test_control_enabled
+                and decision.thermal_load_to_add
+                and decision.thermal_action == "add_one"
             ):
                 await self._direct_add_one_heat_load(decision.thermal_load_to_add, decision)
             return

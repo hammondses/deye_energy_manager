@@ -1,5 +1,112 @@
 # Release Notes
 
+## v0.5.69
+
+- Let minimum-hunt cooling follow meaningful rising and falling temperature trends inside the target band while retaining the configured trend deadband for jitter.
+
+## v0.5.68
+
+- Allow the inverter cooling target to be configured up to 55 C.
+
+## v0.5.67
+
+- Apply ordinary Home Assistant number, switch, and select changes in place so unrelated controls such as EV charging do not briefly become unavailable; retain full reloads for entity-map and managed-load topology changes.
+
+## v0.5.66
+
+- Allow daytime solar EV charging from today's discretionary energy budget without requiring tomorrow's forecast tier to be good or excellent.
+
+## v0.5.65
+
+- Make minimum-hunt cooling target the configured temperature band instead of treating every rising sample as proof that more fan is required.
+- Hold while a cool inverter warms toward the target, probe downward only after it settles below the band, and step upward only above the band unless it is already cooling.
+
+## v0.5.64
+
+- Let minimum-hunt cooling unwind an elevated fan by one configured step per fresh sample when AC temperature is below the target band, even if its small trend is inside the jitter deadband.
+- Keep meaningful temperature rise ahead of the cold unwind rule, and keep jitter holding the fan inside the target band.
+
+## v0.5.63
+
+- Add a configurable 0.2 C/min trend deadband so 0.1-degree jitter holds the fan instead of flapping it.
+- Make meaningful rising and falling trends change adaptive cooling by exactly one step in either direction, regardless of distance from target.
+- Make emergency temperature bypass ordinary feedback and command 100% fan immediately.
+
+## v0.5.62
+
+- Stop ordinary warming far below the cooling target from repeatedly ramping the fan upward. Below-band temperature now continues stepping down; rising temperature steps up only after entering the target band.
+
+## v0.5.61
+
+- Replace the minimum-hunt timer with gradual temperature feedback: each fresh rising sample raises the fan one step, a sample below the target band lowers it one step, and a sample inside the band holds it.
+- Remove load-triggered fan increases and the obsolete cooling hunt observation-time control from adaptive mode.
+
+## v0.5.60
+
+- Make minimum-hunt mode use the configured minimum active fan immediately whenever inverter temperature is clearly below target; the legacy load coefficient is no longer a floor in adaptive mode.
+- Change the default cooling target from 43 C to 45 C and the near-target probe observation window from 15 minutes to 5 minutes.
+
+## v0.5.59
+
+- Reset minimum-hunt cooling directly to the calculated fan curve when inverter temperature is well below target, instead of holding a stale high fan command for repeated observation windows.
+
+## v0.5.58
+
+- Replace the forecast/export/comfort thermal matrix with one export-constrained curtailment-soak policy.
+- Start at most one eligible managed heating load only when current expected PV is high, battery acceptance is low, SOC is healthy, and live import/export stays within the configured tolerances.
+- Preserve live export and stop only manager-owned curtailment loads when the signal disappears; retire automatic comfort, preheat, rotation, overnight, unowned-shed, and emergency-shed behaviour.
+
+## v0.5.57
+
+- Stop publishing thermal shed and emergency-shed recommendations while thermal control is disabled; ordinary whole-house battery discharge is no longer presented as a thermal action when that subsystem is off.
+
+## v0.5.56
+
+- Stop recalculating and republishing every integration entity on each high-frequency power-sensor update; decisions now use the existing 30-second coordinator schedule while WiCAN retains its narrow event listener.
+- Bound text sensor states to Home Assistant's 255-character limit, preventing verbose decision diagnostics from flooding the system log.
+
+## v0.5.55
+
+- Add a default-off minimum-fan hunt mode that probes downward in configurable steps only after a stable observation window, then responds immediately to rising temperature, a target breach, or a meaningful load increase.
+- Add Home Assistant fan-health, RPM, trip-duration, and protection-state diagnostics plus adjustable hunt and safety thresholds.
+- Add default-off, latched external-fan failure protection: after fan telemetry remains failed above the configured inverter temperature, block export and PV, raise programme reserves to 100%, disable grid charging, and require the existing Restore Deye normal button to restore the captured pre-trip settings.
+
+## v0.5.54
+
+- Let clearly falling inverter temperature unwind elevated fan speed and prevent small overnight load changes from raising fan speed while temperature continues to fall.
+- Add cooling load-regime and calibration-state sensors so Home Assistant Recorder can isolate stable PV export, self-consumption, battery, and AC-output windows for fan-curve tuning.
+
+## v0.5.53
+
+- Treat Home Assistant entity restoration from unavailable to live as baseline initialization, preventing an enabled WiCAN source from querying during startup while preserving later genuine connector and charging events.
+
+## v0.5.52
+
+- Allow the manual Taycan charging target to be set as low as 40%, while leaving the normal charging target at 80%.
+
+## v0.5.51
+
+- Add optional event-driven local WiCAN Taycan SOC using one SOC_D request on connector, charge-start/stop, session-energy threshold, or manual-refresh events only. Automatic acquisition is disabled by default; failures never retry until another genuine event.
+- Persist the complete last local result and trigger baseline, prefer fresh local SOC over Porsche Connect for the existing charging cutoff, and expose source, age, result/error, and next-query diagnostics.
+
+## v0.5.50
+
+- Keep an active solar EV charging session alive through cloud-driven import or battery discharge so current can fall to the charger's 6A minimum without repeatedly resetting the vehicle session. Startup still requires genuine solar and no material power deficit, and battery/forecast/daytime safety gates remain enforced.
+
+## v0.5.49
+
+- Require 1.8kW of actual PV before starting a solar EV session, reject tiny battery-charge blips as solar arrival, latch genuine solar arrival while active, and require a sustained two-minute import or battery-discharge deficit before withdrawing permission.
+
+## v0.5.48
+
+- Require the daytime window, observed solar arrival, and no material battery discharge before allowing forecast-backed solar EV charging.
+
+## v0.5.47
+
+- Enforce an 80% Taycan SOC cutoff for normal EV charging, including active OCPP charge-control sessions and solar charging.
+- Add a persisted manual charging override with an adjustable stop SOC, automatic TIMXON start/stop, and automatic override clearing when the selected target is reached.
+- Expose the active EV target and SOC-cutoff status for dashboards, and default Porsche mappings to the Taycan 4S entities.
+
 ## v0.5.46
 
 - Hold high fan speed through ordinary high-PV fluctuations, reserving immediate fan reductions for genuine throughput collapses of at least 50%.
