@@ -1,110 +1,62 @@
-# Deye Energy Manager simplification audit
+# Deye Energy Manager: what to keep and what to remove
 
-## Recommendation
+Audited 2026-09-12. Recommendation: **shrink the existing integration, move bedroom heating into Home Assistant, and replace cooling as a separate task. Do not start a wholesale rewrite or create several new integrations yet.**
 
-Do not start again yet. Keep this repo as the compatibility shell, gut it in stages, and split only after the current Home Assistant entity surface is known.
+## Evidence and scope
 
-A rewrite would probably recreate the same risk in a cleaner-looking package: Home Assistant automations may already depend on the advisory sensors, binary sensors, switches, buttons, and entity IDs. The safer path is:
+The checkout initially contained v0.5.46 (`d88e1d8`), while Home Assistant reported v0.5.69. `origin/main` still points to the older version. At the user's request, v0.5.69 (`d13dfe0`, also `origin/codex/ev-soc-controls`) was merged into this audit branch. The deployed `decision.py`, `coordinator.py`, `models.py`, and `const.py` byte-match that release. This is stronger evidence than relying on the manifest alone, although it is not verification of every installed file or in-memory module.
 
-1. Freeze actuator writes by leaving the gates off.
-2. Inventory live Home Assistant automations that reference `deye_energy_manager`.
-3. Reduce the repo to a small battery/inverter/EV decision core while preserving compatibility sensors as aliases for one or two releases.
-4. Move house comfort tasks that are simple schedules into Home Assistant automations.
-5. Only then split dedicated integrations if the remaining boundaries are stable.
+Three GPT-5.5 audits cover [energy and EV](audit-energy.md), [thermal and bedroom heating](audit-thermal.md), and [inverter cooling](audit-cooling.md). The [live dependency inventory](audit-homeassistant.md) adds actual automation configuration, current gates, dashboards, and recent bedroom policy history.
 
-## Keep
+No live configuration, control toggles, or actuator settings were changed. The merge passes all 150 repository tests. These are local regression tests, not hardware acceptance tests. Documentation does not require a new HACS version; the existing v0.5.69 tag was reused, not moved.
 
-Keep the pure decision engine shape. `decision.py` is large, but it is the right boundary: it returns decisions without touching Home Assistant, and `coordinator.py` applies those decisions through gated service calls. The main `decide()` path emits a single `EnergyManagerDecision` with proposed actions and diagnostics, while `build_deye_plan()` converts the decision into inverter programme writes. See [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:1593) and [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:2543).
+## What the system is now
 
-Keep these behaviours in this integration:
+| Job | Actual situation | Recommended destination |
+| --- | --- | --- |
+| Battery reserve, solar forecast, tariff/free-power windows, inverter capacities and charge modes | Active core policy; directly matches the user's need | Keep in the existing integration |
+| EV bypass, charging permission, SOC/target/manual override | Active, shared with TIMXON automations/scripts and dashboard | Keep coordinated with the inverter; remove duplicate writers during a later migration |
+| Bedroom night heating | User confirms it works; button and history show regular use | Move to an HA automation with an arm helper, preserving behavior |
+| General solar heat soak, rotation, heat shedding, room comfort/preheat/underfloor | Large subsystem; outer thermal and heat gates currently off | Remove unwanted policy; do not recreate features merely because they exist |
+| PV load-test/export-limited controls | v0.5.69 repurposes these for curtailment soak; thermal/export-limited/PV-test gates are off live | Remove if there is no remaining export-clipping use case, after reference checks |
+| External inverter cooling | Active minimum-hunt controller plus fan health and latched inverter protection | Simplify separately; explicitly decide the hardware objective and preserve any retained protection |
+| Diagnostics/settings | Some drive real automations; many are internal tuning surfaces | Keep consumed entities and a small set of useful reasons; prune the rest |
 
-- Deye reserve/capacity and charge-source planning.
-- Cheap-grid preserve/top-up policy, if it is still needed with export allowed.
-- Paid-time reserve release/avoidance, because it directly affects inverter reserve.
-- EV grid bypass and EV solar permission, because those interact with Deye programme power and battery targets.
-- Advisory sensors that HA automations currently consume, until the automations are migrated.
-- Bedroom night heating, but preferably as a small separate path or HA automation after dependency mapping. It has a clear user value and a narrow trigger.
+There is real removable residue: v0.5.69 still calculates the old comfort/rotation/underfloor matrix, then overrides those actuator selectors to false in `decision.py:2225`. It is not simply a case of every exposed switch representing an active feature.
 
-## Quarantine
+The useful core already has a pure decision-to-plan boundary and gated inverter writes. Rewriting it means rediscovering SOC fallbacks, programme-row rules, EV interactions, write suppression, and existing HA contracts. Several dedicated integrations would add setup, entity migration, and arbitration work before removing any of that complexity.
 
-Quarantine inverter cooling first. The code currently controls external fans from a load-fed curve plus AC-temperature feedback. It calculates throughput as the max of PV, inverter AC output, and battery power, then builds a baseline fan percentage and trims it from AC temperature error. Defaults are target `43C`, emergency `48C`, max normal fan `70%`, failsafe `50%`, feedback step `5%`. See [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:42), [models.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/models.py:152), and [const.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/const.py:341).
+The target is one focused energy manager plus a few explicit household automations. Separate Python modules may help internal readability later; separate installed integrations are not needed to achieve that boundary.
 
-That model conflicts with the hardware report: internal inverter fans also trigger at `50C` and stop at `40C`. That report is not verified in the repo, but it means the useful external-fan goal is not “follow a nice fan curve”; it is “avoid crossing the internal fan-on temperature, or stay manually out of the way.” The current curve starts reacting below that, has an emergency threshold below the internal trigger, and may run the external fan at many intermediate speeds that do not map cleanly to the actual hardware hysteresis. The result is complexity without a clear control objective.
+## Cooling: why the new observation matters
 
-The cooling write path is gated by `inverter_cooling_control_enabled`, and the repo default is off, which limits new-install damage. See [coordinator.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/coordinator.py:1097) and [const.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/const.py:227). A read-only live HA snapshot reported cooling control toggles enabled, so the installed system may be actively using this path even though the default is safe. The integration also exposes many cooling entities that automations may depend on: 10 tuning numbers in [number.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/number.py:119), 12 correlation sensors in [sensor.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/sensor.py:74), plus the control switch in [switch.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/switch.py:29).
+The user reports that additional internal fans start at 50 C and only stop after cooling to 40 C. Treat that as the reported hardware behavior, not a manufacturer specification independently verified by this audit.
 
-The copied ESPHome fan-controller YAML under `/tmp/deye-audit/fan-controller.yaml` looks like a simple speed fan backed by PWM plus a relay: it turns the relay on when the fan entity turns on, turns it off when the fan entity turns off, and republishes RPM after speed changes. It does not appear, from the non-secret cooling lines inspected, to contain the complex temperature curve. That points back to this integration or HA automations as the source of cooling policy.
+That is a stateful physical controller: at 45 C, the internal fans can be either on or off depending on whether 50 C was crossed earlier. A controller that merely settles somewhere below 50 C cannot guarantee they become quiet again after a crossing. v0.5.69 adds minimum-speed hunting, but still does not represent this internal-fan state. More curve tuning alone does not settle the missing objective. The live target is 40 C with a 1 C deadband and a 52 C emergency threshold, not the release defaults; settling just above 40 C could still leave internal fans running. This is a plausible mismatch, not a measured diagnosis of all cooling behavior.
 
-Minimal cooling replacement:
+Choose the intended behavior before choosing thresholds: avoid starting the internal fans, deliberately cool through their reset point after they start, or accept stock-fan operation and use external fans only for extra cooling. Do not assume the same external speed can meet all three goals under every load.
 
-- Keep advisory temperature and current fan percentage sensors.
-- Delete the load-fed curve, trend tracking, baseline/trim sensors, and most tuning numbers after an automation inventory.
-- If automatic cooling remains, use a two-threshold hysteresis around the real hardware boundary, for example external fan on below the internal fan-on point and off below the internal fan-off point. Do not invent exact thresholds in code until the actual desired external-fan temperatures are chosen from observed data.
-- A simpler option is to move cooling to a Home Assistant automation: `if AC temp >= external_on then fan.set_percentage; if AC temp <= external_off then fan.turn_off`.
+There is also a separate protection path in v0.5.69: sustained hot external-fan failure can latch inverter restrictions, including max-sell/max-solar limits and a protection programme plan. Removing the entire cooling subsystem is therefore more than removing a fan curve. The cooling audit explains this coupling and the limits of RPM-derived health.
 
-## Move To Home Assistant
+A small hysteresis controller may be enough for external fan policy. HA automation is a candidate; ESPHome-local control is another if suitable temperature input and offline behavior exist. Neither is selected as a proven replacement without a short hardware observation. Keep raw temperature/RPM/health evidence during that change; a software recommendation is not evidence that a fan actually runs.
 
-Move these unless they are tightly coupled to inverter reserve:
+## Bedroom heating: preserve the working feature
 
-- General thermal solar soaking.
-- Comfort heat.
-- Morning preheat.
-- Underfloor schedule.
-- Emergency shed buttons and unowned-load shedding, unless you still want the integration to own climate leases.
+The user's preferred destination is a Home Assistant automation. Keep the familiar double-press button, persisted arm state, configured target, morning paid-import/recovery cutoffs, noon cutoff, manual behavior, and free-power interaction. The thermal audit records the current contract. Arming also suppresses cheap-grid battery charging: the manager must read the replacement helper, or receive an equivalent explicit input, if that energy-policy behavior is to remain unchanged.
 
-The thermal system is the broadest non-inverter controller here. It handles thermal mode, direct climate actuation, room rotation, fan modes, solar soak, comfort heat, morning preheat, overnight dining comfort, underfloor comfort, emergency shed, manual override leases, and unowned shedding. The apply path can set HVAC mode, temperature, fan mode, and ownership booleans. See [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:1869), [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:2096), and [coordinator.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/coordinator.py:1415).
+One non-obvious behavior needs an explicit migration decision: when bedroom mode starts, the manager also turns off other configured heat loads, including unowned ones. This path can run even with general thermal control off. The user wants heat shedding removed, so the proposed bedroom automation should normally own just the bedroom; document that intentional difference rather than silently carrying room-wide shedding into the replacement.
 
-The repository already hints this was a migration layer: README says legacy heat controls remain as compatibility aliases during the thermal cutover. See [README.md](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/README.md:337). That makes thermal a good candidate for retirement or extraction.
+Do not rely only on temperature/SOC threshold crossings when migrating. Re-evaluate on startup, arming, relevant state changes, and scheduled boundaries. HA documents that numeric-state triggers fire on crossings and that `for:` waits do not survive restart/reload: [automation triggers](https://www.home-assistant.io/docs/automation/trigger/). Preserve persistent intent with a helper instead of a long-running automation delay.
 
-Bedroom night heating is the exception. It is direct and understandable: an armed switch holds the bedroom at the overnight taper target, suppresses cheap-grid battery charging, turns off other configured thermal loads, and disarms in the morning. See [README.md](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/README.md:77), [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:630), and [coordinator.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/coordinator.py:1447). Keep it for now, but do not keep the whole thermal engine just to support it.
+## Bounded transition
 
-## Preserve For Compatibility
+1. Preserve the current entity IDs consumed by the bedroom button, EV automation/scripts, and dashboards. The live inventory lists concrete references; it is not an exhaustive negative proof for all HA storage/includes.
+2. Migrate bedroom night heating to a small HA automation/helper. Compare the current rules and the proposed bedroom-only behavior, then switch ownership once. Do not run both climate writers together.
+3. Remove unwanted general thermal machinery and obsolete UI; remove curtailment/PV-test behavior if export clipping no longer needs it. Deal with disabled legacy HA scripts/automations as part of that cleanup; disabling the integration alone does not delete them.
+4. Replace cooling policy separately, with the internal 50/40 cycle and protection behavior understood. Verify actual fan operation, missing/stale sensor behavior, restart behavior, and latch recovery.
+5. Consolidate EV/inverter writes. The active daytime EV automation and callable start/stop scripts show that some complexity already lives in HA. Keep forecast/target policy in Python and make each physical control have one clear owner.
+6. Reassess the remaining code. Only split further if an independent lifecycle or hardware boundary actually needs another integration.
 
-The current entity surface is large:
+## Workspace access
 
-- Feature switches include Deye, grid charge, EV, thermal, direct climate, cooling, paid-time, underfloor, and other policy toggles. See [switch.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/switch.py:17).
-- Binary sensors expose both old `heat_*` and newer `thermal_*` concepts plus EV/grid/forecast states. See [binary_sensor.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/binary_sensor.py:24).
-- Sensors expose cooling, thermal, battery plan, EV, and recent action diagnostics. See [sensor.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/sensor.py:74).
-- Number controls include legacy heat thresholds, thermal thresholds, EV thresholds, underfloor thresholds, battery targets, cooling curve controls, and forecast buffers. See [number.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/number.py:23).
-
-This is the main reason not to rewrite first. If a HA automation uses any of those entity IDs, a clean new integration would break the house even if its code is better.
-
-## Delete Later
-
-Ranked Ponytail audit findings:
-
-- `delete:` Inverter cooling curve and tuning surface. Replacement: one HA hysteresis automation or a tiny two-threshold controller after dependency inventory. [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:42)
-- `delete:` Legacy heat alias surface once automations move to thermal names or HA automations. Replacement: no aliases after deprecation. [README.md](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/README.md:337)
-- `delete:` General direct thermal actuation if comfort/underfloor/preheat can live in HA. Replacement: HA climate automations and a few advisory battery/solar sensors. [coordinator.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/coordinator.py:1415)
-- `delete:` Unowned managed-load shedding unless actively used. Replacement: nothing, or a visible HA automation for known climate entities only. [decision.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/decision.py:1160)
-- `yagni:` Script actuation mode appears documented as a compatibility bridge, while runtime only has direct/advisory handling in `_apply_heat()`. Replacement: advisory/direct only, unless a live install still uses scripts. [README.md](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/README.md:220), [coordinator.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/coordinator.py:1415)
-- `shrink:` Split diagnostics from control. Replacement: keep a small core decision package and compatibility sensor layer during migration. [sensor.py](/home/ubuntu/.t3/worktrees/deye_energy_manager/t3code-c530c489/custom_components/deye_energy_manager/sensor.py:74)
-
-## Suggested Module Boundary
-
-Target end state:
-
-- `deye_energy_manager`: inverter reserve, charge source, cheap-grid preserve/top-up, paid-time reserve release, EV programme-power bypass, EV solar permission advisory.
-- `ha automations`: inverter fan hysteresis, bedroom night heating, underfloor schedule, ordinary comfort heat, manual emergency actions.
-- Optional later `thermal_energy_manager`: only if solar thermal storage still needs a reusable integration after HA automations prove too limited.
-
-Do not split by file first. Split by actuator:
-
-- Deye writes stay here: programme capacities, programme powers, programme charge selects, grid charge switch.
-- Climate writes leave here unless bedroom night heating proves worth keeping.
-- Fan writes leave here unless a two-threshold cooling controller proves useful.
-
-## Migration Plan
-
-1. Add an HA automation/entity dependency inventory. Search live HA automations, scripts, dashboards, helpers, and Node-RED if present for `deye_energy_manager`, `solar_owns_`, `cooling_`, `thermal_`, and `heat_`.
-2. Turn off `switch.deye_energy_manager_inverter_cooling_control_enabled` only after checking whether any live safety automation depends on it. Then run cooling as advisory while comparing AC temperature, internal fan events if available, and external fan state.
-3. Replace cooling with a HA hysteresis automation. Keep old cooling sensors for one release; mark the curve controls deprecated.
-4. Move underfloor, comfort heat, morning preheat, and unowned shedding to HA automations or delete them if unused.
-5. Keep bedroom night heating until the rest is quiet. Then either move it to HA or leave it as the only climate action.
-6. Remove deprecated entities in a versioned release after automations no longer reference them.
-
-## Known Unknowns
-
-- The `50C on / 40C off` internal fan hysteresis is user-reported hardware behavior; this repo does not verify it.
-- I did not complete a live Home Assistant automation/registry inventory, so actual entity dependencies are unknown.
-- I did not run tests because this audit only adds documentation and does not change runtime behavior.
+SMB access succeeds. A real read-only CIFS mount was attempted but the workspace container returned `Operation not permitted`; FUSE is also unavailable. Selected files are available in the locally ignored `homeassistant-config-snapshot/` directory. It is a dated snapshot, not a mount, and is not automatically refreshed. No share password or raw HA configuration is committed in this report.
