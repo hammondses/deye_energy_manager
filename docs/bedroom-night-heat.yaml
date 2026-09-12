@@ -6,7 +6,6 @@
   - trigger: state
     entity_id: input_button.bedroom_night_heat
     not_from:
-    - unknown
     - unavailable
     not_to:
     - unknown

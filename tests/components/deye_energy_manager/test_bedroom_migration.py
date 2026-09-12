@@ -7,7 +7,7 @@ import yaml
 def test_bedroom_is_button_only_and_manager_has_no_night_actuator():
     config = yaml.safe_load(Path('docs/bedroom-night-heat.yaml').read_text())[0]
     assert config['triggers'] == [{'trigger': 'state', 'entity_id': 'input_button.bedroom_night_heat',
-                                  'not_from': ['unknown', 'unavailable'], 'not_to': ['unknown', 'unavailable']}]
+                                  'not_from': ['unavailable'], 'not_to': ['unknown', 'unavailable']}]
     assert config['conditions'] == [{'condition': 'template', 'value_template': '{{ trigger.from_state is not none }}'},
                                     {'condition': 'state', 'entity_id': 'climate.bedroom_heatpump', 'state': 'off'}]
     assert len(config['actions']) == 1
