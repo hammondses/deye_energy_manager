@@ -20,7 +20,7 @@ def test_manual_fan_marker_captures_both_channel_times_and_load():
     state = SimpleNamespace(last_reported=datetime.now(timezone.utc))
     values = {'inverter_ac_temperature':44.1,'inverter_dc_temperature':39.2,'inverter_pv_power':5400}
     event = Mock()
-    c = SimpleNamespace(entity_map={'inverter_ac_temperature':'sensor.ac','inverter_dc_temperature':'sensor.dc'},
+    c = SimpleNamespace(_temperature_reported_at=lambda state: state.last_reported, entity_map={'inverter_ac_temperature':'sensor.ac','inverter_dc_temperature':'sensor.dc'},
         hass=SimpleNamespace(states=SimpleNamespace(get=lambda _:state)), _state_float=values.get,
         _cooling_fan_percentage=lambda:50, _record_event=event, async_update_listeners=Mock())
     mark(c, 'stopped')

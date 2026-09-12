@@ -59,6 +59,7 @@ def test_recovery_and_missing_temperature_never_release_hot_internal_fans():
 def test_trend_includes_unchanged_reports_and_forgets_old_direction():
     sample = SimpleNamespace(state='42', last_reported=datetime.now(timezone.utc))
     c = SimpleNamespace(
+        _temperature_reported_at=lambda state: state.last_reported,
         entity_map={'inverter_ac_temperature': 'sensor.temp'},
         hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: sample)),
         settings=EnergyManagerSettings(),
@@ -160,7 +161,7 @@ def test_stale_timeout_can_change_live_and_uses_report_timestamp():
     valid = coordinator_method('_cooling_temperature_valid')
     now = datetime.now(timezone.utc)
     state = SimpleNamespace(state='45', last_reported=now-timedelta(seconds=40), last_updated=now-timedelta(hours=1))
-    c = SimpleNamespace(settings=EnergyManagerSettings(), entity_map={'inverter_ac_temperature':'sensor.temp'},
+    c = SimpleNamespace(_temperature_reported_at=lambda state: state.last_reported, settings=EnergyManagerSettings(), entity_map={'inverter_ac_temperature':'sensor.temp'},
         hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: state)))
     assert valid(c, now)
     c.settings = replace(c.settings, cooling_temperature_stale_s=30)

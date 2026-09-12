@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.6.0b6 — overhaul branch
+
+- Fix false stale-temperature failsafe cycling when HA MQTT suppresses unchanged sensor writes. Cooling freshness and trend samples use the configured sensor's actual numeric MQTT receipt when available.
+- Ignore retained replays, unrelated topics, invalid payloads and readings that do not match the entity value. Real silence still expires at the configured timeout; non-MQTT sensors retain normal timestamp handling.
+- Reuse HA's bounded receive cache; no forced duplicate recorder entries, polling increases or extra subscriptions. Cache-layout incompatibility falls back to the existing conservative timeout.
+- Validation: 162 tests, including unchanged receipts, real silence, retained replay and invalid payloads.
+
 ## v0.6.0b5 — overhaul branch, not released
 
 - Add manual internal-fan start/stop observation buttons capturing AC/DC temperatures, each reading's timestamp, external fan speed/RPM, and inverter load.

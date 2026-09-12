@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from dataclasses import replace
 from math import isfinite
 import logging
+from time import monotonic
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
@@ -42,6 +43,7 @@ from .const import (
 from .decision import build_deye_plan, cooling_recovery_state, inverter_cooling_recommendation, cheap_grid_mirror_programs, cooling_load_collapsed, decide, deye_capacity_percent, deye_plan_conflict_reason, deye_write_thrash_detected, program_ranges, resolve_soc_value, resolved_ev_power_w, thermal_load_diagnostics, time_between
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
+from .temperature_freshness import temperature_reported_at
 from .repairs import async_update_issues
 from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
@@ -764,13 +766,16 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         except (TypeError, ValueError):
             return None
 
+    def _temperature_reported_at(self, state):
+        return temperature_reported_at(state, self.hass.data.get("mqtt"), dt_util.utcnow(), monotonic())
+
     def _cooling_temperature_valid(self, now: datetime) -> bool:
         entity_id = self.entity_map.get("inverter_ac_temperature")
         state = self.hass.states.get(entity_id) if entity_id else None
         return bool(
             state is not None
             and state.state not in UNAVAILABLE
-            and (now - state.last_reported).total_seconds() <= self.settings.cooling_temperature_stale_s
+            and (now - self._temperature_reported_at(state)).total_seconds() <= self.settings.cooling_temperature_stale_s
         )
 
     def _cooling_fan_health(self, settings: EnergyManagerSettings) -> tuple[bool, float | None]:
@@ -801,7 +806,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         if not isfinite(temperature):
             return None, None, None
 
-        sample_at = state.last_reported
+        sample_at = self._temperature_reported_at(state)
         valid = self._cooling_temperature_valid(dt_util.now())
         settings = self.settings
         recovery = cooling_recovery_state(self._cooling_internal_fan_recovery, temperature, valid, settings)
@@ -1285,7 +1290,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             entity_id = self.entity_map.get(key)
             state = self.hass.states.get(entity_id) if entity_id else None
             samples[f"{channel}_temperature_c"] = self._state_float(key)
-            samples[f"{channel}_reported_at"] = state.last_reported.isoformat() if state else None
+            samples[f"{channel}_reported_at"] = self._temperature_reported_at(state).isoformat() if state else None
         self._record_event(
             "internal_fan_observation", f"Internal fan heard {observed}",
             observed=observed, source="manual", **samples,
