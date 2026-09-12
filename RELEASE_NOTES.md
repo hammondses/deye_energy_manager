@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.6.0b2 — overhaul branch, not released
+
+- Release internal-fan recovery at 44 C or lower, the HA reading when the fan was observed off. The exact internal cutoff remains unconfirmed; this replaces the earlier reported 40 C threshold. Keep the 38 C target and full-speed activation by 48 C.
+
 ## v0.6.0b1 — overhaul branch, not released
 
 - Refresh external-fan cooling every five seconds independently of the 30-second energy/EV loop.

@@ -3,7 +3,10 @@
 This change is not deployed. The installed manager remains v0.5.69 until a
 separate cutover. The stock external fans were removed; the external replacement
 fans and fan-failure protection must remain. The remaining internal fans reportedly
-start at AC temperature 50 C and stop at 40 C.
+start at AC temperature 50 C. The fan was observed off when HA reported 44 C,
+superseding the earlier reported 40 C threshold. The exact internal cutoff is
+unknown because reporting skips intermediate readings. Use 44 C or lower as
+a conservative recovery endpoint pending observations with faster reporting.
 
 The inspected Sunsynk add-on uses `single-phase-16kw` definitions with
 `/share/hass-addon-sunsynk/mysensors.py`. Radiator temperature comes from the common
@@ -46,7 +49,7 @@ do not keep stepping the fan on the same sample. Emergency and failsafe increase
 bypass that restriction. Energy/EV/climate control retains its 30-second timer.
 
 At 50 C, persist a recovery flag and command 100% external fan until a valid reading
-is at or below 40 C. Missing readings cannot clear recovery. Without stored recovery
+is at or below 44 C. Missing readings cannot clear recovery. Without stored recovery
 state, assume recovery is needed until a cool reading establishes otherwise. This
 tracks a temperature-based inference, not measured internal-fan status. Existing
 hot fan-failure inverter protection and manual restore remain separate.

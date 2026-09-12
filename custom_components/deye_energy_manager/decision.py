@@ -41,13 +41,13 @@ def cooling_load_collapsed(throughput_w: float, load_change_w: float) -> bool:
 
 
 def cooling_recovery_state(active: bool, temperature: float | None, valid: bool) -> bool:
-    """Remember the internal fans' 50 C on / 40 C off hysteresis."""
+    """Recover to the observed 44 C off reading; the exact internal cutoff is unknown."""
 
     if not valid or temperature is None or not isfinite(temperature):
         return active
     if temperature >= 50.0:
         return True
-    if temperature <= 40.0:
+    if temperature <= 44.0:
         return False
     return active
 
@@ -138,7 +138,7 @@ def inverter_cooling_recommendation(
     )
     if inputs.cooling_internal_fan_recovery:
         recommended_pct = 100.0
-        reason = "internal fan recovery: hold 100% until AC temperature reaches 40C"
+        reason = "internal fan recovery: hold 100% until AC temperature reaches 44C or lower"
     elif temperature_error_c is None:
         recommended_pct = max(raw_pct, current_pct or 0.0)
     elif temperature is not None and temperature >= min(settings.cooling_emergency_temp_c, 48.0):

@@ -34,7 +34,7 @@ def coordinator_method(name):
 
 def test_recovery_and_missing_temperature_never_release_hot_internal_fans():
     active = False
-    for temperature, expected in [(49, False), (50, True), (49, True), (40.1, True), (None, True), (40, False)]:
+    for temperature, expected in [(49, False), (50, True), (49, True), (45, True), (44.9, True), (44.1, True), (None, True), (44, False)]:
         active = cooling_recovery_state(active, temperature, temperature is not None)
         assert active is expected
         if active:
