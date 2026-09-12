@@ -51,11 +51,14 @@ add-on's averaging. Back up the existing add-on options, apply through Superviso
 restart the add-on, and verify fresh HA reports and absence of Modbus timeouts
 before installing the branch manager. Do not edit its converter or credentials.
 
-Set the existing manager target number to **38 C** and emergency temperature to
+Set the existing manager target number to **45 C** and emergency temperature to
 **48 C** at cutover. The live values inspected were 40 C and 52 C. Defaults do not
 overwrite existing user options. The new controller caps full-speed activation at
 48 C even if an old emergency option is higher; a lower configured value is honoured.
-These are initial tuning values, not a guarantee that temperature cannot exceed 50 C.
+The 45 C target replaces the initial 38 C proposal to balance fan noise against
+thermal headroom. Rising-temperature feedback is retained: the heatsink can
+continue warming after airflow increases. These are initial tuning values,
+not a guarantee that temperature cannot exceed 50 C.
 
 Cooling evaluates every five seconds, using a 30–60 second temperature trend.
 An ordinary adjustment requires a fresh temperature report; repeated evaluations

@@ -1,5 +1,9 @@
 # Release Notes
 
+## v0.6.0b3 — overhaul branch, not released
+
+- Use a 45 C default cooling target instead of 38 C to balance fan noise and thermal headroom. Retain temperature-trend feedback and full-speed activation by 48 C. Existing live options are unchanged.
+
 ## v0.6.0b2 — overhaul branch, not released
 
 - Release internal-fan recovery at 44 C or lower, the HA reading when the fan was observed off. The exact internal cutoff remains unconfirmed; this replaces the earlier reported 40 C threshold. Keep the 38 C target and full-speed activation by 48 C.
