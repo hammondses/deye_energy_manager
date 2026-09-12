@@ -1,6 +1,7 @@
 # Faster cooling — staged on overhaul
 
-This change is not deployed. The installed manager remains v0.5.69 until a
+The faster AC/DC capture schedules are live as of 12 September 2026. The
+manager changes are not deployed: the installed manager remains v0.5.69 until a
 separate cutover. The stock external fans were removed; the external replacement
 fans and fan-failure protection must remain. The remaining internal fans reportedly
 start at AC temperature 50 C. The fan was observed off when HA reported 44 C,
@@ -23,25 +24,28 @@ The inspected Sunsynk add-on uses `single-phase-16kw` definitions with
 single-phase register 91 at 0.1 C resolution; the custom converter does not need
 changing. HA exposes this as `sensor.deye_ac_temperature`.
 
-Current radiator schedule: read every 15 s, report every 60 s or a 1 C change.
-DC transformer temperature is read every 15 s and reported every 300 s or 1 C.
+Previous radiator schedule: read every 15 s, report every 60 s or a 1 C change.
+Previously, DC transformer temperature was read every 15 s and reported every 300 s or 1 C.
 HA history confirms approximately those reporting intervals.
 
 ## Cutover settings
 
-Replace the existing radiator entry in the add-on's SCHEDULES (keep other entries):
+Applied to both `radiator_temperature` and `dc_transformer_temperature` in the
+add-on's SCHEDULES (all other entries preserved):
 
 ```yaml
 - KEY: radiator_temperature
   READ_EVERY: 5
   REPORT_EVERY: 15
-  CHANGE_ANY: false
-  CHANGE_BY: 0.3
+  CHANGE_ANY: true
+  CHANGE_BY: 0
   CHANGE_PERCENT: 0
 ```
 
-This checks for changes every five seconds, publishes on a 0.3 C change, and sends
-a scheduled report every 15 seconds. Polling faster does not guarantee that the
+This checks for changes every five seconds, publishes every changed value, and
+sends a scheduled report every 15 seconds. The installed add-on 1.2.0 Supervisor
+schema silently truncates `CHANGE_BY: 0.3` to `0`; report-on-change is used
+instead so small changes reach HA without modifying the converter. Polling faster does not guarantee that the
 inverter itself produces a new measurement each time. Scheduled reports use the
 add-on's averaging. Back up the existing add-on options, apply through Supervisor,
 restart the add-on, and verify fresh HA reports and absence of Modbus timeouts
@@ -64,9 +68,10 @@ state, assume recovery is needed until a cool reading establishes otherwise. Thi
 tracks a temperature-based inference, not measured internal-fan status. Existing
 hot fan-failure inverter protection and manual restore remain separate.
 
-For diagnosis, also give `dc_transformer_temperature` the same 5-second read,
-15-second report and 0.3 C change schedule. Its current five-minute reports
-are too sparse to identify a fan transition reliably. Retain both temperature
+Both temperature channels now use the faster schedule. The previous DC
+five-minute reports were too sparse to identify a fan transition reliably.
+The user also reports DC can start the internal fans at approximately 65 C;
+the DC shutoff threshold is unknown, and neither DC threshold is verified. Retain both temperature
 histories during this investigation and note the exact time the internal fan
 starts/stops; reconsider Recorder exclusions after calibration.
 
@@ -95,3 +100,15 @@ are separate. Check configuration before restarting HA to load Recorder changes.
 References: [Sunsynk schedules](https://kellerza.github.io/sunsynk/reference/schedules),
 [HA Recorder](https://www.home-assistant.io/integrations/recorder/),
 [HA report timestamps](https://developers.home-assistant.io/blog/2024/03/20/state_reported_timestamp/).
+
+Live capture change: Supervisor options backed up to
+`/config/deye_energy_manager_backups/sunsynk-options-before-fast-temperatures-20260912T025305Z.json`
+on HA, with restricted permissions. Only the two temperature schedules changed.
+Only the Sunsynk add-on was restarted; HA and manager control settings were not changed.
+
+Verification: the running add-on reports registers 90 and 91 with read 5 s /
+report 15 s. HA history contains new 0.1 C changes on both entities after the
+restart (AC 43.2 → 43.1 → 43.0 C; DC 35.9 → 35.8 → 35.6 C).
+No Modbus timeout was found in the inspected startup log. A separate MQTT
+warning says `homeassistant/status` is empty and cautions about availability
+after an HA restart; investigate that birth-topic configuration separately.
