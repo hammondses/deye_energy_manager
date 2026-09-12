@@ -24,6 +24,8 @@ class DeyeSensorDescription(SensorEntityDescription):
 
 
 SENSORS: tuple[DeyeSensorDescription, ...] = (
+    DeyeSensorDescription(key="decision_timeline", name="Decision timeline", value_fn=lambda d: None),
+    DeyeSensorDescription(key="cooling_saved_preset", name="Cooling saved preset", value_fn=lambda d: None),
     DeyeSensorDescription(key="active_plan", name="Active plan", value_fn=lambda d: ",".join(d.proposed_actions) or "advisory_only"),
     DeyeSensorDescription(key="active_policy", name="Active policy", value_fn=lambda d: d.active_policy),
     DeyeSensorDescription(key="forecast_mode", name="Forecast mode", value_fn=lambda d: d.forecast_mode),
@@ -175,6 +177,11 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
     def _raw_native_value(self) -> Any:
         if self.coordinator.data is None:
             return None
+        if self.entity_description.key == "decision_timeline":
+            rows = self.coordinator.decision_timeline
+            return rows[-1]["timestamp"] if rows else "none"
+        if self.entity_description.key == "cooling_saved_preset":
+            return "saved" if self.coordinator.cooling_saved_preset else "empty"
         if self.entity_description.key == "last_control_action":
             return self.coordinator.last_control_action
         if self.entity_description.key == "desired_deye_plan":
@@ -207,6 +214,34 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
+        if self.entity_description.key == "decision_timeline":
+            return {"entries": list(self.coordinator.decision_timeline)}
+        if self.entity_description.key == "cooling_saved_preset":
+            return dict(self.coordinator.cooling_saved_preset)
+        if self.entity_description.key == "energy_plan_reason":
+            decision = self.coordinator.data
+            if decision is None:
+                return None
+            settings = self.coordinator.settings
+            return {
+                "full_reason": decision.energy_plan_reason,
+                "expected_action": decision.expected_action,
+                "control_blocked": decision.control_blocked,
+                "battery_soc": decision.battery_soc,
+                "reserve_soc": decision.current_reserve_soc,
+                "morning_target_soc": decision.morning_start_soc_target,
+                "grid_charge_target_soc": decision.grid_charge_target_soc,
+                "remaining_forecast_kwh": decision.forecast_remaining_today_kwh,
+                "tomorrow_forecast_kwh": decision.forecast_tomorrow_kwh,
+                "projected_4pm_soc": decision.projected_4pm_soc,
+                "grid_charge_required": decision.grid_charge_required,
+                "ev_expected_action": decision.ev_expected_action,
+                "ev_reason": decision.ev_decision_reason,
+                "tariff_window": decision.tariff_window,
+                "deye_control_enabled": settings.deye_control_enabled,
+                "grid_charge_control_enabled": settings.grid_charge_control_enabled,
+                "ev_control_enabled": settings.ev_control_enabled,
+            }
         if self.entity_description.key == "recent_proposed_actions":
             return {"entries": list(self.coordinator.recent_proposed_actions)}
         if self.entity_description.key in {"effective_taycan_soc", "wican_taycan_soc", "taycan_soc_source"}:
@@ -249,6 +284,9 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
             settings = self.coordinator.settings
             return {
                 "reason": decision.cooling_reason,
+                "recovery_active": self.coordinator._cooling_internal_fan_recovery,
+                "temperature_valid": self.coordinator._cooling_temperature_valid(dt_util.utcnow()),
+                "source_entities": {key: self.coordinator.entity_map.get(key) for key in ("inverter_ac_temperature", "inverter_dc_temperature", "inverter_cooling_fan", "inverter_cooling_fan_rpm")},
                 "raw_required_percentage": decision.cooling_raw_required_fan_pct,
                 "actual_percentage": decision.cooling_actual_fan_pct,
                 "throughput_w": decision.cooling_throughput_w,

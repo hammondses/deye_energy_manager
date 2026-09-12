@@ -49,7 +49,7 @@ DEFAULT_ENTITY_MAP = {
     "pv_power_in_30_minutes": "sensor.solcast_pv_forecast_power_in_30_minutes",
     "pv_power_in_1_hour": "sensor.solcast_pv_forecast_power_in_1_hour",
     "inverter_ac_temperature": "sensor.deye_ac_temperature",
-    "inverter_dc_temperature": "",
+    "inverter_dc_temperature": "sensor.deye_dc_transformer_temperature",
     "inverter_pv_power": "sensor.deye_total_pv_power",
     "inverter_ac_power": "sensor.deye_inverter_power",
     "inverter_cooling_fan": "fan.deye_external_fans_cooling_fans",

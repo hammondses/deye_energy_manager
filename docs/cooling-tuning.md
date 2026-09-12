@@ -52,3 +52,29 @@ Sunsynk capture remains a separate add-on setting: both AC/DC channels currently
 poll every 5 s, publish every change and have a 15 s scheduled report. Editing those
 settings requires an add-on restart, not an HA restart. A faster manager interval
 cannot create temperature samples the add-on has not supplied.
+
+## Observing and restoring tuning (0.6.0b5)
+
+Use the companion card's `overhaul` branch (0.4.0-beta.1) for live numbers,
+AC/DC history, fan commands, and the Energy/Timeline views. The integration also
+exposes these as ordinary entities for native HA dashboards.
+
+Press **Mark internal fan started/stopped** when you hear a transition. The
+persistent timeline records both temperature values and their individual report
+timestamps, external fan percentage/RPM, PV, AC and battery power. These are manual
+observations, not inferred fan states or verified hardware thresholds.
+
+**Save cooling preset** stores one known-good tuning configuration. **Restore
+cooling preset** restores its numeric tuning and trend-step option in one update,
+leaving actuator gates unchanged. Both operations appear in the timeline.
+
+The latest 50 events survive manager reloads. Identical recommendations with only
+new timestamps or numeric explanation changes do not append events. HA automation
+consumers can listen for `deye_energy_manager_event` and filter `entry_id`/`kind`.
+
+Deployment status: manager/card changes remain on their respective overhaul
+branches. The live MQTT birth/will messages were changed to retained messages;
+a new subscriber confirmed retained `online`. The default DC entity mapping and
+HA options-dialog compatibility fix are staged here and require installation.
+The bedroom heating implementation remains in the manager pending a separate
+migration that preserves its current behavior and automation dependencies.

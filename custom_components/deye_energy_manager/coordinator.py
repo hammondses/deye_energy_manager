@@ -10,6 +10,7 @@ from dataclasses import replace
 from math import isfinite
 import logging
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
@@ -140,6 +141,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._cheap_grid_session_date: str | None = None
         self._cheap_grid_charge_blocked_target_soc: float | None = None
         self.recent_proposed_actions: deque[dict[str, object | None]] = deque(maxlen=10)
+        self.decision_timeline: deque[dict[str, object]] = deque(maxlen=50)
+        self.cooling_saved_preset: dict[str, object] = {}
         self.load_diagnostics: dict[str, object] = {}
         self._remove_listeners: list[Callable[[], None]] = []
 
@@ -227,6 +230,11 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_manual_charging_override = bool(data.get("ev_manual_charging_override", False))
         self.cooling_inverter_protection_active = bool(data.get("cooling_inverter_protection_active", False))
         self._cooling_internal_fan_recovery = bool(data.get("cooling_internal_fan_recovery", True))
+        timeline = data.get("decision_timeline")
+        if isinstance(timeline, list):
+            self.decision_timeline.extend(row for row in timeline[-50:] if isinstance(row, dict))
+        if isinstance(data.get("cooling_saved_preset"), dict):
+            self.cooling_saved_preset = data["cooling_saved_preset"]
         raw_restore = data.get("cooling_protection_restore_values")
         if isinstance(raw_restore, dict):
             self._cooling_protection_restore_values = {
@@ -287,6 +295,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             "ev_manual_charging_override": self.ev_manual_charging_override,
             "cooling_inverter_protection_active": self.cooling_inverter_protection_active,
             "cooling_internal_fan_recovery": self._cooling_internal_fan_recovery,
+            "decision_timeline": list(self.decision_timeline),
+            "cooling_saved_preset": self.cooling_saved_preset,
             "cooling_protection_restore_values": self._cooling_protection_restore_values,
         }
 
@@ -665,6 +675,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 self._cooling_inputs_snapshot,
                 now=dt_util.now(),
                 inverter_ac_temperature_c=temperature,
+                inverter_dc_temperature_c=self._state_float("inverter_dc_temperature"),
                 cooling_temperature_valid=self._cooling_temperature_valid(dt_util.now()),
                 cooling_temperature_sample_at=sample_at,
                 cooling_temperature_trend_c_per_min=trend,
@@ -681,6 +692,12 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             decision = replace(
                 self.data,
                 inverter_ac_temperature_c=temperature,
+                inverter_dc_temperature_c=inputs.inverter_dc_temperature_c,
+                inverter_pv_power_w=inputs.inverter_pv_power_w,
+                inverter_ac_power_w=inputs.inverter_ac_power_w,
+                cooling_battery_power_w=inputs.battery_power_w,
+                cooling_fan_healthy=self._cooling_fan_health(settings)[0],
+                cooling_fan_rpm=self._state_float("inverter_cooling_fan_rpm"),
                 cooling_throughput_w=cooling.throughput_w,
                 cooling_curve_baseline_pct=cooling.baseline_pct,
                 cooling_temperature_trim_pct=cooling.temperature_trim_pct,
@@ -790,6 +807,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         recovery = cooling_recovery_state(self._cooling_internal_fan_recovery, temperature, valid, settings)
         if recovery != self._cooling_internal_fan_recovery:
             self._cooling_internal_fan_recovery = recovery
+            self._record_event("recovery", "Recovery cooling started" if recovery else "Recovery cooling released")
             self._schedule_runtime_save()
         previous = self._cooling_temperature_sample
         if previous is None or sample_at != previous[0]:
@@ -1247,11 +1265,70 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
     ) -> None:
         self.load_diagnostics = thermal_load_diagnostics(inputs, settings, decision)
 
+    def _record_event(self, kind: str, message: str, **details: object) -> None:
+        """Persist a bounded event timeline; emit only transitions and explicit actions."""
+
+        row = {"timestamp": dt_util.utcnow().isoformat(), "kind": kind, "message": message, **details}
+        self.decision_timeline.append(row)
+        self._schedule_runtime_save()
+        self.hass.bus.async_fire(f"{DOMAIN}_event", {"entry_id": self.entry.entry_id, **row})
+
+    @callback
+    def record_internal_fan_observation(self, observed: str) -> None:
+        """Capture what the user heard, not an inferred hardware state."""
+
+        if observed not in {"started", "stopped"}:
+            raise HomeAssistantError("Observation must be started or stopped")
+        samples = {}
+        for channel in ("ac", "dc"):
+            key = f"inverter_{channel}_temperature"
+            entity_id = self.entity_map.get(key)
+            state = self.hass.states.get(entity_id) if entity_id else None
+            samples[f"{channel}_temperature_c"] = self._state_float(key)
+            samples[f"{channel}_reported_at"] = state.last_reported.isoformat() if state else None
+        self._record_event(
+            "internal_fan_observation", f"Internal fan heard {observed}",
+            observed=observed, source="manual", **samples,
+            fan_percentage=self._cooling_fan_percentage(),
+            fan_rpm=self._state_float("inverter_cooling_fan_rpm"),
+            pv_power_w=self._state_float("inverter_pv_power"),
+            ac_power_w=self._state_float("inverter_ac_power"),
+            battery_power_w=self._state_float("battery_power"),
+        )
+        self.async_update_listeners()
+
+    @callback
+    def save_cooling_preset(self) -> None:
+        """Save the current tuning as a known-good slot, excluding actuator gates."""
+
+        settings = self.settings
+        values = {key: getattr(settings, key) for key in NUMBER_DEFAULTS if key.startswith("cooling_")}
+        values["cooling_minimum_hunt_enabled"] = settings.cooling_minimum_hunt_enabled
+        self.cooling_saved_preset = {"saved_at": dt_util.utcnow().isoformat(), "values": values}
+        self._record_event("preset", "Saved current cooling tuning")
+        self.async_update_listeners()
+
+    async def async_restore_cooling_preset(self) -> None:
+        """Restore tuning in one config update; never enable actuator controls."""
+
+        values = self.cooling_saved_preset.get("values")
+        if not isinstance(values, dict) or not values:
+            raise HomeAssistantError("Save a cooling preset before restoring it")
+        allowed = {key for key in NUMBER_DEFAULTS if key.startswith("cooling_")}
+        restored = {
+            key: value for key, value in values.items()
+            if key in allowed and isinstance(value, (int, float)) and isfinite(value)
+        }
+        if isinstance(values.get("cooling_minimum_hunt_enabled"), bool):
+            restored["cooling_minimum_hunt_enabled"] = values["cooling_minimum_hunt_enabled"]
+        self.hass.config_entries.async_update_entry(self.entry, options={**self.entry.options, **restored})
+        self._record_event("preset", "Restored saved cooling tuning")
+        await self.async_request_refresh()
+
     def _append_proposed_action(self, decision: EnergyManagerDecision) -> None:
         action = decision.expected_action
         subsystem = "thermal" if action.startswith("thermal_") else "ev" if action.startswith("ev_") else "grid" if action.startswith("grid_") else "system"
-        self.recent_proposed_actions.append(
-            {
+        row = {
                 "timestamp": decision.now.isoformat(),
                 "subsystem": subsystem,
                 "proposed_action": action,
@@ -1261,8 +1338,18 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 "reason": decision.thermal_action_reason if subsystem == "thermal" else decision.ev_decision_reason if subsystem == "ev" else decision.reason,
                 "blocked_reason": self._blocked_reason(subsystem),
                 "control_enabled": self.settings.thermal_control_enabled if subsystem == "thermal" else self.settings.ev_control_enabled if subsystem == "ev" else self.settings.enabled,
-            }
-        )
+        }
+        row.update(policy=decision.active_policy, tariff=decision.tariff_window,
+                   grid_charge_required=decision.grid_charge_required,
+                   solar_arrived=decision.solar_arrived)
+        previous = self.recent_proposed_actions[-1] if self.recent_proposed_actions else {}
+        if {k: v for k, v in row.items() if k not in {"timestamp", "reason"}} == {
+            k: v for k, v in previous.items() if k not in {"timestamp", "reason"}
+        }:
+            return
+        self.recent_proposed_actions.append(row)
+        self._record_event("decision", str(row["reason"]), proposed_action=action,
+                           control_enabled=row["control_enabled"], blocked_reason=row["blocked_reason"])
 
     def _would_actuate(self, subsystem: str) -> bool:
         settings = self.settings
@@ -1515,6 +1602,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.last_control_action = (
             f"inverter cooling fan -> {desired}%: {decision.cooling_reason}"
         )
+        self._record_event("fan_command", self.last_control_action, requested_percentage=desired)
 
     def _capture_cooling_protection_restore_values(self) -> None:
         """Remember only the numeric settings changed by the protection latch."""

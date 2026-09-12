@@ -1,5 +1,15 @@
 # Release Notes
 
+## v0.6.0b5 — overhaul branch, not released
+
+- Add manual internal-fan start/stop observation buttons capturing AC/DC temperatures, each reading's timestamp, external fan speed/RPM, and inverter load.
+- Add one persistent known-good cooling preset with save/restore buttons. Restore changes tuning only and preserves actuator gates.
+- Add a persistent 50-event decision timeline and `deye_energy_manager_event` events. Repeated evaluations and numeric reason churn do not create timeline entries.
+- Expose energy-plan assumptions and control gates for the rebuilt companion card; refresh cooling diagnostics on the fast cooling cycle.
+- Default DC temperature to `sensor.deye_dc_transformer_temperature` and fix the options dialog's assignment to HA's read-only config-entry property.
+- Companion card overhaul provides Cooling, Energy, and Timeline views, native HA history graphs, and live tuning controls. Install matching branches together for all features.
+- Validation: 161 Python tests; companion card typecheck, build, and Chromium interaction/mobile checks. Branch work only: no release tag or live manager/card deployment.
+
 ## v0.6.0b4 — overhaul branch, not released
 
 - Expose live number controls for cooling update interval, trend window/minimum observation, stale-temperature timeout, and recovery trigger/release temperatures. These apply without HA restart or integration reload.

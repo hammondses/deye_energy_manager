@@ -64,7 +64,7 @@ def test_trend_includes_unchanged_reports_and_forgets_old_direction():
         settings=EnergyManagerSettings(),
         _cooling_samples=deque(maxlen=600), _cooling_temperature_sample=None,
         _cooling_temperature_trend_c_per_min=None, _cooling_internal_fan_recovery=False,
-        _cooling_temperature_valid=lambda _: True, _schedule_runtime_save=Mock(),
+        _cooling_temperature_valid=lambda _: True, _schedule_runtime_save=Mock(), _record_event=Mock(),
     )
     read = coordinator_method('_cooling_temperature')
     assert read(c)[2] is None
@@ -97,6 +97,8 @@ def test_fast_loop_only_writes_fans_and_repeated_samples_do_not_step_again():
             _cooling_temperature_valid=lambda _: True,
             _cooling_fan_percentage=lambda: 20,
             _state_float=lambda _: 5000,
+            _cooling_fan_health=lambda _: (True, 1000),
+            _record_event=Mock(),
             async_update_listeners=Mock(),
             entity_map={'inverter_cooling_fan': 'fan.external'},
             hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: SimpleNamespace(state='on')), services=SimpleNamespace(async_call=service)),
