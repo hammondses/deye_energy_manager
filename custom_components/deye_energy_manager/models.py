@@ -163,7 +163,7 @@ class EnergyManagerSettings:
     cooling_curve_idle_fan_pct: float = 15.0
     cooling_curve_fan_pct_per_kw: float = 3.5
     cooling_temperature_gain_pct_per_c: float = 5.0
-    cooling_feedback_step_pct: float = 5.0
+    cooling_feedback_step_pct: float = 10.0
     cooling_target_deadband_c: float = 1.0
     cooling_trend_deadband_c_per_min: float = 0.2
     cooling_min_active_fan_pct: float = 10.0

@@ -130,6 +130,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self._paid_grid_import_since: datetime | None = None
         self._last_cooling_write_at: datetime | None = None
         self._last_cooling_feedback_sample_at: datetime | None = None
+        self._temperature_receipt_cache: dict = {}
         self._cooling_temperature_sample: tuple[datetime, float] | None = None
         self._cooling_samples: deque[tuple[datetime, float]] = deque(maxlen=600)
         self._cooling_inputs_snapshot: EnergyManagerInputs | None = None
@@ -767,7 +768,10 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return None
 
     def _temperature_reported_at(self, state):
-        return temperature_reported_at(state, self.hass.data.get("mqtt"), dt_util.utcnow(), monotonic())
+        return temperature_reported_at(
+            state, self.hass.data.get("mqtt"), dt_util.utcnow(), monotonic(),
+            self._temperature_receipt_cache,
+        )
 
     def _cooling_temperature_valid(self, now: datetime) -> bool:
         entity_id = self.entity_map.get("inverter_ac_temperature")
@@ -815,7 +819,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             self._record_event("recovery", "Recovery cooling started" if recovery else "Recovery cooling released")
             self._schedule_runtime_save()
         previous = self._cooling_temperature_sample
-        if previous is None or sample_at != previous[0]:
+        if previous is None or sample_at > previous[0]:
             if previous is not None and (sample_at - previous[0]).total_seconds() > settings.cooling_trend_window_s:
                 self._cooling_samples.clear()
             self._cooling_samples.append((sample_at, temperature))
@@ -1557,26 +1561,35 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             return
         current = self._cooling_fan_percentage()
         desired = int(decision.cooling_recommended_fan_pct)
-        if current is not None and abs(current - desired) < 2.0:
+        if current is not None and abs(current - desired) < 1.0:
             return
 
         sample_at = decision.cooling_temperature_sample_at
         fresh_temperature = (
             sample_at is not None
-            and sample_at != self._last_cooling_feedback_sample_at
+            and (self._last_cooling_feedback_sample_at is None
+                 or sample_at > self._last_cooling_feedback_sample_at)
         )
         if current is not None and desired > current:
-            load_increased = decision.cooling_load_change_w >= 500.0
+            load_increased = (
+                not self.settings.cooling_minimum_hunt_enabled
+                and decision.cooling_load_change_w >= 500.0
+            )
+            safety_increase = (
+                self._cooling_internal_fan_recovery
+                or not self._cooling_temperature_valid(dt_util.now())
+                or (decision.inverter_ac_temperature_c is not None
+                    and decision.inverter_ac_temperature_c >= self.settings.cooling_emergency_temp_c)
+            )
             if (
                 self._last_cooling_write_at is not None
                 and not fresh_temperature
-                and desired < 100
-                and self._cooling_temperature_valid(dt_util.now())
+                and not safety_increase
                 and not load_increased
             ):
                 return
         elif current is not None and desired < current:
-            load_decreased = cooling_load_collapsed(
+            load_decreased = not self.settings.cooling_minimum_hunt_enabled and cooling_load_collapsed(
                 decision.cooling_throughput_w,
                 decision.cooling_load_change_w,
             )

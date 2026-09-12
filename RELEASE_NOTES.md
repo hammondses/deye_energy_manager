@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.6.0b7 — overhaul branch, not deployed
+
+- Cache each MQTT receipt's UTC timestamp once so clock conversion jitter cannot repeatedly authorise fan adjustments on the same report. Older samples also cannot advance feedback.
+- Minimum-hunt adjustments are now 1% inside the target band, scaling with error outside the band and the temperature-gain setting, capped by Cooling maximum feedback step (1–10%, default 10%). Existing saved caps are preserved.
+- Permit actual 1% fan writes and remove 5% curve rounding. Load changes cannot bypass sample gating in minimum-hunt mode; a normal request reaching 100% is no longer mistaken for a safety override. Emergency, recovery and stale-temperature safety increases still act immediately.
+- No ambient sensor dependency, fan ramp timer, or actuator gate changes. Heatsink lag still requires live observation; this does not guarantee elimination of oscillation.
+- Validation: 165 tests. Offline replay of the recorded 20:40–20:43 NZST inputs requested a 22% peak instead of the recorded 80%; historical temperatures were held fixed, so this is a command regression check, not a physical cooling prediction.
+
 ## v0.6.0b6 — overhaul branch
 
 - Fix false stale-temperature failsafe cycling when HA MQTT suppresses unchanged sensor writes. Cooling freshness and trend samples use the configured sensor's actual numeric MQTT receipt when available.

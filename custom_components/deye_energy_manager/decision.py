@@ -111,7 +111,7 @@ def inverter_cooling_recommendation(
         )
 
     raw_pct = min(max(raw_pct, 0.0), 100.0)
-    raw_pct = min(100.0, float(int(raw_pct / 5.0 + 0.5) * 5))
+    raw_pct = min(100.0, float(int(raw_pct + 0.5)))
     current_pct = inputs.cooling_fan_percentage
     trend = inputs.cooling_temperature_trend_c_per_min
     load_increased = inputs.cooling_load_change_w >= 500.0
@@ -140,6 +140,13 @@ def inverter_cooling_recommendation(
         and current_pct is not None
         and throughput_w >= 500.0
     )
+    # Trend-only corrections inside the target band are deliberately small.
+    # Outside it, grow the step with error, capped by the existing live knob.
+    excess_error = max(0.0, abs(temperature_error_c or 0.0) - settings.cooling_target_deadband_c)
+    feedback_step = min(
+        max(1.0, min(10.0, settings.cooling_feedback_step_pct)),
+        max(1, int(excess_error * settings.cooling_temperature_gain_pct_per_c + 0.5)),
+    )
     if inputs.cooling_internal_fan_recovery:
         recommended_pct = 100.0
         reason = f"internal fan recovery: hold 100% until AC temperature reaches {settings.cooling_recovery_release_temp_c:g}C or lower"
@@ -152,30 +159,30 @@ def inverter_cooling_recommendation(
         if above_target and not clearly_falling:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
-                current_pct + settings.cooling_feedback_step_pct,
+                current_pct + feedback_step,
             )
-            reason = f"minimum hunt: above target band, +{settings.cooling_feedback_step_pct:g}%"
+            reason = f"minimum hunt: above target band, +{feedback_step:g}%"
         elif below_target and still_rising:
             recommended_pct = current_pct
             reason = "minimum hunt: warming toward target band, hold"
         elif below_target:
             recommended_pct = max(
                 settings.cooling_min_active_fan_pct,
-                current_pct - settings.cooling_feedback_step_pct,
+                current_pct - feedback_step,
             )
-            reason = f"minimum hunt: below target, -{settings.cooling_feedback_step_pct:g}%"
+            reason = f"minimum hunt: below target, -{feedback_step:g}%"
         elif still_rising:
             recommended_pct = min(
                 settings.cooling_max_normal_fan_pct,
-                current_pct + settings.cooling_feedback_step_pct,
+                current_pct + feedback_step,
             )
-            reason = f"minimum hunt: rising inside target band, +{settings.cooling_feedback_step_pct:g}%"
+            reason = f"minimum hunt: rising inside target band, +{feedback_step:g}%"
         elif not above_target and clearly_falling:
             recommended_pct = max(
                 settings.cooling_min_active_fan_pct,
-                current_pct - settings.cooling_feedback_step_pct,
+                current_pct - feedback_step,
             )
-            reason = f"minimum hunt: falling inside target band, -{settings.cooling_feedback_step_pct:g}%"
+            reason = f"minimum hunt: falling inside target band, -{feedback_step:g}%"
         else:
             recommended_pct = current_pct
             reason = "minimum hunt: inside target band, hold"

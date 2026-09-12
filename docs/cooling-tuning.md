@@ -21,22 +21,26 @@ override. Existing user settings are preserved when upgrading.
 | Cooling trend window | 60 s | Measure direction over the latest 30–300 s of readings. |
 | Cooling trend minimum observation | 30 s | Require 5–30 s of observations before using a slope. |
 | Cooling trend deadband | 0.2 C/min | Ignore smaller slopes as jitter. |
-| Cooling feedback step | 5% | Size of a normal fan adjustment; repeated checks of the same report cannot keep stepping. |
+| Cooling maximum feedback step | 10% | Cap of 1–10 percentage points per fresh report; existing saved values are preserved. Minimum hunt uses 1% inside the target band and grows with error outside it. |
 | Cooling temperature stale timeout | 60 s | Treat older reports as missing; adjustable 15–600 s. |
 | Cooling minimum active fan | 10% | Lower active-fan bound in the existing controller. |
 | Cooling maximum normal fan | 70% | Normal-operation ceiling; emergency/recovery can use 100%. |
 | Cooling failsafe fan | 50% | Missing-temperature floor; never reduce an already higher speed. |
 | Cooling curve idle fan | 15% | Baseline contribution before load/temperature adjustments. |
 | Cooling curve fan per kW | 3.5%/kW | Load contribution to the baseline. |
-| Cooling temperature gain | 5%/C | Temperature correction to the load curve. |
+| Cooling temperature gain | 5%/C | Curve correction; in minimum hunt, scales adjustment size with temperature error outside the target band. |
 
 Temperature thresholds/deadband accept 0.1 C increments. Existing controls also
 cover fan-failure trip temperature, trip delay, minimum RPM, and the Deye limits
 to restore manually after protection. Control toggles remain explicit and are
 never enabled by changing a tuning value.
 
-The minimum-hunt switch selects the existing trend-based step controller; curve
-gain controls govern the other mode. Recovery thresholds describe our external
+The minimum-hunt switch selects the trend-based controller. With the default
+45 C target, 1 C deadband and 5%/C gain, a trend inside 44–46 C requests a
+1-point correction; 0.5 C outside the band requests 3 points, 1 C requests 5,
+and 2 C requests 10 (subject to the configured cap). A hot but clearly falling
+reading still holds speed. Emergency/recovery overrides remain immediate.
+The curve-per-kW and idle controls govern the other mode. Recovery thresholds describe our external
 fan policy, not verified internal-fan specifications. DC temperature is currently
 being observed; it is not a second proven recovery trigger. The 65 C DC start
 observation and unknown DC stop threshold still need validating.
@@ -44,8 +48,7 @@ observation and unknown DC stop threshold still need validating.
 Use [cooling-tuning-card.yaml](cooling-tuning-card.yaml) as a manual dashboard card.
 It uses the current household entity names; adjust the prefix if HA assigns a
 different name. It does not require custom frontend components. Temperature graphs
-use the live source sensors, including the DC sensor whose manager mapping is
-not yet corrected. Change one setting at a time and observe the temperature slope
+use the live source sensors, including the DC sensor mapped to `sensor.deye_dc_transformer_temperature`. Change one setting at a time and observe the temperature slope
 and fan response before the next adjustment. A target does not guarantee no overshoot.
 
 Sunsynk capture remains a separate add-on setting: both AC/DC channels currently
@@ -95,3 +98,17 @@ This uses HA's existing bounded MQTT receive cache. If MQTT metadata is absent o
 its internal layout changes, the manager falls back conservatively to the entity
 timestamp. Tested against the installed HA Core 2026.8.3. AC and DC manual
 observation timestamps use the same receipt handling.
+
+
+## Thermal lag
+
+A new report is not proof that the heatsink has responded to the last speed
+change. The one-report/one-command guard fixes duplicate escalation; smaller
+near-target steps reduce its size but do not establish closed-loop stability.
+Observe complete warming/cooling cycles after deployment. Do not infer that a
+historical-input replay predicts temperatures with different airflow.
+
+Ambient temperature is not required by this controller: its effect appears in
+the measured heatsink response. The garage sensor may be used for comparison,
+but its placement may not represent inlet air; no ambient compensation or new
+sensor dependency is introduced here.

@@ -147,7 +147,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
             cooling_temperature_valid=True,
             cooling_fan_percentage=40,
         ),
-        EnergyManagerSettings(cooling_target_temp_c=43),
+        EnergyManagerSettings(cooling_target_temp_c=43, cooling_feedback_step_pct=5),
     )
 
     assert recommendation.throughput_w == 10000
@@ -158,7 +158,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
 
 
 def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
-    settings = EnergyManagerSettings(cooling_target_temp_c=43)
+    settings = EnergyManagerSettings(cooling_target_temp_c=43, cooling_feedback_step_pct=5)
     decrease = inverter_cooling_recommendation(
         base_inputs(
             essential_power_w=1000,
@@ -238,8 +238,8 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
     assert stable.recommended_pct == 35
     assert rising.recommended_pct == 40
     assert steady_at_target.recommended_pct == 50
-    assert load_fell.recommended_pct == 20
-    assert sunny_dip.raw_required_pct == 35
+    assert load_fell.recommended_pct == 19
+    assert sunny_dip.raw_required_pct == 37
     assert sunny_dip.recommended_pct == 65
 
 
@@ -286,7 +286,7 @@ def test_inverter_cooling_turns_off_only_when_cool_and_idle() -> None:
 
 
 def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> None:
-    settings = EnergyManagerSettings()
+    settings = EnergyManagerSettings(cooling_feedback_step_pct=5)
     unwinding = inverter_cooling_recommendation(
         base_inputs(
             inverter_pv_power_w=7000,
@@ -310,7 +310,7 @@ def test_inverter_cooling_falling_temperature_unwinds_and_avoids_load_flap() -> 
     )
 
     assert unwinding.recommended_pct == 90
-    assert overnight.raw_required_pct == 15
+    assert overnight.raw_required_pct == 16
     assert overnight.recommended_pct == 10
 
 
@@ -338,8 +338,8 @@ def test_inverter_cooling_minimum_hunt_uses_temperature_band() -> None:
     )
 
     assert holding.recommended_pct == 40
-    assert lowering.recommended_pct == 35
-    assert lowering.reason == "minimum hunt: below target, -5%"
+    assert lowering.recommended_pct == 37
+    assert lowering.reason == "minimum hunt: below target, -3%"
 
 
 def test_inverter_cooling_minimum_hunt_unwinds_cold_fan_during_trend_jitter() -> None:
@@ -354,9 +354,9 @@ def test_inverter_cooling_minimum_hunt_unwinds_cold_fan_during_trend_jitter() ->
         EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45),
     )
 
-    assert recommendation.raw_required_pct == 40
-    assert recommendation.recommended_pct == 65
-    assert recommendation.reason == "minimum hunt: below target, -5%"
+    assert recommendation.raw_required_pct == 39
+    assert recommendation.recommended_pct == 60
+    assert recommendation.reason == "minimum hunt: below target, -10%"
 
 
 def test_inverter_cooling_minimum_hunt_holds_jitter_inside_target_band() -> None:
@@ -398,8 +398,8 @@ def test_inverter_cooling_minimum_hunt_responds_to_real_trend_inside_target_band
         settings,
     )
 
-    assert rising.recommended_pct == 45
-    assert falling.recommended_pct == 35
+    assert rising.recommended_pct == 41
+    assert falling.recommended_pct == 39
 
 
 def test_inverter_cooling_minimum_hunt_follows_temperature_not_load_jump() -> None:
@@ -435,9 +435,9 @@ def test_inverter_cooling_minimum_hunt_tracks_target_gradually() -> None:
     settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_target_temp_c=45)
     samples = (
         (39.2, 45, 0.25, 45),
-        (39.2, 45, 0.1, 40),
-        (44.9, 40, 0.3, 45),
-        (46.2, 40, 0.3, 45),
+        (39.2, 45, 0.1, 35),
+        (44.9, 40, 0.3, 41),
+        (46.2, 40, 0.3, 41),
         (46.2, 45, -0.3, 45),
         (44.9, 20, 0.0, 20),
     )

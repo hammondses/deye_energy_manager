@@ -166,3 +166,58 @@ def test_stale_timeout_can_change_live_and_uses_report_timestamp():
     assert valid(c, now)
     c.settings = replace(c.settings, cooling_temperature_stale_s=30)
     assert not valid(c, now)
+
+
+def test_adaptive_hunt_step_scales_with_error_and_honours_live_cap():
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_emergency_temp_c=55)
+    for temp, trend, expected in [(45, .3, 41), (46.1, .3, 41), (46.5, .3, 43), (47, .3, 45), (48, .3, 50),
+                                  (45, -.3, 39), (43.9, -.3, 39), (43.5, -.3, 37), (43, -.3, 35), (42, -.3, 30)]:
+        inputs = base_inputs(inverter_ac_temperature_c=temp, cooling_temperature_valid=True,
+                             cooling_fan_percentage=40, cooling_temperature_trend_c_per_min=trend)
+        assert inverter_cooling_recommendation(inputs, settings).recommended_pct == expected
+    settings = replace(settings, cooling_feedback_step_pct=3)
+    assert inverter_cooling_recommendation(inputs, settings).recommended_pct == 37
+    # A legacy cap above the new supported range cannot exceed ten points.
+    settings = replace(settings, cooling_feedback_step_pct=20)
+    assert inverter_cooling_recommendation(inputs, settings).recommended_pct == 30
+
+
+def test_one_percent_writes_and_duplicate_or_older_samples_cannot_advance_hunt():
+    async def run():
+        stamp = datetime.now(timezone.utc)
+        inputs = base_inputs(inverter_ac_temperature_c=44.1, cooling_temperature_valid=True,
+                             cooling_temperature_sample_at=stamp, cooling_fan_percentage=30,
+                             cooling_temperature_trend_c_per_min=.3)
+        settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=True, cooling_max_normal_fan_pct=100)
+        current = 30
+        async def service(domain, action, data, **kwargs):
+            nonlocal current
+            current = data['percentage']
+        call = AsyncMock(side_effect=service)
+        c = SimpleNamespace(settings=settings, _cooling_internal_fan_recovery=False,
+            _cooling_fan_percentage=lambda: current, _cooling_temperature_valid=lambda _: True,
+            _last_cooling_write_at=None, _last_cooling_feedback_sample_at=None,
+            entity_map={'inverter_cooling_fan':'fan.external'}, _record_event=Mock(),
+            hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: SimpleNamespace(state='on')),
+                                 services=SimpleNamespace(async_call=call)))
+        apply = coordinator_method('_apply_inverter_cooling')
+        decision = decide(inputs, settings)
+        await apply(c, decision)
+        assert current == 31
+        for sample in [stamp, stamp-timedelta(seconds=15)]:
+            for load_change in [0, 2000, -2000]:
+                repeated = replace(decision, cooling_recommended_fan_pct=32,
+                                   cooling_temperature_sample_at=sample, cooling_load_change_w=load_change)
+                await apply(c, repeated)
+                await apply(c, replace(repeated, cooling_recommended_fan_pct=30))
+        assert call.await_count == 1
+        # Normal control reaching 100 is not itself an emergency exemption.
+        await apply(c, replace(decision, cooling_recommended_fan_pct=100))
+        assert call.await_count == 1
+        await apply(c, replace(decision, cooling_recommended_fan_pct=32,
+                               cooling_temperature_sample_at=stamp+timedelta(seconds=15)))
+        assert current == 32
+        # Genuine safety still acts immediately on an already-consumed report.
+        await apply(c, replace(decision, inverter_ac_temperature_c=48, cooling_recommended_fan_pct=100))
+        assert current == 100
+    asyncio.run(run())
