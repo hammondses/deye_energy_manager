@@ -97,3 +97,18 @@ version, settings, exclusions and number of usable windows.
 
 The first deliverable is a clean observation dataset and measured operating
 coverage, not an automatically trained replacement controller.
+
+## Deployment receipt — 13 September 2026
+
+v0.6.0b8 (`d24a36a`, branch `overhaul`) was installed and Home Assistant restarted.
+The collector began around 00:23 NZST. Its first saved window ended at 00:25 NZST,
+with one successful write and zero write failures. The compressed file was copied
+back over SMB, decoded and processed by the review command with CSV export.
+This first window is partial and includes startup temperature unavailability;
+exclude it from cooling comparisons. Garage readings recovered to 12.3 °C and
+59% humidity, and the actual fan returned from startup failsafe to 10%.
+
+The Power page includes a collection-status row and a collection toggle. Raw data
+stays in HA's dedicated data directory; neither measurements nor credentials are
+committed. Plan the first analysis around **20 September 2026**, subject to usable
+coverage. No automatic review or reminder has been scheduled.
