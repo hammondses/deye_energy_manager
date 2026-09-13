@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.6.0b11 — overhaul branch
+
+- Replace the normal curve’s abrupt maximum-fan demand one degree before emergency with continuous temperature demand from target to emergency. Full-fan emergency and recovery protection remain unchanged.
+- Remove the load-collapse shortcut that could cut fan demand immediately; decreases require thermal feedback and retain the configured maximum step.
+
 ## v0.6.0b10 — overhaul branch
 
 - Add live airflow direction, intake/exhaust arrangement and separate fan-count settings for cooling observations. Defaults: stock direction, intake + exhaust, 3 intake / 4 exhaust. These are metadata only.

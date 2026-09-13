@@ -716,7 +716,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 "control_blocked": bool(self.data and self.data.control_blocked),
             }
             context = {
-                "manager_version": "0.6.0b10",
+                "manager_version": "0.6.0b11",
                 "hardware": cooling_hardware(self.entry.options),
                 "settings": {k: v for k, v in asdict(settings).items()
                              if k.startswith("cooling_") or k in {"enabled", "inverter_cooling_control_enabled"}},

@@ -157,7 +157,7 @@ def test_inverter_cooling_curve_uses_highest_power_channel() -> None:
     assert recommendation.recommended_pct == 45
 
 
-def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
+def test_inverter_cooling_requires_thermal_feedback_even_when_load_falls() -> None:
     settings = EnergyManagerSettings(cooling_target_temp_c=43, cooling_feedback_step_pct=5)
     decrease = inverter_cooling_recommendation(
         base_inputs(
@@ -238,7 +238,7 @@ def test_inverter_cooling_uses_feedback_steps_except_when_load_falls() -> None:
     assert stable.recommended_pct == 35
     assert rising.recommended_pct == 40
     assert steady_at_target.recommended_pct == 50
-    assert load_fell.recommended_pct == 19
+    assert load_fell.recommended_pct == 50
     assert sunny_dip.raw_required_pct == 37
     assert sunny_dip.recommended_pct == 65
 

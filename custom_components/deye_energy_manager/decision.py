@@ -103,8 +103,13 @@ def inverter_cooling_recommendation(
             max(raw_pct, settings.cooling_min_active_fan_pct),
             settings.cooling_max_normal_fan_pct,
         )
-        if temperature >= settings.cooling_emergency_temp_c - 1.0:
-            raw_pct = max(raw_pct, settings.cooling_max_normal_fan_pct)
+        # Reach maximum continuously across the target-to-emergency range.
+        # The old one-degree pre-emergency cliff caused full-speed cycling.
+        headroom = max(0.1, settings.cooling_emergency_temp_c - settings.cooling_target_temp_c)
+        pressure = min(1.0, max(0.0, temperature_error_c / headroom))
+        if pressure > 0:
+            raw_pct = max(raw_pct, baseline_pct + pressure * (settings.cooling_max_normal_fan_pct - baseline_pct))
+        trim_pct = raw_pct - baseline_pct
         reason = (
             f"curve {baseline_pct:.1f}% + temperature trim {trim_pct:+.1f}% "
             f"at {throughput_w:.0f}W/{temperature:.1f}C"
@@ -115,7 +120,6 @@ def inverter_cooling_recommendation(
     current_pct = inputs.cooling_fan_percentage
     trend = inputs.cooling_temperature_trend_c_per_min
     load_increased = inputs.cooling_load_change_w >= 500.0
-    load_decreased = cooling_load_collapsed(throughput_w, inputs.cooling_load_change_w)
     above_target = (
         temperature_error_c is not None
         and temperature_error_c > settings.cooling_target_deadband_c
@@ -192,9 +196,6 @@ def inverter_cooling_recommendation(
         if still_rising or (above_target and not clearly_falling):
             recommended_pct = current_pct
             reason += "; temperature high or rising, hold"
-        elif load_decreased:
-            recommended_pct = raw_pct
-            reason += "; load fell, reduce"
         elif below_target or clearly_falling:
             recommended_pct = max(raw_pct, current_pct - settings.cooling_feedback_step_pct)
             reason += f"; feedback authorises -{settings.cooling_feedback_step_pct:g}%"

@@ -112,3 +112,18 @@ Ambient temperature is not required by this controller: its effect appears in
 the measured heatsink response. The garage sensor may be used for comparison,
 but its placement may not represent inlet air; no ambient compensation or new
 sensor dependency is introduced here.
+
+## 13 September: normal curve cycling (v0.6.0b11)
+
+After minimum hunt was disabled, 14:15–14:37 NZST history still showed fan speeds
+27–100% with AC at 44–47.2°C. Inspection identified a separate normal-curve cliff:
+it demanded maximum fan one degree below emergency. The load-collapse branch also
+allowed an immediate drop to the raw curve without a bounded thermal reduction.
+
+The normal curve now increases temperature demand continuously from target to
+emergency, and a load fall no longer bypasses thermal feedback or the maximum
+reduction step. A stable temperature at target holds existing fan demand through
+a cloud. Full emergency, stale-temperature and recovery behavior remain intact.
+This is a bounded correction, not a validated replacement thermal model. Minimum
+hunt remains off on this installation. DC-driven control is still outstanding;
+these changes do not establish protection against the observed 65.8°C DC peak.

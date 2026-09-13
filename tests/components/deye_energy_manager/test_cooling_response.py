@@ -221,3 +221,22 @@ def test_one_percent_writes_and_duplicate_or_older_samples_cannot_advance_hunt()
         await apply(c, replace(decision, inverter_ac_temperature_c=48, cooling_recommended_fan_pct=100))
         assert current == 100
     asyncio.run(run())
+
+
+def test_normal_curve_has_no_pre_emergency_cliff_or_cloud_cut_shortcut():
+    settings = EnergyManagerSettings(cooling_minimum_hunt_enabled=False, cooling_feedback_step_pct=10)
+    def demand(temp, current=60, trend=0, load_change=0):
+        return inverter_cooling_recommendation(base_inputs(
+            inverter_pv_power_w=3000, essential_power_w=1000, battery_power_w=0,
+            inverter_ac_temperature_c=temp, cooling_temperature_valid=True,
+            cooling_fan_percentage=current, cooling_temperature_trend_c_per_min=trend,
+            cooling_load_change_w=load_change), settings)
+    levels = [demand(t).raw_required_pct for t in (46.9, 47, 47.1)]
+    assert levels == sorted(levels)
+    assert max(levels) < 100
+    assert max(b-a for a,b in zip(levels, levels[1:])) <= 3
+    assert demand(48).recommended_pct == 100
+    # A cloud must not drop a thermally balanced fan to the much lower load curve.
+    assert demand(45, load_change=-9000).recommended_pct == 60
+    assert demand(45, trend=-0.3, load_change=-9000).recommended_pct == 50
+    assert demand(45, trend=0.3, load_change=-9000).recommended_pct == 60
