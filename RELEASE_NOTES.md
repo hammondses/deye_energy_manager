@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.6.0b10 — overhaul branch
+
+- Add live airflow direction, intake/exhaust arrangement and separate fan-count settings for cooling observations. Defaults: stock direction, intake + exhaust, 3 intake / 4 exhaust. These are metadata only.
+- Record hardware with each five-minute window; configuration changes flag mixed windows. Export dedicated CSV columns and label historical b8/b9 rows with the user-confirmed original setup without rewriting raw files.
+
 ## v0.6.0b9 — overhaul branch
 
 - Retire the manager's bedroom night-heating actuator and arm switch. Stored armed state is ignored on restart.

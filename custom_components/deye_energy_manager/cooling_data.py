@@ -6,6 +6,19 @@ import json
 from math import isfinite
 from pathlib import Path
 
+HARDWARE_DEFAULTS = {
+    "cooling_airflow_direction": "Stock direction",
+    "cooling_fan_arrangement": "Intake + exhaust",
+    "cooling_intake_fan_count": 3,
+    "cooling_exhaust_fan_count": 4,
+}
+
+
+def cooling_hardware(options):
+    """User-declared physical setup, independent of controller tuning."""
+    return {key: options.get(key, default) for key, default in HARDWARE_DEFAULTS.items()}
+
+
 SAMPLE_SECONDS = 15
 WINDOW_SECONDS = 300
 

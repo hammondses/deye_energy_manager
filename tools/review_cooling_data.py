@@ -16,6 +16,15 @@ def review(directory, days=7, csv_path=None):
             for line in stream:
                 row = json.loads(line)
                 if datetime.fromisoformat(row['start']) >= cutoff:
+                    # User confirmed all pre-metadata b8/b9 observations used this setup.
+                    if 'hardware' not in row['context'] and row['context'].get('manager_version') in {'0.6.0b8', '0.6.0b9'}:
+                        row['context']['hardware'] = {
+                            'cooling_airflow_direction': 'Stock direction',
+                            'cooling_fan_arrangement': 'Intake + exhaust',
+                            'cooling_intake_fan_count': 3,
+                            'cooling_exhaust_fan_count': 4,
+                        }
+                        row['context']['hardware_source'] = 'user-confirmed historical setup'
                     rows.append(row)
     print(f'# Cooling observations · last {days} days\n')
     print(f'{len(rows)} windows ({len(rows)/12:.1f} hours represented).')
@@ -38,6 +47,8 @@ def review(directory, days=7, csv_path=None):
         for row in rows:
             out = {k:row[k] for k in ('start', 'end', 'samples', 'fan_changes', 'context_changed')}
             out['manager_version'] = row['context'].get('manager_version')
+            out.update(row['context'].get('hardware', {}))
+            out['hardware_source'] = row['context'].get('hardware_source', 'recorded' if 'hardware' in row['context'] else 'unknown')
             out['context_json'] = json.dumps(row['context'], sort_keys=True)
             for key, metrics in row['fields'].items():
                 out.update({f'{key}_{metric}':value for metric, value in metrics.items()})

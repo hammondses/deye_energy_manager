@@ -44,7 +44,7 @@ from .decision import build_deye_plan, cooling_recovery_state, inverter_cooling_
 from .migration import infer_load_slug
 from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings, HeatLoadState
 from .temperature_freshness import temperature_reported_at
-from .cooling_data import CoolingWindows, SAMPLE_SECONDS, append_window
+from .cooling_data import CoolingWindows, SAMPLE_SECONDS, append_window, cooling_hardware
 from .repairs import async_update_issues
 from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
@@ -716,7 +716,8 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 "control_blocked": bool(self.data and self.data.control_blocked),
             }
             context = {
-                "manager_version": "0.6.0b9",
+                "manager_version": "0.6.0b10",
+                "hardware": cooling_hardware(self.entry.options),
                 "settings": {k: v for k, v in asdict(settings).items()
                              if k.startswith("cooling_") or k in {"enabled", "inverter_cooling_control_enabled"}},
                 "sources": {field: self.entity_map.get(key) for field, key in sources.items()},

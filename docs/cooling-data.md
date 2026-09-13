@@ -112,3 +112,20 @@ The Power page includes a collection-status row and a collection toggle. Raw dat
 stays in HA's dedicated data directory; neither measurements nor credentials are
 committed. Plan the first analysis around **20 September 2026**, subject to usable
 coverage. No automatic review or reminder has been scheduled.
+
+## Airflow comparison settings (v0.6.0b10)
+
+Set **Cooling airflow direction** to Stock direction or Reverse direction, and
+**Cooling fan arrangement** to Intake + exhaust, Intake only or Exhaust only.
+The separate intake and exhaust fan counts describe the actual installed setup:
+initially 3 intake / 4 exhaust; reversing those same banks means 4 intake / 3 exhaust.
+Counts are independently editable and never swapped automatically. For intake-only
+or exhaust-only experiments, set the unused count to 0. These labels do not operate
+fans, change the controller or alter protection. Update them when changing hardware.
+
+Each window includes hardware metadata. A window spanning a metadata change is
+flagged `context_changed`; exclude it from comparisons. Hardware settings are separate
+from saved cooling tuning presets. CSV exports include the four hardware columns.
+The user confirmed all prior b8/b9 records used stock direction, intake + exhaust,
+3 intake / 4 exhaust: the exporter labels those records with that explicit provenance,
+without modifying the original compressed files. Other unlabeled versions stay unknown.

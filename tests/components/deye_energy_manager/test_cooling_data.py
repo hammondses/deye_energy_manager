@@ -71,3 +71,20 @@ def test_retention_removes_only_old_collection_files(tmp_path):
     append_window(tmp_path, {'start': '2026-09-13T00:00:00+00:00'})
     assert not (tmp_path / '2020-01-01.jsonl.gz').exists()
     assert (tmp_path / 'notes.txt').exists()
+
+
+def test_hardware_labels_mark_mixed_windows_and_preserve_counts():
+    from custom_components.deye_energy_manager.cooling_data import cooling_hardware
+    stock = cooling_hardware({})
+    assert stock['cooling_intake_fan_count'] == 3
+    assert stock['cooling_exhaust_fan_count'] == 4
+    reverse = cooling_hardware({'cooling_airflow_direction': 'Reverse direction',
+        'cooling_fan_arrangement': 'Intake only', 'cooling_intake_fan_count': 4,
+        'cooling_exhaust_fan_count': 0})
+    collector = CoolingWindows()
+    rows = []
+    for t in range(0, 601, 15):
+        rows += collector.add(t, {'fan_pct': 40}, {}, {'hardware': stock if t < 150 else reverse})
+    assert rows[0]['context_changed'] is True
+    assert rows[1]['context_changed'] is False
+    assert rows[1]['context']['hardware'] == reverse

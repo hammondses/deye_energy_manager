@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, NUMBER_DEFAULTS
+from .cooling_data import HARDWARE_DEFAULTS
 from .entity import DeyeEnergyManagerEntity
 
 
@@ -20,6 +21,8 @@ class DeyeNumberDescription(NumberEntityDescription):
 
 
 NUMBERS = (
+    DeyeNumberDescription(key="cooling_intake_fan_count", name="Cooling intake fan count", native_min_value=0, native_max_value=32, native_step=1, mode=NumberMode.BOX, default=HARDWARE_DEFAULTS["cooling_intake_fan_count"]),
+    DeyeNumberDescription(key="cooling_exhaust_fan_count", name="Cooling exhaust fan count", native_min_value=0, native_max_value=32, native_step=1, mode=NumberMode.BOX, default=HARDWARE_DEFAULTS["cooling_exhaust_fan_count"]),
     DeyeNumberDescription(key="heat_add_min_charge_w", name="Heat add min charge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_add_min_charge_w"]),
     DeyeNumberDescription(key="heat_add_min_soc", name="Heat add min SOC", native_unit_of_measurement=PERCENTAGE, native_min_value=0, native_max_value=100, native_step=1, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_add_min_soc"]),
     DeyeNumberDescription(key="heat_shed_discharge_w", name="Heat shed discharge", native_unit_of_measurement=UnitOfPower.WATT, native_min_value=0, native_step=100, mode=NumberMode.BOX, default=NUMBER_DEFAULTS["heat_shed_discharge_w"]),

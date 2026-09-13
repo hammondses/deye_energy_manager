@@ -22,9 +22,12 @@ from .const import (
     THERMAL_ACTUATION_MODE_OPTIONS,
     THERMAL_MODE_OPTIONS,
 )
+from .cooling_data import HARDWARE_DEFAULTS
 from .entity import DeyeEnergyManagerEntity
 
 SELECTS = {
+    "cooling_airflow_direction": ("Cooling airflow direction", ["Stock direction", "Reverse direction"], HARDWARE_DEFAULTS["cooling_airflow_direction"]),
+    "cooling_fan_arrangement": ("Cooling fan arrangement", ["Intake + exhaust", "Intake only", "Exhaust only"], HARDWARE_DEFAULTS["cooling_fan_arrangement"]),
     "strategy": ("Strategy", STRATEGY_OPTIONS, DEFAULT_STRATEGY),
     "heat_mode": ("Heat mode", HEAT_MODE_OPTIONS, DEFAULT_HEAT_MODE),
     "thermal_mode": ("Thermal mode", THERMAL_MODE_OPTIONS, DEFAULT_THERMAL_MODE),
