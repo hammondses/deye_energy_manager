@@ -40,15 +40,23 @@ seconds in the future), and numeric recommendations. The forecast source age
 and battery completion are manager responsibilities. The automation should not
 invent a second aggregate forecast budget.
 
+These names are expected but not guaranteed: the integration gives sensors a
+unique ID from the key, while Home Assistant creates the entity ID from the
+friendly name. Resolve the registered entity IDs from those unique IDs after
+deployment, or set explicit entity IDs before building the automation.
+
 ## OCPP telemetry finding, October 3
 
 The mounted configuration contains OCPP integration version 0.12.0. Its
 `ocpp.trigger_custom_message` service maps `requested_message: MeterValues` to
 the OCPP 1.6 `TriggerMessage(MeterValues)` request. The integration handles
 incoming `MeterValues` and updates current, power and voltage entities. This
-proves the software path exists; it does **not** prove the TIMXON accepts the
-request or sends a reply while a transaction is suspended. No charger-directed
-service was called during this audit.
+proves the software path exists; it does **not** by itself prove that every
+measurand was included in a reply while a transaction is suspended. During
+follow-up, the root agent issued one `MeterValues` request around 15:30 local
+time; the HA service succeeded, voltage changed from 242 V to 245.5 V, and the
+energy register changed from 474.736 kWh to 474.764 kWh. No further request was
+issued during this follow-up.
 
 The persisted TIMXON settings are `meter_interval: 60`, `idle_interval: 900`,
 and sampled measurands `Energy.Active.Import.Register`, `Power.Active.Import`,
@@ -59,25 +67,39 @@ read-back proving the charger accepted them. The 900-second clock-aligned
 setting represents a 15-minute idle reporting cadence when supported; it does
 not guarantee the charger implements idle reports.
 
-At the read-only snapshot around 15:15 local time, current and active power
-were both zero but their last reports were around 13:53; voltage was 242 V,
-last reported around 13:52. Connector status was `SuspendedEV` and the charge
-control switch was on at about 13:53. Those zero readings are stale and must
-not be treated as live confirmation that the EV is drawing no power. A fresh
-grid-voltage value can be a voltage estimate only; it cannot refresh EV current
-or power. The manager should mark stale EV power unavailable rather than
-silently treating it as zero.
+The original `ha_get_state` snapshot around 15:15 showed current and active
+power at zero with timestamps around 13:53, voltage at 242 V from around 13:52,
+and `SuspendedEV` status / charge control on around 13:53. After the 15:30
+request, `ha_get_state` continued to project the current/power timestamps from
+13:53. A read-only template evaluated inside Home Assistant at 15:34 instead
+reported `last_reported` around 15:32 for current, power, voltage and energy;
+the current/power values remained zero. Therefore the state-read tool's
+projection was stale, while Home Assistant's own state machine had re-reported
+all four entities.
 
-The next telemetry check, after explicit review, is to request one
-`MeterValues` message while the car is plugged in and `SuspendedEV`, then verify
-that the OCPP service succeeds **and** the current/power entities receive a
-new `last_reported` time. If it does, separately verify actual charger values
-for `MeterValueSampleInterval` and `ClockAlignedDataInterval`, then decide
-whether a rate-limited stale-data refresh is needed. An accepted TriggerMessage
-without a new MeterValues sample is not fresh telemetry. If the TIMXON rejects
-the request or remains silent while suspended, the restart path needs another
-live EV power source or a reviewed fail-safe policy before enabling this
-automation; stale zero data must not be used to break the restart deadlock.
+That still does **not** establish per-measurand freshness. In this integration,
+the OCPP 1.6 `on_meter_values` handler processes the samples actually present,
+then schedules a full charger-device update; the sensor platform dispatches
+all active entities on that update. Consequently a current/power entity can get
+a fresh HA `last_reported` time because some other MeterValues field arrived,
+even when that packet omitted current/power. The integration exposes no
+per-measurand sample timestamp, and no raw payload for the 15:30 reply was
+captured. The observed sample proves the TriggerMessage path can elicit at least
+some fresh OCPP telemetry, but it does not prove the idle packet contained
+`Current.Import` and `Power.Active.Import`.
+
+Before allowing those values to drive the planner, add or obtain per-measurand
+freshness: preferably have the OCPP integration expose each sensor's most recent
+source-sample timestamp (or dispatch only the measurands actually present in a
+MeterValues packet), then use that timestamp in the manager. Alternatively use
+a separate live EV power meter, with explicit unit normalization. The OCPP
+`sensor.evcharger_power_active_import` is in kW, while the manager currently
+interprets its configured EV-power mapping as watts; do not map it directly
+until that unit boundary is corrected. The currently blank mapping uses
+current × voltage as the fallback. Do not infer per-measurand freshness from
+the generic HA `last_reported` timestamp. Also verify the charger's effective
+`MeterValueSampleInterval` and `ClockAlignedDataInterval` by read-back when
+approved. No additional charger request is needed to establish this distinction.
 
 ## Automation state and rules
 
@@ -164,8 +186,8 @@ the automation or its helpers does not require reloading the integration.
 - Confirm no competing daytime automatic charger writer is active, and inspect
   traces for whole-amp `SetChargingProfile` values.
 
-No live OCPP configuration, TriggerMessage, charging profile, or new EV
-automation was issued as part of this review.
+The initial read-only review issued no charger calls. Subsequent authorized
+meter-only diagnostics are recorded below; no new EV handover was enabled.
 
 ## Meter request observation
 
@@ -176,3 +198,22 @@ with 13:53 timestamps. No TriggerMessage system-log entry was returned. This
 proves a fresh voltage update, not fresh current/power. Investigate unchanged-value
 reporting and entity routing before concluding that the charger stopped sending
 those measurands or relaxing the planner freshness requirement.
+
+## Confirmed idle packet from Core service logs
+
+The later packet capture was found through `ha_get_logs` with
+`source=system_service`, `slug=core`; the raw `error_log` search had missed it.
+At 15:43:30.635 local time, Core logged an inbound connector-1 MeterValues
+message without a transaction ID. Its meter timestamp was 02:42:19.772Z and
+it contained power 0 W, current 0.00 A, voltage 248.5 V and imported energy
+together, with Sample.Periodic context. The sanitized packet is retained in
+`automation-candidates/ocpp-idle-meter-evidence.json`.
+
+This confirms that the TIMXON can report actual current/power while suspended.
+It does not establish that every future entity refresh contains every measurand,
+or that the charger's clock exactly matches HA. The manager reads HA state in
+process, not the stale MCP projection observed during this audit. Keep bounded
+data-loss behavior and independent battery/grid feedback in the actuator. A
+per-measurand timestamp enhancement would strengthen diagnostics, but no OCPP
+source change has been made. The logger was read back at its original WARNING
+level after the temporary capture.
