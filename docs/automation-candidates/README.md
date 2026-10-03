@@ -21,6 +21,8 @@ Freshness is limited to 90 seconds old and 5 seconds future skew. Do not turn on
 
 The companion offline tests execute Jinja templates from the JSON against synthetic states. They check fallback parity and unit/limit behavior, but they are not a substitute for validating Home Assistant's template rendering and live traces.
 
+The EV actuator handover is captured in `ev-plan-handover.json`. It is also a review-only candidate: its manager writer select, feature switches, and plan sensors must be resolved in the live registry before use. The helper manifest distinguishes one-time `creation_default` values from runtime `initial` values so existing timer/latch tuning can restore after Home Assistant restarts. EV power/current telemetry remains explicitly gated by `input_boolean.ev_solar_ev_telemetry_verified`; keep it off until source freshness has been checked against idle and charging MeterValues.
+
 ## Read-only live rendering check
 
 On October 3, the candidate's sequential variable templates were rendered with
@@ -33,3 +35,17 @@ performance, template behavior under all inputs, or the full action schema.
 `ocpp-idle-meter-evidence.json` records a sanitized Core-log packet showing
 current, power and voltage together while suspended. Charger identifiers are
 omitted. The temporary OCPP logger level was verified restored to WARNING.
+
+The EV candidate now has ten executable action-path scenarios in addition to
+its template/structure checks. These cover short-cloud recovery, sustained
+charge shortfall with a missed timer event, failed stop, asynchronous start,
+invalid grid data, target changes during delays, adoption at target, and a
+site-load jump that reduces a delayed retry's current. The small interpreter
+models the relevant action subset; it is not Home Assistant's script engine.
+
+The candidate's sequential variable expressions also rendered successfully in
+HA's own Jinja engine against live states on October 3. With the new manager
+entities absent, `plan_fresh=false`, `external_owner=false`, and
+`restart_qualified_now=false`; no actuator service was called. Complete HA
+action-schema validation, resolved entity IDs, helper provisioning, and live
+stop/restart observation remain rollout requirements.
