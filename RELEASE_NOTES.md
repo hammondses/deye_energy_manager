@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.6.0b17 — measured-power units and verified sensor receipts
+
+- Normalize a configured EV power sensor from kW to watts before decision and base-load calculations. Unsupported or missing units use the existing current/voltage fallback instead of silently interpreting kW as W.
+- Reuse the manager's verified MQTT receipt handling for daytime-plan freshness. Matching, non-retained numeric reports keep unchanged BMS limits fresh; unrelated traffic, mismatching values and retained replays cannot extend freshness.
+- Add an offline snapshot preview tool with explicit charge-curve and energy-buffer assumptions. No preview writes to HA or establishes packet-level OCPP freshness.
+
 ## v0.6.0b16 — release battery headroom after the clipping window
 
 - Add a separate clear-sky clipping envelope, independent of the weather-scaled capture scenario. Publish whether clipping opportunity remains and the final estimated risk interval.

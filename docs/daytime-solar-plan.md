@@ -318,3 +318,25 @@ battery, limited by BMS and hardware. Publish the remaining-risk flag, final ris
 interval end, and all-surplus mode. Without an envelope the flag is unavailable
 and headroom is not released on that basis. The physical capture projection
 replays this exact current battery command.
+
+## Live snapshot input checks — b17
+
+An in-process HA snapshot at 15:38 on October 3 exposed an unchanged BMS current
+limit whose HA timestamp was more than ten minutes old. The advisor now uses
+the existing manager MQTT receipt validator for these inputs: the latest message
+must be numeric, non-retained, on this entity's own state topic and match its
+current value. This is distinct from extending a timeout or treating unrelated
+MQTT traffic as freshness. Tests reject retained, mismatched and old receipts.
+
+The same review found that mapping the native OCPP power entity directly into
+the older coordinator would interpret its kW as watts. b17 normalizes this input
+before existing EV decisions/base-load subtraction; ambiguous units fall back to
+current times voltage. The live mapping has not yet been changed.
+
+`tools/preview_daytime_plan.py` runs the actual adapter against a bounded JSON
+snapshot without writing to HA. It requires an explicit acceptance curve and
+labels buffer, geometry and mapping assumptions. A state-only snapshot cannot
+prove MQTT receipt freshness or OCPP packet content; an unavailable result is
+not permission to replace stale timestamps with the current time. The October 3
+preview correctly rejected the old BMS timestamp before receipt-aware input
+handling was connected to the coordinator.

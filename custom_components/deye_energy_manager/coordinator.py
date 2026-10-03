@@ -821,7 +821,18 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         entity_id = self.entity_map.get(key)
         if not entity_id:
             return None
-        return self._entity_float(entity_id)
+        value = self._entity_float(entity_id)
+        if key == "ev_power" and value is not None:
+            # OCPP reports active power in kW while the decision engine and
+            # base-load subtraction use watts. Reject an ambiguous unit so
+            # the existing current/voltage fallback can be used instead.
+            state = self.hass.states.get(entity_id)
+            unit = state.attributes.get("unit_of_measurement") if state else None
+            if unit == "kW":
+                return value * 1000
+            if unit != "W":
+                return None
+        return value
 
     def _state_on(self, key: str) -> bool:
         entity_id = self.entity_map.get(key)
@@ -1339,6 +1350,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             inputs, settings, decision, options=self.entry.options,
             entity_map=self.entity_map, states=self.hass.states,
             latitude=self.hass.config.latitude, longitude=self.hass.config.longitude,
+            state_reported_at=self._temperature_reported_at,
         )
 
     def _update_cheap_grid_session_state(self, decision: EnergyManagerDecision) -> None:

@@ -175,3 +175,38 @@ def test_stopped_charger_voltage_uses_fresh_supply_and_rejects_stale_supply(monk
     coordinator.hass.states[DEFAULT_ENTITY_MAP["grid_voltage"]].last_reported -= timedelta(minutes=3)
     plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
     assert not plan.valid and "grid_voltage stale" in plan.reason
+
+
+def test_verified_mqtt_receipt_keeps_unchanged_bms_limit_fresh():
+    from custom_components.deye_energy_manager.temperature_freshness import temperature_reported_at
+    coordinator, inputs, settings, decision, _ = setup_adapter()
+    entity = DEFAULT_ENTITY_MAP['battery_charge_limit_current']
+    state = coordinator.hass.states[entity]
+    state.entity_id = entity
+    state.last_reported -= timedelta(hours=1)
+    message = SimpleNamespace(payload='250', timestamp=990, retain=False)
+    mqtt = SimpleNamespace(debug_info_entities={entity: {
+        'discovery_data': {'discovery_payload': {'state_topic': 'deye/bms_limit'}},
+        'subscriptions': {'deye/bms_limit': {'messages': [message]}},
+    }})
+    cache = {}
+
+    def reported_at(value):
+        return temperature_reported_at(value, mqtt, inputs.now, 1000, cache)
+
+    def plan():
+        return module.build_daytime_advisory(
+            inputs, settings, decision, options=coordinator.entry.options,
+            entity_map=DEFAULT_ENTITY_MAP, states=coordinator.hass.states,
+            latitude=0, longitude=0, state_reported_at=reported_at,
+        )
+
+    assert plan().valid
+    message.retain = True
+    assert not plan().valid
+    message.retain = False
+    message.payload = '249'  # Another value cannot renew this state's freshness.
+    assert not plan().valid
+    message.payload = '250'
+    message.timestamp = 0  # A matching but old message is still stale.
+    assert not plan().valid

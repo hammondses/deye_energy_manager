@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from functools import partial
 from math import isfinite
 
 from .const import FEATURE_DEFAULTS, NUMBER_DEFAULTS, TEXT_DEFAULTS
@@ -35,7 +36,7 @@ def read_timestamp(states, entity_map: dict, key: str) -> datetime | None:
     return parse_datetime(state.state) if state is not None else None
 
 
-def read_planning_sensor(states, entity_map, key: str, now: datetime, *, max_age_seconds: float = 600) -> float:
+def read_planning_sensor(states, entity_map, key: str, now: datetime, *, max_age_seconds: float = 600, reported_at=None) -> float:
     """Read fresh planning telemetry, normalising power to watts."""
     state = states.get(entity_map.get(key, ""))
     if state is None or state.state in UNAVAILABLE:
@@ -43,7 +44,8 @@ def read_planning_sensor(states, entity_map, key: str, now: datetime, *, max_age
     value = float(state.state)
     if not isfinite(value):
         raise ValueError(f"{key} nonfinite")
-    reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+    reported = (reported_at(state) if reported_at else
+                getattr(state, "last_reported", None) or getattr(state, "last_updated", None))
     if reported is None or reported.tzinfo is None:
         raise ValueError(f"{key} timestamp unavailable")
     age = (now - reported).total_seconds()
@@ -68,9 +70,11 @@ def build_daytime_advisory(
     settings: EnergyManagerSettings,
     decision: EnergyManagerDecision,
     *, options: dict, entity_map: dict, states, latitude: float, longitude: float,
+    state_reported_at=None,
 ) -> SolarAdvisory | None:
     """Build a read-only interval advisory; never replace actuator decisions."""
     options = {**FEATURE_DEFAULTS, **NUMBER_DEFAULTS, **TEXT_DEFAULTS, **options}
+    read_sensor = partial(read_planning_sensor, reported_at=state_reported_at)
     if not options.get("daytime_plan_enabled", False):
         return None
     if not settings.enabled or not settings.advisory_enabled:
@@ -101,15 +105,15 @@ def build_daytime_advisory(
             source_updated_at=source_updated,
             max_age=timedelta(minutes=float(options["solar_plan_max_forecast_age_minutes"])),
         )
-        soc = read_planning_sensor(states, entity_map, "battery_soc", inputs.now)
-        pv_w = read_planning_sensor(states, entity_map, "inverter_pv_power", inputs.now, max_age_seconds=120)
-        essential_w = read_planning_sensor(states, entity_map, "essential_power", inputs.now, max_age_seconds=120)
-        battery_v = read_planning_sensor(states, entity_map, "battery_voltage", inputs.now)
-        bms_a = read_planning_sensor(states, entity_map, "battery_charge_limit_current", inputs.now)
+        soc = read_sensor(states, entity_map, "battery_soc", inputs.now)
+        pv_w = read_sensor(states, entity_map, "inverter_pv_power", inputs.now, max_age_seconds=120)
+        essential_w = read_sensor(states, entity_map, "essential_power", inputs.now, max_age_seconds=120)
+        battery_v = read_sensor(states, entity_map, "battery_voltage", inputs.now)
+        bms_a = read_sensor(states, entity_map, "battery_charge_limit_current", inputs.now)
         if not 0 <= soc <= 100 or battery_v <= 0:
             raise ValueError("invalid battery SOC or voltage")
         try:
-            ev_w = read_planning_sensor(states, entity_map, "ev_power", inputs.now, max_age_seconds=120)
+            ev_w = read_sensor(states, entity_map, "ev_power", inputs.now, max_age_seconds=120)
         except ValueError:
             if inputs.ev_charge_requested is not False:
                 raise
@@ -128,12 +132,12 @@ def build_daytime_advisory(
         voltage = 230.0
         if ev_allowed:
             try:
-                voltage = read_planning_sensor(states, entity_map, "ev_voltage", inputs.now)
+                voltage = read_sensor(states, entity_map, "ev_voltage", inputs.now)
             except ValueError:
                 # TIMXON may stop reporting voltage between transactions.
                 # The single-phase inverter supply is an independent live
                 # estimate for planning; never reuse an old charger sample.
-                voltage = read_planning_sensor(states, entity_map, "grid_voltage", inputs.now,
+                voltage = read_sensor(states, entity_map, "grid_voltage", inputs.now,
                                                max_age_seconds=120)
         base_load = inputs.base_load_estimate_w
         if base_load is None or not isfinite(base_load) or base_load < 0:
