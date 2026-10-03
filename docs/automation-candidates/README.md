@@ -101,3 +101,10 @@ Python remains 0.6.0b20 and the forecast/headroom strategy is unchanged.
 Rollback uses `docs/live-config-backups/2026-10-04-battery-before-adaptive.json`
 through the automation API; current config is saved alongside as
 `2026-10-04-battery-adaptive.json`.
+
+Live verification: readback matched hash `0e71ddf27d4e8d67`. At 12:14:02
+the gate increased from 26 A to 31 A. Battery charging rose from about 1.32 kW
+to 1.65 kW while export remained about 9.98 kW. Subsequent traces waited for
+the next inverter report before another probe; inverter telemetry currently
+reports roughly once per minute. This confirms a successful bounded capture
+step, not full-day performance.
