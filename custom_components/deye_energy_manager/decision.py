@@ -1583,11 +1583,11 @@ def ev_decision(
         or inputs.grid_power_w >= settings.paid_grid_import_threshold_w
     )
     startup_power_deficit = power_deficit and not charge_control_detected
-    active_target_soc = (
-        min(max(settings.ev_manual_target_soc, 40.0), 100.0)
-        if inputs.ev_manual_charging_override
-        else 80.0
-    )
+    active_target_soc = 80.0
+    if inputs.ev_manual_charging_override:
+        active_target_soc = min(max(settings.ev_manual_target_soc, 40.0), 100.0)
+    elif settings.ev_solar_charging_enabled and not cheap_window:
+        active_target_soc = min(max(settings.ev_solar_target_soc, 40.0), 100.0)
     soc_cutoff_reached = inputs.porsche_soc is not None and inputs.porsche_soc >= active_target_soc
     power_detected = inputs.ev_power_w is not None and inputs.ev_power_w > settings.ev_active_load_threshold_w
     jump_detected = essential_jump_w is not None and essential_jump_w >= settings.ev_start_load_jump_w

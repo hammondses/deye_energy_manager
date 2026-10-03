@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.6.0b13 — battery completion calculations and solar EV target
+
+- Add an HA-adjustable solar EV target SOC, default 80%, independently of the manual target and existing overnight cutoff. Threshold changes refresh decisions without integration reload.
+- Add continuous battery charge calculations through SOC-dependent acceptance bands and reserve-limited discharge for house demand, with explicit conversion losses.
+- Add a pure backward battery-completion envelope and forward maximum-charge feasibility calculation. It accounts for daytime house deficits and avoids accumulating SOC rounding errors. The horizon calculation is not yet wired into live control.
+- Validation: 228 repository tests pass, including taper crossings, cloud deficits, numerical-boundary regressions and independent solar/manual/overnight EV targets.
+
 ## v0.6.0b12 — daytime planning foundations
 
 - Add an isolated solar interval model with explicit DC battery charging, AC house/EV/export allocation, BMS and acceptance limits, headroom, losses and clipping accounting.

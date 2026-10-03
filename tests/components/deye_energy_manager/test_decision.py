@@ -52,10 +52,11 @@ def test_only_entity_topology_option_changes_require_reload() -> None:
         "cooling_temperature_stale_s": 90,
         "cooling_recovery_trigger_temp_c": 49,
         "cooling_recovery_release_temp_c": 43,
+        "ev_solar_target_soc": 75,
     }.items():
         entry.options = {**entry.options, key: value}
         asyncio.run(async_update_entry(hass, entry))
-    assert coordinator.refreshes == 7
+    assert coordinator.refreshes == 8
     assert config_entries.reloads == []
 
     entry.options = {**entry.options, "entity_map": {"battery_soc": "sensor.new"}}
@@ -1285,6 +1286,35 @@ def test_effective_local_soc_drives_existing_ev_cutoff() -> None:
 
     assert decision.ev_soc_cutoff_reached
     assert decision.ev_expected_action == "ev_charger_stop"
+
+
+def test_solar_target_can_change_without_changing_manual_or_night_targets() -> None:
+    settings = EnergyManagerSettings(
+        ev_control_enabled=True,
+        ev_solar_charging_enabled=True,
+        ev_solar_target_soc=75,
+        ev_manual_target_soc=90,
+    )
+    values = dict(ev_charge_requested=True, ev_connector_status="Charging", porsche_soc=76)
+    solar = decide(base_inputs(now=dt(12), **values), settings)
+    manual = decide(base_inputs(now=dt(12), ev_manual_charging_override=True, **values), settings)
+    night = decide(base_inputs(now=dt(22), **values), settings)
+
+    assert solar.ev_active_target_soc == 75
+    assert solar.ev_soc_cutoff_reached
+    assert solar.ev_expected_action == "ev_charger_stop"
+    assert manual.ev_active_target_soc == 90
+    assert not manual.ev_soc_cutoff_reached
+    assert manual.ev_expected_action != "ev_charger_stop"
+    assert night.ev_active_target_soc == 80
+    assert not night.ev_soc_cutoff_reached
+    assert night.ev_expected_action != "ev_charger_stop"
+
+    settings.ev_solar_target_soc = 85
+    adjusted = decide(base_inputs(now=dt(12), **values), settings)
+    assert adjusted.ev_active_target_soc == 85
+    assert not adjusted.ev_soc_cutoff_reached
+    assert adjusted.ev_expected_action != "ev_charger_stop"
 
 
 def test_manual_ev_override_starts_and_stops_at_selected_soc() -> None:

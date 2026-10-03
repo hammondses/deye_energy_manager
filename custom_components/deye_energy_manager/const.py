@@ -333,6 +333,7 @@ NUMBER_DEFAULTS = {
     "wican_soc_energy_threshold_kwh": 1.0,
     "wican_soc_fresh_minutes": 60.0,
     "ev_manual_target_soc": 90.0,
+    "ev_solar_target_soc": 80.0,
     "grid_loss_voltage_threshold": 50.0,
     "grid_loss_notification_cooldown_minutes": 30.0,
     "min_thermal_run_minutes": 20.0,

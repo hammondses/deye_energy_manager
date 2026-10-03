@@ -13,10 +13,13 @@ out of scope for replacement. No Predbat source is incorporated.
 4. Expose operating thresholds in Home Assistant so tuning does not require a
    new integration version. Battery and EV actuator automations stay separate.
 
-The owner specifies 32 kWh battery capacity. The live manager currently says
-30 kWh; that discrepancy must be resolved in the deployed configuration, not
-silently treated as an established usable-capacity deduction. Efficiency and
-reserve settings are separate from battery capacity.
+The owner specifies 32 kWh battery capacity. On October 3 the existing live HA
+capacity setting was corrected from 30 to 32 kWh and persistence verified.
+At 83.6% SOC the manager then reported 5.583 kWh input needed to reach 100%,
+consistent with 32 kWh and 0.94 efficiency. Efficiency and reserve settings
+remain separate from battery capacity. Inverter max solar/export remained
+18/10 kW. The inverse of this individual setting change is setting the same
+capacity number back to 30; no other configuration restore is needed.
 
 Insufficient sunlight, a full battery, or a binding BMS limit can make an
 objective impossible. Report the predicted shortfall and unavoidable clipping;
@@ -95,6 +98,25 @@ review. A scalar EV budget divided by remaining daylight is not sufficient:
 it would unnecessarily spread charging beyond the car's plug-in window and
 miss battery taper deadlines.
 
+The completion calculation now uses continuous stored energy. For each future
+interval, F(E) is the end energy after serving non-EV house demand and accepting
+as much solar charge as possible, with SOC-band taper integrated across any
+threshold crossed inside the interval. Invert this monotone transition backwards:
+
+    required[i] = minimum E such that F_i(E) >= required[i+1]
+
+Cloud deficits drain the house battery within reserve/discharge limits; they are
+not silently assigned to grid power. The future recourse assumes no future EV
+charging. A current EV recommendation must leave enough battery energy to satisfy
+the next boundary. This is a completion constraint, not yet a full clipping
+optimizer. No stored-energy rounding is applied at each five-minute step.
+
+The deadline must represent the end of useful charging, bounded by local sunset.
+Requiring exactly 100% at astronomical sunset after an hour of normal house
+discharge would falsely reject a plan that reached 100% before night. Choose and
+expose a forecast-dependent usable-solar deadline; do not conflate it with sunset
+or an arbitrary fixed 17:00. Track whether today's target was reached separately.
+
 Before connecting forecast bins to this DC model, establish whether this site's
 Solcast output already incorporates inverter conversion/clipping. Modeled AC
 output is not interchangeable with available DC PV; do not silently relabel it.
@@ -107,6 +129,13 @@ disabled. Today's observed peak forecasts (8.89 kW P50, 10.22 kW P90) do not
 establish whether the upstream output clips at 12 kW. Do not infer raw DC peaks
 by treating these output forecasts as DC power or by undoing a fixed efficiency
 when clipping may already have occurred.
+
+The installed client uses the rooftop-site forecasts endpoint. Solcast documents
+[PV output as AC output](https://docs.solcast.com.au/docs/output-parameters).
+Observed Deye PV telemetry exceeded 12 kW in 179 samples in a partial October 3
+history window; a 17.1 kW sample coincided with approximately 12.13 kW battery
+charging and 4.66 kW inverter output. This supports the direct DC charging path,
+but does not prove uncurtailed potential can be inferred during clipping.
 
 Available BMS inputs are `sensor.deye_battery_charge_limit_current` and
 `sensor.deye_battery_voltage`; the fast automation already uses them. A sample
@@ -147,6 +176,14 @@ Reuse existing capacity, battery target, efficiency and forecast buffer controls
 Add only missing physical limits, forecast-risk and actuator hysteresis controls.
 Changes to these values must refresh decisions without integration reload.
 
+Implemented in the development branch: `ev_solar_target_soc` is a number entity
+with an 80% default, separate from `ev_manual_target_soc`. It applies when solar
+charging is enabled outside the cheap-grid window. Manual charging keeps its
+selected target and normal overnight charging keeps its existing 80% cutoff.
+Tests exercise a live options refresh without reload and independent cutoff
+decisions. The new number requires the integration update once to become
+available; subsequent adjustments do not require another deployment.
+
 ## Completion evidence still required
 
 - Pure physical conservation tests: DC capture above AC limit, full battery,
@@ -162,3 +199,11 @@ Changes to these values must refresh decisions without integration reload.
   and absence of competing writers after deployment.
 - Year-round behavior needs seasonal scenario coverage as well as live evidence;
   a passing midday snapshot is not proof of the overall goal.
+
+Development validation on October 3: 228 tests pass. A live-data diagnostic at
+86.45% house SOC and 1.463 kW estimated non-EV load gave last net-positive
+forecast deadlines of 17:30 (P10) and 18:30 (P50/P90), before 19:38 sunset.
+That diagnostic deliberately used AC forecast output as a proxy with ideal
+inverter/discharge conversion, no taper, no reserve and no safety buffer. It
+validated parser-to-envelope compatibility only; it is not a production plan
+or evidence of target feasibility with the complete model.

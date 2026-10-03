@@ -475,6 +475,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_bypass_program_power_w=float(options["ev_bypass_program_power_w"]),
             ev_restore_program_power_w=float(options["ev_restore_program_power_w"]),
             ev_manual_target_soc=float(options["ev_manual_target_soc"]),
+            ev_solar_target_soc=float(options["ev_solar_target_soc"]),
             grid_loss_notification_enabled=bool(options["grid_loss_notification_enabled"]),
             grid_loss_voltage_threshold=float(options["grid_loss_voltage_threshold"]),
             grid_loss_notification_cooldown_minutes=float(options["grid_loss_notification_cooldown_minutes"]),
