@@ -451,7 +451,9 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
 def _entity_schema(defaults: dict[str, str]) -> vol.Schema:
     return vol.Schema(
         {
-            vol.Optional(key, default=defaults.get(key, entity_id)): selector.EntitySelector()
+            # An unmapped optional input must be omitted. Empty strings are not
+            # entity IDs, and voluptuous validates injected defaults too.
+            vol.Optional(key, default=defaults.get(key, entity_id) or vol.UNDEFINED): selector.EntitySelector()
             for key, entity_id in DEFAULT_ENTITY_MAP.items()
         }
     )

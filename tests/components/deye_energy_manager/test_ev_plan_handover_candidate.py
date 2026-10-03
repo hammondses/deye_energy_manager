@@ -20,9 +20,12 @@ NOW = datetime.fromisoformat("2026-10-03T12:00:00+13:00")
 
 
 class _States:
-    def __init__(self, values: dict[str, str], reported: datetime) -> None:
+    def __init__(
+        self, values: dict[str, str], reported: datetime, reported_overrides: dict[str, datetime] | None = None
+    ) -> None:
         self.values = values
         self.reported = reported
+        self.reported_overrides = reported_overrides or {}
 
     def __call__(self, entity_id: str) -> str:
         return self.values.get(entity_id, "unknown")
@@ -30,7 +33,8 @@ class _States:
     def __getattr__(self, domain: str) -> SimpleNamespace:
         class _Domain:
             def __getattr__(_, object_id: str) -> SimpleNamespace:
-                return SimpleNamespace(last_reported=self.reported)
+                entity_id = f"{domain}.{object_id}"
+                return SimpleNamespace(last_reported=self.reported_overrides.get(entity_id, self.reported))
 
         return _Domain()
 
@@ -53,6 +57,8 @@ def _is_number(value: object) -> bool:
 
 
 def _native(value: str) -> object:
+    if value == "":
+        return False
     if value in {"True", "true"}:
         return True
     if value in {"False", "false"}:
@@ -79,6 +85,8 @@ def _base_states(**overrides: str) -> dict[str, str]:
         "sensor.garage_deye_energy_manager_ev_active_target_soc": "80",
         "sensor.garage_deye_energy_manager_effective_taycan_soc": "65",
         "sensor.evcharger_status_connector": "Finishing",
+        "sensor.evcharger_latency_pong": "112",
+        "sensor.evcharger_transaction_id": "0",
         "sensor.evcharger_current_import": "0",
         "sensor.evcharger_power_active_import": "0",
         "sensor.evcharger_voltage": "240",
@@ -89,7 +97,6 @@ def _base_states(**overrides: str) -> dict[str, str]:
         "sensor.deye_battery_power": "300",
         "sensor.deye_battery_soc": "100",
         "number.garage_deye_energy_manager_daily_battery_target_soc": "100",
-        "input_boolean.ev_solar_ev_telemetry_verified": "on",
         "input_boolean.ev_solar_controller_owns_session": "off",
         "input_boolean.ev_solar_controller_stopped_session": "on",
         "input_boolean.ev_solar_start_confirmation_pending": "off",
@@ -115,7 +122,9 @@ def _base_states(**overrides: str) -> dict[str, str]:
     return states
 
 
-def _context(overrides: dict[str, str] | None = None, *, age_seconds: int = 0) -> dict[str, object]:
+def _context(
+    overrides: dict[str, str] | None = None, *, age_seconds: int = 0, reported_overrides: dict[str, datetime] | None = None
+) -> dict[str, object]:
     candidate = json.loads(CANDIDATE.read_text())
     env = Environment()
     rendered_states = _base_states(**(overrides or {}))
@@ -123,7 +132,7 @@ def _context(overrides: dict[str, str] | None = None, *, age_seconds: int = 0) -
         rendered_states["sensor.garage_deye_energy_manager_solar_plan_generated_at"] = (
             NOW - timedelta(seconds=age_seconds)
         ).isoformat()
-    state_api = _States(rendered_states, NOW)
+    state_api = _States(rendered_states, NOW, reported_overrides)
     env.globals.update(
         states=state_api,
         is_state=lambda entity_id, expected: state_api(entity_id) == expected,
@@ -233,11 +242,112 @@ def test_completion_pressure_includes_zero_ev_budget_and_battery_charge_shortfal
     assert not_charging_enough["sustained_deficit"] is True
 
 
-def test_unverified_ev_telemetry_blocks_restart_and_increases() -> None:
-    values = _context({"input_boolean.ev_solar_ev_telemetry_verified": "off"})
+def test_stopped_restart_uses_live_ocpp_pong_and_known_zero_transaction_without_idle_meters() -> None:
+    stale_at = NOW - timedelta(minutes=20)
+    values = _context(
+        reported_overrides={
+            "sensor.evcharger_current_import": stale_at,
+            "sensor.evcharger_power_active_import": stale_at,
+            "sensor.evcharger_voltage": stale_at,
+            "sensor.evcharger_status_connector": stale_at,
+        }
+    )
+    assert values["charger_online"] is True
+    assert values["stopped_connected"] is True
     assert values["ev_power_fresh"] is False
     assert values["ev_current_fresh"] is False
+    assert values["ev_w"] == 0
+    assert values["restart_qualified_now"] is True
+
+
+def test_stopped_restart_requires_live_ocpp_pong() -> None:
+    values = _context(
+        reported_overrides={"sensor.evcharger_latency_pong": NOW - timedelta(minutes=3)}
+    )
+    assert values["charger_online"] is False
+    assert values["stopped_connected"] is False
     assert values["restart_qualified_now"] is False
+
+
+def test_stopped_restart_rejects_ping_timeout_sentinel_and_negative_latency() -> None:
+    timed_out = _context({"sensor.evcharger_latency_pong": "20000"})
+    assert timed_out["charger_online"] is False
+    assert timed_out["stopped_connected"] is False
+    assert timed_out["restart_qualified_now"] is False
+
+    invalid = _context({"sensor.evcharger_latency_pong": "-1"})
+    assert invalid["charger_online"] is False
+    assert invalid["stopped_connected"] is False
+    assert invalid["restart_qualified_now"] is False
+
+    responsive = _context({"sensor.evcharger_latency_pong": "110"})
+    assert responsive["charger_online"] is True
+    assert responsive["stopped_connected"] is True
+    assert responsive["restart_qualified_now"] is True
+
+
+def test_stopped_restart_requires_connector_transaction_zero() -> None:
+    values = _context({"sensor.evcharger_transaction_id": "1234"})
+    assert values["charger_online"] is True
+    assert values["stopped_connected"] is False
+    assert values["restart_qualified_now"] is False
+
+
+def test_stopped_restart_uses_grid_voltage_within_manager_freshness_window() -> None:
+    stale_at = NOW - timedelta(minutes=8)
+    values = _context(
+        reported_overrides={
+            "sensor.evcharger_voltage": stale_at,
+            "sensor.deye_grid_voltage": stale_at,
+        }
+    )
+    assert values["voltage_v"] == 240
+    assert values["safe_6a_possible"] is True
+    too_old = _context(
+        reported_overrides={
+            "sensor.evcharger_voltage": stale_at,
+            "sensor.deye_grid_voltage": NOW - timedelta(minutes=11),
+        }
+    )
+    assert too_old["voltage_v"] == 0
+    assert too_old["safe_6a_possible"] is False
+
+
+def test_active_session_with_stale_ev_meters_is_not_misclassified_as_stopped() -> None:
+    stale_at = NOW - timedelta(minutes=20)
+    values = _base_states(
+        **{
+            "switch.evcharger_charge_control": "on",
+            "sensor.evcharger_status_connector": "Charging",
+            "input_boolean.ev_solar_controller_owns_session": "on",
+            "input_boolean.ev_solar_controller_stopped_session": "off",
+            "sensor.evcharger_current_import": "6",
+            "sensor.evcharger_power_active_import": "1.44",
+            "sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps": "20",
+        }
+    )
+    context = _context(
+        values,
+        reported_overrides={
+            "sensor.evcharger_current_import": stale_at,
+            "sensor.evcharger_power_active_import": stale_at,
+        },
+    )
+    assert context["ev_power_fresh"] is False
+    assert context["ev_current_fresh"] is False
+    assert context["stopped_connected"] is False
+    assert context["restart_qualified_now"] is False
+
+
+def test_telemetry_source_gate_is_not_required_after_meter_contract_review() -> None:
+    candidate = json.loads(CANDIDATE.read_text())
+    serialized = json.dumps(candidate["candidate_config"])
+    assert "input_boolean.ev_solar_ev_telemetry_verified" not in serialized
+    assert all(
+        helper["entity_id"] != "input_boolean.ev_solar_ev_telemetry_verified"
+        for helper in candidate["helpers"]
+    )
+    assert "configured sampled measurands" in candidate["telemetry_contract"]["timestamp_limit"]
 
 
 def test_candidate_keeps_integer_ocpp_profile_and_guarded_recovery() -> None:
@@ -367,6 +477,8 @@ def test_restart_timer_expiry_is_consumed_by_next_poll_with_fresh_rechecks() -> 
 
 def test_site_room_uses_manager_base_load_floor_when_ev_and_house_samples_are_skewed() -> None:
     values = _context({
+        "switch.evcharger_charge_control": "on",
+        "sensor.evcharger_status_connector": "Charging",
         "sensor.deye_essential_power": "3315",
         "sensor.evcharger_power_active_import": "6.657",
         "sensor.garage_deye_energy_manager_base_load_estimate": "1400",

@@ -29,12 +29,13 @@ class Halt(Exception):
 
 
 class Run:
-    def __init__(self, states, stop_succeeds=True, delay_change=None):
+    def __init__(self, states, stop_succeeds=True, delay_change=None, reported_overrides=None):
         self.states, self.stop_succeeds, self.delay_change = (
             states,
             stop_succeeds,
             delay_change,
         )
+        self.reported_overrides = reported_overrides or {}
         for helper in json.loads(CANDIDATE.read_text())["helpers"]:
             if helper["platform"] == "input_boolean":
                 states.setdefault(helper["entity_id"], "off")
@@ -42,7 +43,7 @@ class Run:
                 states.setdefault(helper["entity_id"], "idle")
         self.now, self.context, self.calls = NOW, {}, []
         self.env = Environment()
-        api = _States(states, NOW)
+        api = _States(states, NOW, self.reported_overrides)
         self.env.globals.update(
             states=api,
             is_state=lambda e, s: api(e) == s,
@@ -340,3 +341,47 @@ def test_full_battery_six_amp_start_accepts_soc_verified_by_fresh_manager_plan(
     )
     run = Run(states).poll()
     assert any(call[0] == "switch.turn_on" and CHARGE in call[1] for call in run.calls)
+
+
+def test_stopped_long_idle_restarts_after_dwell_without_fresh_idle_meters():
+    states = _base_states(
+        **{
+            "input_boolean.ev_solar_controller_stopped_session": "on",
+            "input_boolean.ev_solar_restart_pending": "on",
+            "switch.evcharger_charge_control": "off",
+            "sensor.evcharger_status_connector": "Finishing",
+            "sensor.evcharger_transaction_id": "0",
+            PLAN + "recommended_ev_amps": "8",
+            "timer.ev_solar_restart_qualification": "active",
+        }
+    )
+    stale = NOW - timedelta(minutes=20)
+    reported = {
+        "sensor.evcharger_current_import": stale,
+        "sensor.evcharger_power_active_import": stale,
+        "sensor.evcharger_voltage": stale,
+        "sensor.evcharger_status_connector": stale,
+    }
+    run = Run(states, reported_overrides=reported).poll()
+    assert not any(call[0] == "switch.turn_on" and CHARGE in call[1] for call in run.calls)
+    states["timer.ev_solar_restart_qualification"] = "idle"
+    run = Run(states, reported_overrides=reported).poll()
+    assert any(call[0] == "switch.turn_on" and CHARGE in call[1] for call in run.calls)
+    assert states["input_boolean.ev_solar_start_confirmation_pending"] == "on"
+
+
+def test_active_session_with_stale_ev_meters_never_sends_profile():
+    states = active(**{PLAN + "recommended_ev_amps": "20"})
+    stale = NOW - timedelta(minutes=20)
+    run = Run(
+        states,
+        reported_overrides={
+            "sensor.evcharger_current_import": stale,
+            "sensor.evcharger_power_active_import": stale,
+        },
+    ).poll()
+    limits = [
+        call[2]["custom_profile"]["chargingSchedule"]["chargingSchedulePeriod"][0]["limit"]
+        for call in run.calls if call[0] == "ocpp.set_charge_rate"
+    ]
+    assert limits == [6]  # stale active meters only permit the conservative floor

@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.6.0b20 — live solar controller handover
+
+- Match the grid-voltage fallback freshness window to Deye’s five-minute telemetry cadence while retaining strict freshness for fast power measurements.
+- Keep unmapped optional entity selectors out of submitted defaults so the EV power mapping can be configured through Home Assistant.
+- Update the separate EV automation’s stopped-session restart checks for TIMXON meters that stop publishing between transactions; active charging retains stale-data protection.
+- Preserve integer OCPP profiles, manual and overnight ownership, the 13.5 kW site ceiling, and sustained deficit/restart hysteresis.
+
 ## v0.6.0b19 — conservative load floor for delayed EV telemetry
 
 - Floor the daytime planner's current non-EV house estimate at the existing base-load estimate. Independently timed OCPP readings can otherwise make essential-load subtraction understate house demand and invent available solar.

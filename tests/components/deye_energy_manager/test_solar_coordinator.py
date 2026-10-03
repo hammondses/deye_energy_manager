@@ -184,7 +184,7 @@ def test_invalid_curve_does_not_break_the_existing_manager_decision():
     assert asdict(decision) == before
 
 
-def test_stopped_charger_voltage_uses_fresh_supply_and_rejects_stale_supply(monkeypatch):
+def test_stopped_charger_voltage_accepts_slow_fresh_supply_and_rejects_stale_supply(monkeypatch):
     coordinator, inputs, settings, decision, state = setup_adapter()
     inputs.ev_connector_status = "Finishing"
     inputs.ev_charge_requested = False
@@ -201,9 +201,24 @@ def test_stopped_charger_voltage_uses_fresh_supply_and_rejects_stale_supply(monk
     plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
     assert plan.valid and plan.recommended_ev_amps >= 6
     assert captured[0].voltage_v == 239
-    coordinator.hass.states[DEFAULT_ENTITY_MAP["grid_voltage"]].last_reported -= timedelta(minutes=3)
+    # Deye voltage registers report on an approximately five-minute cadence.
+    coordinator.hass.states[DEFAULT_ENTITY_MAP["grid_voltage"]].last_reported -= timedelta(minutes=5)
+    plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
+    assert plan.valid, plan.reason
+    coordinator.hass.states[DEFAULT_ENTITY_MAP["grid_voltage"]].last_reported -= timedelta(minutes=6)
     plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
     assert not plan.valid and "grid_voltage stale" in plan.reason
+
+
+def test_slow_battery_voltage_accepts_five_minute_reporting_but_expires():
+    coordinator, inputs, settings, decision, _ = setup_adapter()
+    coordinator.hass.states[DEFAULT_ENTITY_MAP["battery_voltage"]].last_reported -= timedelta(minutes=5)
+    plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
+    assert plan.valid, plan.reason
+
+    coordinator.hass.states[DEFAULT_ENTITY_MAP["battery_voltage"]].last_reported -= timedelta(minutes=6)
+    plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
+    assert not plan.valid and "battery_voltage stale" in plan.reason
 
 
 def test_verified_mqtt_receipt_keeps_unchanged_bms_limit_fresh():
