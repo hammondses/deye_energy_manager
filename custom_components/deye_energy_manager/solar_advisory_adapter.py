@@ -46,7 +46,7 @@ def read_planning_sensor(states, entity_map, key: str, now: datetime, *, max_age
     if age < -5 or age > max_age_seconds:
         raise ValueError(f"{key} stale")
     unit = state.attributes.get("unit_of_measurement")
-    expected_units = {"battery_soc": "%", "battery_voltage": "V", "battery_charge_limit_current": "A", "ev_voltage": "V"}
+    expected_units = {"battery_soc": "%", "battery_voltage": "V", "battery_charge_limit_current": "A", "ev_voltage": "V", "grid_voltage": "V"}
     if key in expected_units and unit != expected_units[key]:
         raise ValueError(f"{key} unit must be {expected_units[key]}")
     if key in {"inverter_pv_power", "essential_power", "ev_power"}:
@@ -118,10 +118,19 @@ def build_daytime_advisory(
             and inputs.porsche_soc is not None
             and inputs.porsche_soc < settings.ev_solar_target_soc
             and (inputs.ev_connector_status or "").lower()
-            in {"preparing", "charging", "suspendedev", "suspendedevse"}
+            in {"preparing", "charging", "suspendedev", "suspendedevse", "finishing"}
             and not time_between(inputs.now, "21:00", "07:00")
         )
-        voltage = read_planning_sensor(states, entity_map, "ev_voltage", inputs.now) if ev_allowed else 230.0
+        voltage = 230.0
+        if ev_allowed:
+            try:
+                voltage = read_planning_sensor(states, entity_map, "ev_voltage", inputs.now)
+            except ValueError:
+                # TIMXON may stop reporting voltage between transactions.
+                # The single-phase inverter supply is an independent live
+                # estimate for planning; never reuse an old charger sample.
+                voltage = read_planning_sensor(states, entity_map, "grid_voltage", inputs.now,
+                                               max_age_seconds=120)
         base_load = inputs.base_load_estimate_w
         if base_load is None or not isfinite(base_load) or base_load < 0:
             raise ValueError("non-EV base load unavailable")
@@ -156,7 +165,12 @@ def build_daytime_advisory(
             target_soc_pct=settings.daily_battery_target_soc,
             reserve_energy_kwh=capacity * decision.active_reserve_target_soc / 100,
             non_ev_base_house_kw=base_load / 1000,
-            current_non_ev_house_kw=max(essential_w - ev_w, 0) / 1000,
+            # A manual session remains an actual load that this solar plan
+            # cannot turn down. Do not allocate its power to the battery.
+            current_non_ev_house_kw=(
+                essential_w if inputs.ev_manual_charging_override
+                else max(essential_w - ev_w, 0)
+            ) / 1000,
             live_pv_dc_kw=pv_w / 1000,
             voltage_v=voltage,
             live_bms_max_dc_kw=bms_a * battery_v / 1000,
@@ -178,4 +192,3 @@ def build_daytime_advisory(
         ))
     except (ValueError, TypeError, KeyError) as err:
         return SolarAdvisory(valid=False, reason=f"daytime planning unavailable: {err}")
-

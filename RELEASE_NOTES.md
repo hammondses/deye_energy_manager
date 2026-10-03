@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.6.0b15 — daytime EV ownership and restart inputs
+
+- Add an explicit daytime EV writer selection, defaulting to the manager. External-automation ownership yields automatic daytime charger start/stop writes while retaining manual, overnight and Deye bypass handling. Handover still requires the external automation to enforce its safety and SOC cutoffs.
+- Recognize the TIMXON's connected `Finishing` state for restart advice. When charger voltage stops reporting between transactions, use fresh single-phase inverter supply voltage for planning; reject stale supply measurements.
+- Keep manual EV consumption in the current interval's load so the battery recommendation cannot allocate power already used by manual charging.
+- Record the separate live automation recovery fix and exact rollback configuration: delayed actions recheck ownership and solar eligibility, preserving integer raw profiles and the existing charging policy.
+
 ## v0.6.0b14 — shared daytime solar advisory
 
 - Publish a disabled-by-default daytime advisory combining a continuous battery-completion floor with whole-amp EV recommendations. Existing actuator decisions and overnight protection remain unchanged.

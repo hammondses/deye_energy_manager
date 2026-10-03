@@ -23,6 +23,7 @@ class EnergyManagerSettings:
     ev_control_enabled: bool = False
     ev_grid_bypass_enabled: bool = False
     ev_solar_charging_enabled: bool = False
+    daytime_ev_writer: str = "manager"
     ev_cheap_grid_charging_enabled: bool = True
     heat_control_enabled: bool = False
     thermal_control_enabled: bool = False

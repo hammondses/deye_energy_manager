@@ -15,6 +15,8 @@ from .const import (
     CONF_HEAT_LOADS,
     DEFAULT_ENTITY_MAP,
     DEFAULT_FLEXIBLE_LOAD_PRIORITY,
+    DEFAULT_DAYTIME_EV_WRITER,
+    DAYTIME_EV_WRITER_OPTIONS,
     DEFAULT_HEAT_LOADS,
     DEFAULT_HEAT_MODE,
     DEFAULT_STRATEGY,
@@ -316,6 +318,9 @@ def _ev_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required("ev_control_enabled", default=defaults.get("ev_control_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_grid_bypass_enabled", default=defaults.get("ev_grid_bypass_enabled", False)): selector.BooleanSelector(),
             vol.Required("ev_solar_charging_enabled", default=defaults.get("ev_solar_charging_enabled", False)): selector.BooleanSelector(),
+            vol.Required("daytime_ev_writer", default=defaults.get("daytime_ev_writer", DEFAULT_DAYTIME_EV_WRITER)): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=DAYTIME_EV_WRITER_OPTIONS)
+            ),
             vol.Required("ev_cheap_grid_charging_enabled", default=defaults.get("ev_cheap_grid_charging_enabled", True)): selector.BooleanSelector(),
             vol.Required("wican_soc_enabled", default=defaults.get("wican_soc_enabled", False)): selector.BooleanSelector(),
             vol.Required("wican_base_url", default=defaults.get("wican_base_url", TEXT_DEFAULTS["wican_base_url"])): selector.TextSelector(),

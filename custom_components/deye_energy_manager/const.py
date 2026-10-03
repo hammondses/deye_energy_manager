@@ -22,6 +22,8 @@ THERMAL_ACTUATION_MODE_OPTIONS = ["advisory", "direct"]
 DEFAULT_THERMAL_ACTUATION_MODE = "advisory"
 FLEXIBLE_LOAD_PRIORITY_OPTIONS = ["battery_first", "thermal_before_ev", "ev_before_thermal", "export_before_loads"]
 DEFAULT_FLEXIBLE_LOAD_PRIORITY = "battery_first"
+DAYTIME_EV_WRITER_OPTIONS = ["manager", "external_automation"]
+DEFAULT_DAYTIME_EV_WRITER = "manager"
 FAN_MODE_OPTIONS = ["auto", "low", "medium", "high", "quiet"]
 FAN_MODE_DEFAULTS = {
     "heat_soak_fan_mode": "high",
@@ -229,6 +231,7 @@ FEATURE_DEFAULTS = {
     "enabled": True,
     "advisory_enabled": True,
     "daytime_plan_enabled": False,
+    "daytime_ev_writer": DEFAULT_DAYTIME_EV_WRITER,
     "deye_control_enabled": False,
     "grid_charge_control_enabled": False,
     "cheap_grid_preserve_enabled": True,

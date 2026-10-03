@@ -65,6 +65,21 @@ THERMAL_RUNTIME_DATETIME_FIELDS = {
 }
 
 
+def _manager_owns_automatic_ev_charger(
+    settings: EnergyManagerSettings, now: datetime, manual_override: bool
+) -> bool:
+    """Select the owner for non-manual automatic charger writes.
+
+    External ownership applies only from 07:00 inclusive to 21:00 exclusive.
+    Manual charge-to-target and overnight manager behavior remain coordinator-owned.
+    """
+    return not (
+        settings.daytime_ev_writer == "external_automation"
+        and 7 <= now.hour < 21
+        and not manual_override
+    )
+
+
 class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision]):
     """Collect HA state, calculate decisions, and perform gated writes."""
 
@@ -370,6 +385,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_control_enabled=bool(options["ev_control_enabled"]),
             ev_grid_bypass_enabled=bool(options["ev_grid_bypass_enabled"]),
             ev_solar_charging_enabled=bool(options["ev_solar_charging_enabled"]),
+            daytime_ev_writer=str(options["daytime_ev_writer"]),
             ev_cheap_grid_charging_enabled=bool(options["ev_cheap_grid_charging_enabled"]),
             heat_control_enabled=bool(options["heat_control_enabled"]),
             thermal_control_enabled=bool(options["thermal_control_enabled"] or options["heat_control_enabled"]),
@@ -1603,12 +1619,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 return
             if settings.inverter_cooling_control_enabled:
                 await self._apply_inverter_cooling(decision)
-            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_start":
+            manager_owns_daytime_ev = _manager_owns_automatic_ev_charger(
+                settings, decision.now, self.ev_manual_charging_override
+            )
+            if settings.ev_control_enabled and manager_owns_daytime_ev and decision.ev_expected_action == "ev_charger_start":
                 await self._call_script(
                     self.entity_map.get("ev_start_script", "script.timxon_ev_charger_start"),
                     reason=decision.ev_decision_reason,
                 )
-            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_stop":
+            if settings.ev_control_enabled and manager_owns_daytime_ev and decision.ev_expected_action == "ev_charger_stop":
                 await self._call_switch(
                     self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
                     False,

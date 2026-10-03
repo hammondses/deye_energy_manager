@@ -1,0 +1,564 @@
+{
+  "id": "1786590120813",
+  "alias": "TIMXON EV Solar Surplus Charging",
+  "description": "During 07:00-21:00, modulate a connected EV at 6-32 A while Deye solar permission is active, cap total essential load to a 13.5 kW operating ceiling, and stop only when the existing Deye solar-permission/house-safety logic requires it. Updated for the stricter OCPP profile schema: every requested current is quantized to a whole amp before SetChargingProfile. Retains one-shot stale-session recovery and manual charge-to-target ownership.",
+  "triggers": [
+    {
+      "trigger": "time_pattern",
+      "seconds": "/30",
+      "id": "poll"
+    },
+    {
+      "trigger": "state",
+      "entity_id": "sensor.evcharger_status_connector",
+      "id": "connector_status"
+    },
+    {
+      "trigger": "state",
+      "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+      "id": "solar_permission"
+    },
+    {
+      "trigger": "state",
+      "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+      "id": "solar_enabled"
+    },
+    {
+      "trigger": "time",
+      "at": [
+        "07:00:00",
+        "21:00:00"
+      ],
+      "id": "day_boundary"
+    },
+    {
+      "trigger": "state",
+      "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+      "id": "manual_override"
+    }
+  ],
+  "conditions": [
+    {
+      "condition": "time",
+      "after": "07:00:00",
+      "before": "21:00:00"
+    },
+    {
+      "condition": "state",
+      "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+      "state": "off"
+    }
+  ],
+  "actions": [
+    {
+      "choose": [
+        {
+          "conditions": [
+            {
+              "condition": "trigger",
+              "id": "connector_status"
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "sensor.evcharger_status_connector",
+              "state": "SuspendedEV"
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.evcharger_charge_control",
+              "state": "on"
+            }
+          ],
+          "sequence": [
+            {
+              "action": "switch.turn_off",
+              "target": {
+                "entity_id": "switch.evcharger_charge_control"
+              },
+              "continue_on_error": true
+            },
+            {
+              "delay": {
+                "seconds": 3
+              }
+            },
+            {
+              "condition": "time",
+              "after": "07:00:00",
+              "before": "21:00:00"
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+              "state": "off"
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "sensor.evcharger_status_connector",
+              "state": [
+                "Preparing",
+                "Charging",
+                "SuspendedEV",
+                "SuspendedEVSE",
+                "Finishing"
+              ]
+            },
+            {
+              "action": "switch.turn_on",
+              "target": {
+                "entity_id": "switch.evcharger_availability"
+              }
+            },
+            {
+              "delay": {
+                "seconds": 1
+              }
+            },
+            {
+              "condition": "time",
+              "after": "07:00:00",
+              "before": "21:00:00"
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+              "state": "off"
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "sensor.evcharger_status_connector",
+              "state": [
+                "Preparing",
+                "Charging",
+                "SuspendedEV",
+                "SuspendedEVSE",
+                "Finishing"
+              ]
+            },
+            {
+              "condition": "state",
+              "entity_id": "switch.evcharger_availability",
+              "state": "on"
+            },
+            {
+              "action": "switch.turn_on",
+              "target": {
+                "entity_id": "switch.evcharger_charge_control"
+              }
+            }
+          ],
+          "note": "Recover one stale EV-suspended session only on the connector transition; polling triggers must not repeat the stop/start."
+        },
+        {
+          "conditions": [
+            {
+              "condition": "state",
+              "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+              "state": "on"
+            },
+            {
+              "condition": "state",
+              "entity_id": "sensor.evcharger_status_connector",
+              "state": [
+                "Preparing",
+                "Charging",
+                "SuspendedEV",
+                "SuspendedEVSE",
+                "Finishing"
+              ],
+              "note": "Available means unplugged; Finishing means the cable is still connected after a remote stop and is restartable when solar permission returns."
+            }
+          ],
+          "sequence": [
+            {
+              "variables": {
+                "previous_command_amps": "{{ states('sensor.evcharger_current_import') | float(0) }}",
+                "essential_power_before": "{{ states('sensor.deye_essential_power') | float(0) }}",
+                "command_voltage": "{{ states('sensor.evcharger_voltage') | float(230) }}",
+                "was_already_charging": "{{ is_state('sensor.evcharger_status_connector', 'Charging') and is_state('switch.evcharger_charge_control', 'on') }}",
+                "actual_charger_amps_before": "{{ states('sensor.evcharger_current_import') | float(0) }}",
+                "house_power_before": "{{ (states('sensor.deye_essential_power') | float(0)) - ((states('sensor.evcharger_current_import') | float(0)) * (states('sensor.evcharger_voltage') | float(230))) }}"
+              },
+              "alias": "Capture the load before changing the OCPP profile"
+            },
+            {
+              "if": [
+                {
+                  "condition": "template",
+                  "value_template": "{{ ((target_amps | float(6)) - (actual_charger_amps_before | float(0))) | abs >= 1 }}"
+                }
+              ],
+              "then": [
+                {
+                  "action": "ocpp.set_charge_rate",
+                  "data": {
+                    "devid": "evcharger",
+                    "conn_id": 1,
+                    "custom_profile": {
+                      "chargingProfileId": 9102,
+                      "stackLevel": 0,
+                      "chargingProfilePurpose": "TxDefaultProfile",
+                      "chargingProfileKind": "Absolute",
+                      "chargingSchedule": {
+                        "chargingRateUnit": "A",
+                        "chargingSchedulePeriod": [
+                          {
+                            "startPeriod": 0,
+                            "limit": "{{ target_amps | int(6) }}"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "alias": "Set TIMXON current using compatibility profile"
+                },
+                {
+                  "if": [
+                    {
+                      "condition": "template",
+                      "value_template": "{{ was_already_charging and ((target_amps | float(6)) - (actual_charger_amps_before | float(0))) | abs >= 4 }}"
+                    }
+                  ],
+                  "then": [
+                    {
+                      "delay": {
+                        "seconds": 20
+                      }
+                    },
+                    {
+                      "condition": "time",
+                      "after": "07:00:00",
+                      "before": "21:00:00"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                      "state": "off"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+                      "state": "on"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+                      "state": "on"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "sensor.evcharger_status_connector",
+                      "state": [
+                        "Preparing",
+                        "Charging",
+                        "SuspendedEV",
+                        "SuspendedEVSE",
+                        "Finishing"
+                      ]
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.evcharger_charge_control",
+                      "state": "on"
+                    },
+                    {
+                      "variables": {
+                        "inferred_charger_amps_after": "{{ ((states('sensor.deye_essential_power') | float(0)) - (house_power_before | float(0))) / (command_voltage | float(230)) }}"
+                      },
+                      "alias": "Infer charger current from the inverter load"
+                    },
+                    {
+                      "if": [
+                        {
+                          "condition": "template",
+                          "value_template": "{{ ((inferred_charger_amps_after | float(0)) - (target_amps | float(6))) | abs >= 3 }}"
+                        }
+                      ],
+                      "then": [
+                        {
+                          "action": "ocpp.clear_profile",
+                          "data": {
+                            "devid": "evcharger"
+                          },
+                          "alias": "Clear stale TIMXON charging profiles"
+                        },
+                        {
+                          "delay": {
+                            "seconds": 1
+                          }
+                        },
+                        {
+                          "condition": "time",
+                          "after": "07:00:00",
+                          "before": "21:00:00"
+                        },
+                        {
+                          "condition": "state",
+                          "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                          "state": "off"
+                        },
+                        {
+                          "condition": "state",
+                          "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+                          "state": "on"
+                        },
+                        {
+                          "condition": "state",
+                          "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+                          "state": "on"
+                        },
+                        {
+                          "condition": "state",
+                          "entity_id": "sensor.evcharger_status_connector",
+                          "state": [
+                            "Preparing",
+                            "Charging",
+                            "SuspendedEV",
+                            "SuspendedEVSE",
+                            "Finishing"
+                          ]
+                        },
+                        {
+                          "condition": "state",
+                          "entity_id": "switch.evcharger_charge_control",
+                          "state": "on"
+                        },
+                        {
+                          "action": "ocpp.set_charge_rate",
+                          "data": {
+                            "devid": "evcharger",
+                            "conn_id": 1,
+                            "custom_profile": {
+                              "chargingProfileId": 9102,
+                              "stackLevel": 0,
+                              "chargingProfilePurpose": "TxDefaultProfile",
+                              "chargingProfileKind": "Absolute",
+                              "chargingSchedule": {
+                                "chargingRateUnit": "A",
+                                "chargingSchedulePeriod": [
+                                  {
+                                    "startPeriod": 0,
+                                    "limit": "{{ target_amps | int(6) }}"
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          "alias": "Resend fresh TIMXON compatibility profile"
+                        }
+                      ],
+                      "alias": "Recover when inferred charger current missed the request by 3 A"
+                    }
+                  ],
+                  "alias": "Verify material current changes against inverter load"
+                }
+              ],
+              "alias": "Send only changed current limits"
+            },
+            {
+              "choose": [
+                {
+                  "conditions": [
+                    {
+                      "condition": "template",
+                      "value_template": "{{ (target_amps | float(0)) >= 6 }}"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.evcharger_charge_control",
+                      "state": "off"
+                    },
+                    {
+                      "condition": "or",
+                      "conditions": [
+                        {
+                          "condition": "trigger",
+                          "id": [
+                            "connector_status",
+                            "solar_permission",
+                            "solar_enabled",
+                            "day_boundary",
+                            "manual_override"
+                          ]
+                        },
+                        {
+                          "condition": "template",
+                          "value_template": "{{ (previous_command_amps | float(0)) < 6 }}"
+                        }
+                      ]
+                    }
+                  ],
+                  "sequence": [
+                    {
+                      "action": "switch.turn_on",
+                      "target": {
+                        "entity_id": "switch.evcharger_availability"
+                      }
+                    },
+                    {
+                      "delay": {
+                        "seconds": 1
+                      }
+                    },
+                    {
+                      "condition": "time",
+                      "after": "07:00:00",
+                      "before": "21:00:00"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                      "state": "off"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+                      "state": "on"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed",
+                      "state": "on"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "sensor.evcharger_status_connector",
+                      "state": [
+                        "Preparing",
+                        "Charging",
+                        "SuspendedEV",
+                        "SuspendedEVSE",
+                        "Finishing"
+                      ]
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.evcharger_availability",
+                      "state": "on"
+                    },
+                    {
+                      "action": "switch.turn_on",
+                      "target": {
+                        "entity_id": "switch.evcharger_charge_control"
+                      }
+                    }
+                  ],
+                  "alias": "Start once when solar charging becomes available; never stop for modulation"
+                },
+                {
+                  "conditions": [
+                    {
+                      "condition": "template",
+                      "value_template": "{{ (target_amps | float(0)) < 6 }}"
+                    },
+                    {
+                      "condition": "state",
+                      "entity_id": "switch.evcharger_charge_control",
+                      "state": "on"
+                    }
+                  ],
+                  "sequence": [
+                    {
+                      "action": "switch.turn_off",
+                      "target": {
+                        "entity_id": "switch.evcharger_charge_control"
+                      },
+                      "continue_on_error": true
+                    }
+                  ],
+                  "alias": "Pause only when less than 6 A fits under the 13.5 kW house safety limit"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "default": [
+        {
+          "choose": [
+            {
+              "conditions": [
+                {
+                  "condition": "state",
+                  "entity_id": "switch.evcharger_charge_control",
+                  "state": "on"
+                }
+              ],
+              "sequence": [
+                {
+                  "action": "switch.turn_off",
+                  "target": {
+                    "entity_id": "switch.evcharger_charge_control"
+                  },
+                  "continue_on_error": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "action": "ocpp.set_charge_rate",
+          "data": {
+            "devid": "evcharger",
+            "conn_id": 1,
+            "custom_profile": {
+              "chargingProfileId": 9102,
+              "stackLevel": 0,
+              "chargingProfilePurpose": "TxDefaultProfile",
+              "chargingProfileKind": "Absolute",
+              "chargingSchedule": {
+                "chargingRateUnit": "A",
+                "chargingSchedulePeriod": [
+                  {
+                    "startPeriod": 0,
+                    "limit": 6
+                  }
+                ]
+              }
+            }
+          },
+          "alias": "Keep TIMXON compatibility profile at 6 A while solar control is inactive"
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "target_amps": "{% set allowed = is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled', 'on')\n  and is_state('binary_sensor.garage_deye_energy_manager_ev_solar_charge_allowed', 'on')\n  and 7 <= now().hour < 21\n  and states('sensor.evcharger_status_connector') in ['Preparing', 'Charging', 'SuspendedEV', 'SuspendedEVSE', 'Finishing'] %}\n{% if not allowed %}\n  0\n{% else %}\n  {% set voltage = states('sensor.evcharger_voltage') | float(230) %}\n  {% set charging = is_state('sensor.evcharger_status_connector', 'Charging') %}\n  {% set actual_ev_amps = states('sensor.evcharger_current_import') | float(0) if charging else 0 %}\n  {% set essential_w = states('sensor.deye_essential_power') | float(13500) %}\n  {% set grid_w = states('sensor.deye_grid_ct_power') | float(0) %}\n  {% set battery_w = states('sensor.deye_battery_power') | float(0) %}\n  {% set solar_pool_w = actual_ev_amps * voltage - grid_w + [-battery_w, 0] | max - [battery_w, 0] | max - 300 %}\n  {% set solar_amps = [((solar_pool_w / voltage) | int(0)), 32] | min %}\n  {% set house_cap_amps = [((actual_ev_amps + (13500 - essential_w) / voltage) | int(0)), 32] | min %}\n  {% set requested_amps = [solar_amps, house_cap_amps, 32] | min %}\n  {{ (0 if house_cap_amps < 6 else [requested_amps, 6] | max) | int }}\n{% endif %}"
+  },
+  "mode": "single"
+}

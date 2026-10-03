@@ -98,6 +98,19 @@ review. A scalar EV budget divided by remaining daylight is not sufficient:
 it would unnecessarily spread charging beyond the car's plug-in window and
 miss battery taper deadlines.
 
+## Daytime EV charger writer ownership
+
+The `Daytime EV charger writer` select defaults to `manager`. Choose
+`external_automation` when a separate Home Assistant automation owns charger
+start/stop decisions during 07:00–21:00. In that mode the manager still
+calculates and publishes its EV recommendation, but suppresses its automatic
+charger start/stop service calls during that daytime window. The external
+automation must implement the desired solar, battery-completion, SOC, and
+hysteresis protections itself. Manager charge-to-target manual override and
+automatic charger actions outside that window remain available; external
+automations must yield while the manager's manual override is on. The setting
+does not gate Deye programme/bypass writes or the existing EV advisory.
+
 The completion calculation now uses continuous stored energy. For each future
 interval, F(E) is the end energy after serving non-EV house demand and accepting
 as much solar charge as possible, with SOC-band taper integrated across any
@@ -256,3 +269,35 @@ actuator ownership contract and integrate both automations. Existing effective
 Taycan SOC can be last-known-good WiCAN data; a new freshness rule must account
 for its energy-triggered refresh rather than deadlocking restart. No new SOC-age
 rule has been silently added to the live recovery automation.
+
+## Live EV recovery guard change — October 3
+
+Applied through the HA configuration API with optimistic locking, from hash
+`35e105bb20c3f586` to `aa52c84da1031530`. The automation remains enabled,
+with its original identity, triggers, mode, variables and OCPP actions.
+After the recovery and verification delays, native conditions recheck daytime,
+manual override off, solar enablement/permission and connected state. Start
+paths also verify availability; profile retries verify charge control is on.
+No independent SOC freshness/target policy was introduced by this patch.
+
+Exact before/after configurations are in `live-config-backups/`. To undo this
+specific change, fetch the current config/hash and restore the before JSON via
+`ha_config_set_automation`, then read back and verify. Do not restore an entire
+HA backup or overwrite intervening owner changes.
+
+Readback matched the candidate exactly. A normal polling trace completed and
+sent integer profile limit 28 A; this does not exercise the delayed retry or
+manual-takeover race. Those paths still require observation when they occur.
+
+## Restart telemetry and manual load accounting
+
+`Finishing` is connected and restartable on this TIMXON; `Available` is
+unplugged. The advisory recognizes both accordingly. A stopped charger may not
+refresh its voltage, so the adapter can instead use fresh `grid_voltage` from
+the single-phase inverter supply as a planning estimate. It still requires
+fresh, correctly unit-labelled telemetry; no stale voltage is promoted to live.
+Actual EV current control and the house ceiling need their own measured feedback.
+
+Manual EV charging is included in the current interval's uncontrollable load,
+with zero discretionary EV recommendation. Future EV demand remains unknown;
+the projection does not guarantee completion against unlimited manual charging.
