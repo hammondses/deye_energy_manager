@@ -14,6 +14,7 @@ SWITCHES = {
     "cooling_data_collection_enabled": "Cooling data collection enabled",
     "enabled": "Enabled",
     "advisory_enabled": "Advisory enabled",
+    "daytime_plan_enabled": "Daytime solar plan enabled",
     "deye_control_enabled": "Deye control enabled",
     "grid_charge_control_enabled": "Grid charge control enabled",
     "cheap_grid_preserve_enabled": "Cheap grid preserve enabled",

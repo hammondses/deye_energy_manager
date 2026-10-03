@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -18,12 +18,49 @@ from .entity import DeyeEnergyManagerEntity
 from .models import EnergyManagerDecision
 
 
+def _solar_plan_value(decision: EnergyManagerDecision, field: str) -> Any:
+    """Expose plan values only when a fresh, valid advisory exists."""
+    plan = decision.solar_plan
+    return getattr(plan, field) if plan is not None and plan.valid else None
+
+
+def _solar_plan_status(decision: EnergyManagerDecision) -> str:
+    plan = decision.solar_plan
+    return "disabled" if plan is None else "advisory" if plan.valid else "unavailable"
+
+
+def _solar_plan_reason(decision: EnergyManagerDecision) -> str:
+    plan = decision.solar_plan
+    return "disabled" if plan is None else plan.reason
+
+
 @dataclass(frozen=True, kw_only=True)
 class DeyeSensorDescription(SensorEntityDescription):
     value_fn: Callable[[EnergyManagerDecision], Any]
 
 
 SENSORS: tuple[DeyeSensorDescription, ...] = (
+    DeyeSensorDescription(key="solar_plan_status", name="Daytime solar plan status", value_fn=_solar_plan_status),
+    DeyeSensorDescription(key="solar_plan_reason", name="Daytime solar plan reason", value_fn=_solar_plan_reason),
+    DeyeSensorDescription(key="solar_plan_generated_at", name="Solar plan generated", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: _solar_plan_value(d, "generated_at")),
+    DeyeSensorDescription(key="solar_plan_target_reachable", name="Solar plan target reachable", value_fn=lambda d: ("yes" if _solar_plan_value(d, "target_reachable") else "no") if _solar_plan_value(d, "target_reachable") is not None else None),
+    DeyeSensorDescription(key="solar_plan_required_soc_now", name="Solar plan required SOC now", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "required_soc_now_pct")),
+    DeyeSensorDescription(key="solar_plan_required_energy_now", name="Solar plan required energy now", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "required_energy_now_kwh")),
+    DeyeSensorDescription(key="solar_plan_completion_margin", name="Solar plan completion margin", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "completion_margin_kwh")),
+    DeyeSensorDescription(key="solar_plan_recommended_ev_amps", name="Solar plan recommended EV current", native_unit_of_measurement=UnitOfElectricCurrent.AMPERE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "recommended_ev_amps")),
+    DeyeSensorDescription(key="solar_plan_recommended_battery_dc_power", name="Solar plan recommended battery DC charge", native_unit_of_measurement=UnitOfPower.KILO_WATT, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "recommended_battery_dc_kw")),
+    DeyeSensorDescription(key="solar_plan_expected_battery_dc_power", name="Solar plan expected battery DC charge", native_unit_of_measurement=UnitOfPower.KILO_WATT, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "recommended_battery_expected_average_dc_kw")),
+    DeyeSensorDescription(key="solar_plan_deadline", name="Solar plan completion deadline", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: _solar_plan_value(d, "deadline")),
+    DeyeSensorDescription(key="solar_plan_physical_clipping_window_end", name="Solar plan estimated clipping window end", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: _solar_plan_value(d, "physical_clipping_window_end")),
+    DeyeSensorDescription(key="solar_plan_physical_clipping_remaining", name="Solar plan estimated clipping remaining", value_fn=lambda d: ("yes" if _solar_plan_value(d, "physical_clipping_remaining") else "no") if _solar_plan_value(d, "physical_clipping_remaining") is not None else None),
+    DeyeSensorDescription(key="solar_plan_charge_all_surplus", name="Solar plan all-surplus charge mode", value_fn=lambda d: ("yes" if _solar_plan_value(d, "charge_all_surplus") else "no") if _solar_plan_value(d, "charge_all_surplus") is not None else None),
+    DeyeSensorDescription(key="solar_plan_forecast_ac_proxy_used", name="Solar plan forecast AC proxy used", value_fn=lambda d: ("yes" if _solar_plan_value(d, "forecast_ac_proxy_used") else "no") if _solar_plan_value(d, "forecast_ac_proxy_used") is not None else None),
+    DeyeSensorDescription(key="solar_plan_forecast_source_updated_at", name="Solar plan forecast source updated", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: _solar_plan_value(d, "forecast_source_updated_at")),
+    DeyeSensorDescription(key="solar_plan_clipping_estimate", name="Solar plan estimated clipping energy", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "clipping_estimate_kwh")),
+    DeyeSensorDescription(key="solar_plan_clipping_captured", name="Solar plan projected DC clipping capture", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "clipping_captured_kwh")),
+    DeyeSensorDescription(key="solar_plan_clipping_potential", name="Solar plan potential DC clipping before capture", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "clipping_potential_kwh")),
+    DeyeSensorDescription(key="solar_plan_clipping_headroom", name="Solar plan clipping headroom", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: _solar_plan_value(d, "clipping_headroom_kwh")),
+    DeyeSensorDescription(key="solar_plan_clipping_plan_available", name="Solar plan clipping plan available", value_fn=lambda d: ("yes" if _solar_plan_value(d, "clipping_plan_available") else "no") if _solar_plan_value(d, "clipping_plan_available") is not None else None),
     DeyeSensorDescription(key="decision_timeline", name="Decision timeline", value_fn=lambda d: None),
     DeyeSensorDescription(key="cooling_data_collection", name="Cooling data collection", value_fn=lambda d: None),
     DeyeSensorDescription(key="cooling_saved_preset", name="Cooling saved preset", value_fn=lambda d: None),
@@ -217,6 +254,22 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
+        if self.entity_description.key == "solar_plan_status":
+            decision = self.coordinator.data
+            plan = decision.solar_plan if decision is not None else None
+            if plan is None:
+                return None
+            return {
+                "full_reason": plan.reason,
+                "advisory_only": True,
+                "forecast_model": "Solcast AC forecast used as conservative DC proxy",
+                "clipping_model": "empirical clear-sky scenario, not a probability bound",
+                "generated_at": plan.generated_at.isoformat() if plan.generated_at else None,
+                "physical_scenario": [
+                    {"time": time.isoformat(), "soc": soc}
+                    for time, soc in zip(plan.physical_scenario_boundary_times, plan.physical_scenario_soc_trajectory)
+                ],
+            }
         if self.entity_description.key == "cooling_data_collection":
             return dict(self.coordinator.cooling_collection_status)
         if self.entity_description.key == "decision_timeline":

@@ -7,7 +7,7 @@ from datetime import timedelta
 DOMAIN = "deye_energy_manager"
 NAME = "Deye Energy Manager"
 
-PLATFORMS = ["sensor", "binary_sensor", "switch", "select", "number", "button"]
+PLATFORMS = ["sensor", "binary_sensor", "switch", "select", "number", "button", "text"]
 
 DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
 STARTUP_GRACE = timedelta(seconds=60)
@@ -22,6 +22,8 @@ THERMAL_ACTUATION_MODE_OPTIONS = ["advisory", "direct"]
 DEFAULT_THERMAL_ACTUATION_MODE = "advisory"
 FLEXIBLE_LOAD_PRIORITY_OPTIONS = ["battery_first", "thermal_before_ev", "ev_before_thermal", "export_before_loads"]
 DEFAULT_FLEXIBLE_LOAD_PRIORITY = "battery_first"
+DAYTIME_EV_WRITER_OPTIONS = ["manager", "external_automation"]
+DEFAULT_DAYTIME_EV_WRITER = "manager"
 FAN_MODE_OPTIONS = ["auto", "low", "medium", "high", "quiet"]
 FAN_MODE_DEFAULTS = {
     "heat_soak_fan_mode": "high",
@@ -52,6 +54,9 @@ DEFAULT_ENTITY_MAP = {
     "forecast_today": "sensor.solcast_pv_forecast_forecast_today",
     "forecast_remaining_today": "sensor.solcast_pv_forecast_forecast_remaining_today",
     "forecast_tomorrow": "sensor.solcast_pv_forecast_forecast_tomorrow",
+    "forecast_updated_at": "sensor.solcast_pv_forecast_api_last_polled",
+    "battery_charge_limit_current": "sensor.deye_battery_charge_limit_current",
+    "sun": "sun.sun",
     "pv_power_now": "sensor.solcast_pv_forecast_power_now",
     "pv_power_in_30_minutes": "sensor.solcast_pv_forecast_power_in_30_minutes",
     "pv_power_in_1_hour": "sensor.solcast_pv_forecast_power_in_1_hour",
@@ -225,6 +230,8 @@ FEATURE_DEFAULTS = {
     "cooling_data_collection_enabled": True,
     "enabled": True,
     "advisory_enabled": True,
+    "daytime_plan_enabled": False,
+    "daytime_ev_writer": DEFAULT_DAYTIME_EV_WRITER,
     "deye_control_enabled": False,
     "grid_charge_control_enabled": False,
     "cheap_grid_preserve_enabled": True,
@@ -294,6 +301,21 @@ NUMBER_DEFAULTS = {
     "solar_arrived_charge_threshold_w": 1500.0,
     "solar_arrived_pv_surplus_threshold_w": 1000.0,
     "daily_battery_target_soc": 100.0,
+    "solar_plan_max_forecast_age_minutes": 120.0,
+    "solar_plan_inverter_ac_limit_kw": 12.0,
+    "solar_plan_export_limit_kw": 10.0,
+    "solar_plan_site_ac_limit_kw": 13.5,
+    "solar_plan_battery_max_charge_dc_kw": 13.5,
+    "solar_plan_battery_max_discharge_dc_kw": 13.5,
+    "solar_plan_inverter_efficiency": 0.96,
+    "solar_plan_discharge_efficiency": 0.96,
+    "solar_plan_forecast_risk_blend": 0.0,
+    "solar_plan_array_capacity_kw": 16.56,
+    "solar_plan_array_tilt_deg": 8.0,
+    "solar_plan_array_azimuth_deg": 2.0,
+    "solar_plan_clear_sky_scale": 1.25,
+    "solar_plan_pv_dc_limit_kw": 18.0,
+    "solar_plan_clear_sky_weather_factor": 1.0,
     "battery_charge_efficiency": 0.94,
     "base_load_estimate_w": 1200.0,
     "base_load_window_minutes": 30.0,
@@ -333,6 +355,7 @@ NUMBER_DEFAULTS = {
     "wican_soc_energy_threshold_kwh": 1.0,
     "wican_soc_fresh_minutes": 60.0,
     "ev_manual_target_soc": 90.0,
+    "ev_solar_target_soc": 80.0,
     "grid_loss_voltage_threshold": 50.0,
     "grid_loss_notification_cooldown_minutes": 30.0,
     "min_thermal_run_minutes": 20.0,
@@ -386,6 +409,7 @@ NUMBER_DEFAULTS = {
 TEXT_DEFAULTS = {
     "grid_loss_notify_service": "notify.mobile_app_s26u",
     "wican_base_url": "http://192.168.10.75",
+    "solar_plan_charge_acceptance_curve": "",
 }
 
 STRATEGY_OPTIONS = ["off", "conservative", "normal", "aggressive", "manual"]

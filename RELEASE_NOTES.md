@@ -1,5 +1,57 @@
 # Release Notes
 
+## v0.6.0b19 — conservative load floor for delayed EV telemetry
+
+- Floor the daytime planner's current non-EV house estimate at the existing base-load estimate. Independently timed OCPP readings can otherwise make essential-load subtraction understate house demand and invent available solar.
+- Retain the existing rejection when EV power exceeds essential load by more than 500 W. Manual charging still remains fully included in current uncontrollable load. This guard does not establish meter sample synchronization.
+
+## v0.6.0b18 — expected battery acceptance for EV coordination
+
+- Expose the planner's expected average accepted DC battery power separately from its requested charge ceiling. A separate EV automation can compare actual battery charging with this taper-aware expectation when qualifying a sustained battery charge shortfall.
+- This diagnostic does not change actuator ownership or enable the pending automation handover.
+
+## v0.6.0b17 — measured-power units and verified sensor receipts
+
+- Normalize a configured EV power sensor from kW to watts before decision and base-load calculations. Unsupported or missing units use the existing current/voltage fallback instead of silently interpreting kW as W.
+- Reuse the manager's verified MQTT receipt handling for daytime-plan freshness. Matching, non-retained numeric reports keep unchanged BMS limits fresh; unrelated traffic, mismatching values and retained replays cannot extend freshness.
+- Add an offline snapshot preview tool with explicit charge-curve and energy-buffer assumptions. No preview writes to HA or establishes packet-level OCPP freshness.
+
+## v0.6.0b16 — release battery headroom after the clipping window
+
+- Add a separate clear-sky clipping envelope, independent of the weather-scaled capture scenario. Publish whether clipping opportunity remains and the final estimated risk interval.
+- When the envelope shows no remaining clipping opportunity, recommend all live PV left after house and completion-safe EV demand for battery charging, subject to BMS/hardware acceptance. Missing envelope data does not release headroom.
+- Replay the selected current battery command in the capture projection, including deliberate charging above the minimum completion floor.
+- Document separate battery and EV automation handover formulas and unresolved live telemetry validation. This remains advisory-only until the control handover is enabled deliberately.
+
+## v0.6.0b15 — daytime EV ownership and restart inputs
+
+- Add an explicit daytime EV writer selection, defaulting to the manager. External-automation ownership yields automatic daytime charger start/stop writes while retaining manual, overnight and Deye bypass handling. Handover still requires the external automation to enforce its safety and SOC cutoffs.
+- Recognize the TIMXON's connected `Finishing` state for restart advice. When charger voltage stops reporting between transactions, use fresh single-phase inverter supply voltage for planning; reject stale supply measurements.
+- Keep manual EV consumption in the current interval's load so the battery recommendation cannot allocate power already used by manual charging.
+- Record the separate live automation recovery fix and exact rollback configuration: delayed actions recheck ownership and solar eligibility, preserving integer raw profiles and the existing charging policy.
+
+## v0.6.0b14 — shared daytime solar advisory
+
+- Publish a disabled-by-default daytime advisory combining a continuous battery-completion floor with whole-amp EV recommendations. Existing actuator decisions and overnight protection remain unchanged.
+- Add HA controls for forecast risk, electrical limits, conversion losses, array geometry and an explicit charge-acceptance curve. Options refresh without integration reload; the curve starts empty rather than assuming an unverified battery taper.
+- Validate forecast supplier freshness and telemetry units/age. Separate conservative forecast completion from an empirical clear-sky DC capture projection, exposing predicted clipping and the scenario SOC trajectory without claiming a probabilistic bound.
+- Account for charge taper within each interval and distinguish the requested charge-power ceiling from expected average accepted power. Include present house deficits in the required stored-energy calculation.
+- This is advisory infrastructure, not a completed control handover. Live input mapping, battery-curve calibration, cloud ride-through and separate actuator automation integration remain to be verified.
+
+## v0.6.0b13 — battery completion calculations and solar EV target
+
+- Add an HA-adjustable solar EV target SOC, default 80%, independently of the manual target and existing overnight cutoff. Threshold changes refresh decisions without integration reload.
+- Add continuous battery charge calculations through SOC-dependent acceptance bands and reserve-limited discharge for house demand, with explicit conversion losses.
+- Add a pure backward battery-completion envelope and forward maximum-charge feasibility calculation. It accounts for daytime house deficits and avoids accumulating SOC rounding errors. The horizon calculation is not yet wired into live control.
+- Validation: 228 repository tests pass, including taper crossings, cloud deficits, numerical-boundary regressions and independent solar/manual/overnight EV targets.
+
+## v0.6.0b12 — daytime planning foundations
+
+- Add an isolated solar interval model with explicit DC battery charging, AC house/EV/export allocation, BMS and acceptance limits, headroom, losses and clipping accounting.
+- Add a strict detailed-forecast parser with source-age validation, timezone-aware interval coverage and energy-preserving five-minute subdivision. Forecast output is deliberately not assumed to be raw DC array power.
+- Document the shared daytime planning/control contract and remaining validation. These building blocks are not connected to live decisions or actuators; existing overnight and EV behavior is unchanged.
+- Validation: 204 repository tests pass. The parser also accepted the live October 3 Solcast horizon through local sunset (63 intervals); this verifies data compatibility, not forecast accuracy or controller performance.
+
 ## v0.6.0b11 — overhaul branch
 
 - Replace the normal curve’s abrupt maximum-fan demand one degree before emergency with continuous temperature demand from target to emergency. Full-fan emergency and recovery protection remain unchanged.

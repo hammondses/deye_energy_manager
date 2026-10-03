@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .solar_advisory import SolarAdvisory
 
 
 @dataclass(slots=True)
@@ -19,6 +23,7 @@ class EnergyManagerSettings:
     ev_control_enabled: bool = False
     ev_grid_bypass_enabled: bool = False
     ev_solar_charging_enabled: bool = False
+    daytime_ev_writer: str = "manager"
     ev_cheap_grid_charging_enabled: bool = True
     heat_control_enabled: bool = False
     thermal_control_enabled: bool = False
@@ -126,6 +131,7 @@ class EnergyManagerSettings:
     ev_bypass_program_power_w: float = 2000.0
     ev_restore_program_power_w: float = 12000.0
     ev_manual_target_soc: float = 90.0
+    ev_solar_target_soc: float = 80.0
     grid_loss_notification_enabled: bool = False
     grid_loss_voltage_threshold: float = 50.0
     grid_loss_notification_cooldown_minutes: float = 30.0
@@ -496,6 +502,7 @@ class EnergyManagerDecision:
     cooling_inverter_protection_required: bool = False
     cooling_inverter_protection_active: bool = False
     cooling_protection_reason: str = "inactive"
+    solar_plan: SolarAdvisory | None = None
 
 
 @dataclass(frozen=True, slots=True)

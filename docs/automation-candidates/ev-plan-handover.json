@@ -1,0 +1,1966 @@
+{
+  "schema": "deye-ev-plan-handover-candidate/v1",
+  "status": "review-only; not installed or enabled",
+  "source": {
+    "automation": "TIMXON EV Solar Surplus Charging",
+    "backup": "docs/live-config-backups/2026-10-03-timxon-operational-status-guards.json",
+    "source_config_id": "1786590120813",
+    "ocpp_profile": {
+      "service": "ocpp.set_charge_rate",
+      "devid": "evcharger",
+      "conn_id": 1,
+      "chargingProfileId": 9102,
+      "stackLevel": 0,
+      "chargingProfilePurpose": "TxDefaultProfile",
+      "chargingProfileKind": "Absolute",
+      "chargingRateUnit": "A"
+    },
+    "backup_sha256": "013d7a62ad2e68f016aab998a94d6ceb20d7ca891fc3c4ff4f605c7a5c8594b9"
+  },
+  "entity_registry": {
+    "verified_existing": [
+      "switch.garage_deye_energy_manager_ev_manual_charging_override",
+      "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+      "sensor.garage_deye_energy_manager_ev_active_target_soc",
+      "sensor.evcharger_status_connector",
+      "sensor.evcharger_current_import",
+      "sensor.evcharger_power_active_import",
+      "sensor.evcharger_voltage",
+      "switch.evcharger_charge_control",
+      "switch.evcharger_availability",
+      "sensor.deye_essential_power",
+      "sensor.deye_grid_ct_power",
+      "sensor.deye_battery_power",
+      "sensor.deye_battery_soc",
+      "sensor.garage_deye_energy_manager_base_load_estimate"
+    ],
+    "pending_manager_release_or_registry_resolution": [
+      "select.garage_deye_energy_manager_daytime_ev_writer",
+      "switch.garage_deye_energy_manager_enabled",
+      "switch.garage_deye_energy_manager_ev_control_enabled",
+      "sensor.garage_deye_energy_manager_solar_plan_status",
+      "sensor.garage_deye_energy_manager_solar_plan_generated_at",
+      "sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps",
+      "sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power",
+      "sensor.garage_deye_energy_manager_solar_plan_target_reachable",
+      "sensor.garage_deye_energy_manager_solar_plan_reason",
+      "sensor.deye_grid_voltage"
+    ],
+    "must_verify_before_install": true
+  },
+  "helpers": [
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_controller_owns_session",
+      "name": "EV solar controller owns session",
+      "purpose": "Persistent ownership marker; only this automation may stop a session it started or adopted.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_controller_stopped_session",
+      "name": "EV solar controller stopped session",
+      "purpose": "Persistent restart latch, restored across HA restarts.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_deficit_stop_pending",
+      "name": "EV solar deficit stop pending",
+      "purpose": "Persistent armed flag so an elapsed deficit timer is recovered on the next poll if HA missed timer.finished.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_restart_pending",
+      "name": "EV solar restart pending",
+      "purpose": "Persistent armed flag; consume an elapsed restart timer on the next poll even if timer.finished was missed.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_invalid_stop_pending",
+      "name": "EV solar invalid-data stop pending",
+      "purpose": "Persistent armed flag for bounded invalid-data grace expiration recovery.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_ev_telemetry_verified",
+      "name": "EV current and power telemetry verified",
+      "purpose": "Must remain off until stopped-session Current.Import/Power.Active.Import source freshness has been proven; restart and increases above 6 A require it.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_site_ceiling_w",
+      "name": "EV solar site ceiling",
+      "min": 6000,
+      "max": 13500,
+      "step": 100,
+      "unit_of_measurement": "W",
+      "creation_default": 13500,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_deficit_battery_w",
+      "name": "EV solar sustained battery deficit",
+      "min": 0,
+      "max": 3000,
+      "step": 100,
+      "unit_of_measurement": "W",
+      "creation_default": 500,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_deficit_grid_w",
+      "name": "EV solar sustained grid import",
+      "min": 0,
+      "max": 5000,
+      "step": 100,
+      "unit_of_measurement": "W",
+      "creation_default": 500,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_battery_charge_shortfall_w",
+      "name": "EV solar battery charge shortfall tolerance",
+      "min": 100,
+      "max": 2000,
+      "step": 100,
+      "unit_of_measurement": "W",
+      "creation_default": 500,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_deficit_minutes",
+      "name": "EV solar deficit dwell",
+      "min": 5,
+      "max": 20,
+      "step": 1,
+      "unit_of_measurement": "min",
+      "creation_default": 12,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_invalid_plan_minutes",
+      "name": "EV solar invalid plan grace",
+      "min": 1,
+      "max": 10,
+      "step": 1,
+      "unit_of_measurement": "min",
+      "creation_default": 5,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_restart_minutes",
+      "name": "EV solar restart dwell",
+      "min": 3,
+      "max": 15,
+      "step": 1,
+      "unit_of_measurement": "min",
+      "creation_default": 7,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_restart_amps",
+      "name": "EV solar restart recommendation",
+      "min": 8,
+      "max": 16,
+      "step": 1,
+      "unit_of_measurement": "A",
+      "creation_default": 8,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_restart_margin_w",
+      "name": "EV solar restart surplus margin",
+      "min": 100,
+      "max": 1500,
+      "step": 50,
+      "unit_of_measurement": "W",
+      "creation_default": 300,
+      "restore_state": true
+    },
+    {
+      "platform": "input_number",
+      "entity_id": "input_number.ev_solar_target_tolerance_pct",
+      "name": "EV solar target tolerance",
+      "min": 0,
+      "max": 3,
+      "step": 0.1,
+      "unit_of_measurement": "%",
+      "creation_default": 0.5,
+      "restore_state": true
+    },
+    {
+      "platform": "timer",
+      "entity_id": "timer.ev_solar_sustained_deficit",
+      "name": "EV solar sustained deficit",
+      "duration": "00:12:00",
+      "restore": true
+    },
+    {
+      "platform": "timer",
+      "entity_id": "timer.ev_solar_restart_qualification",
+      "name": "EV solar restart qualification",
+      "duration": "00:07:00",
+      "restore": true
+    },
+    {
+      "platform": "timer",
+      "entity_id": "timer.ev_solar_invalid_data_grace",
+      "name": "EV solar invalid data grace",
+      "duration": "00:05:00",
+      "restore": true
+    },
+    {
+      "platform": "input_boolean",
+      "entity_id": "input_boolean.ev_solar_start_confirmation_pending",
+      "name": "EV solar start confirmation pending",
+      "purpose": "Persistent in-flight RemoteStart latch; prevents duplicate starts while OCPP status arrives asynchronously.",
+      "creation_default": false,
+      "restore_state": true
+    },
+    {
+      "platform": "timer",
+      "entity_id": "timer.ev_solar_start_confirmation",
+      "name": "EV solar start confirmation",
+      "duration": "00:00:30",
+      "restore": true
+    }
+  ],
+  "candidate_config": {
+    "id": "ev_plan_handover_review_candidate",
+    "alias": "TIMXON EV Solar Plan Handover (review candidate)",
+    "description": "Separate reloadable daytime actuator. Requires select.garage_deye_energy_manager_daytime_ev_writer=external_automation. Never writes in manual mode or outside 07:00-21:00. Raw OCPP integer-amp profile retained. Candidate is deliberately not installed; telemetry and pending manager entity IDs require verification.",
+    "mode": "single",
+    "max_exceeded": "silent",
+    "triggers": [
+      {
+        "trigger": "time_pattern",
+        "seconds": "/30",
+        "id": "poll"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "sensor.evcharger_status_connector",
+        "id": "connector_status"
+      },
+      {
+        "trigger": "state",
+        "entity_id": [
+          "switch.garage_deye_energy_manager_ev_manual_charging_override",
+          "switch.garage_deye_energy_manager_ev_solar_charging_enabled",
+          "select.garage_deye_energy_manager_daytime_ev_writer",
+          "sensor.garage_deye_energy_manager_solar_plan_status",
+          "sensor.garage_deye_energy_manager_solar_plan_generated_at",
+          "sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps",
+          "sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power",
+          "sensor.garage_deye_energy_manager_solar_plan_target_reachable",
+          "sensor.garage_deye_energy_manager_ev_active_target_soc",
+          "sensor.evcharger_current_import",
+          "sensor.evcharger_power_active_import",
+          "sensor.evcharger_voltage",
+          "sensor.deye_essential_power",
+          "sensor.deye_grid_ct_power",
+          "sensor.deye_battery_power",
+          "sensor.deye_battery_soc",
+          "number.garage_deye_energy_manager_daily_battery_target_soc",
+          "sensor.garage_deye_energy_manager_base_load_estimate"
+        ],
+        "id": "input_changed"
+      },
+      {
+        "trigger": "time",
+        "at": [
+          "07:00:00",
+          "21:00:00"
+        ],
+        "id": "day_boundary"
+      },
+      {
+        "trigger": "event",
+        "event_type": "timer.finished",
+        "event_data": {
+          "entity_id": "timer.ev_solar_sustained_deficit"
+        },
+        "id": "deficit_timer_finished"
+      },
+      {
+        "trigger": "event",
+        "event_type": "timer.finished",
+        "event_data": {
+          "entity_id": "timer.ev_solar_restart_qualification"
+        },
+        "id": "restart_timer_finished"
+      },
+      {
+        "trigger": "event",
+        "event_type": "timer.finished",
+        "event_data": {
+          "entity_id": "timer.ev_solar_invalid_data_grace"
+        },
+        "id": "invalid_timer_finished"
+      },
+      {
+        "trigger": "event",
+        "event_type": "timer.finished",
+        "event_data": {
+          "entity_id": "timer.ev_solar_start_confirmation"
+        },
+        "id": "start_confirmation_timer_finished"
+      }
+    ],
+    "variables": {
+      "manual": "{{ is_state('switch.garage_deye_energy_manager_ev_manual_charging_override', 'on') }}",
+      "daytime": "{{ 7 <= now().hour < 21 }}",
+      "external_owner": "{{ is_state('select.garage_deye_energy_manager_daytime_ev_writer', 'external_automation') }}",
+      "manager_enabled": "{{ is_state('switch.garage_deye_energy_manager_enabled', 'on') }}",
+      "ev_control_enabled": "{{ is_state('switch.garage_deye_energy_manager_ev_control_enabled', 'on') }}",
+      "ev_enabled_for_handover": "{{ manager_enabled and ev_control_enabled and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled', 'on') }}",
+      "connected": "{{ states('sensor.evcharger_status_connector') in ['Preparing', 'Charging', 'SuspendedEV', 'SuspendedEVSE', 'Finishing'] }}",
+      "plan_age": "{{ as_timestamp(now()) - as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'), 0) }}",
+      "plan_fresh": "{{ states('sensor.garage_deye_energy_manager_solar_plan_status') == 'advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5 <= plan_age <= 90 }}",
+      "recommended_amps": "{{ states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps') | int(0) }}",
+      "target_reachable": "{{ states('sensor.garage_deye_energy_manager_solar_plan_target_reachable') == 'yes' }}",
+      "active_target_met": "{{ is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc') | float(0) >= (states('sensor.garage_deye_energy_manager_ev_active_target_soc') | float(100)) - (states('input_number.ev_solar_target_tolerance_pct') | float(0.5)) }}",
+      "ev_connected_and_owned_window": "{{ daytime and external_owner and not manual and connected }}",
+      "ev_voltage_fresh": "{{ is_number(states('sensor.evcharger_voltage')) and states.sensor.evcharger_voltage.last_reported is defined and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.evcharger_voltage.last_reported, 999999)) <= 120 }}",
+      "grid_voltage_fresh": "{{ is_number(states('sensor.deye_grid_voltage')) and states.sensor.deye_grid_voltage.last_reported is defined and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.deye_grid_voltage.last_reported, 999999)) <= 120 }}",
+      "voltage_v": "{{ states('sensor.evcharger_voltage') | float(0) if ev_voltage_fresh else (states('sensor.deye_grid_voltage') | float(0) if grid_voltage_fresh else 0) }}",
+      "ev_power_fresh": "{{ is_state('input_boolean.ev_solar_ev_telemetry_verified', 'on') and is_number(states('sensor.evcharger_power_active_import')) and states.sensor.evcharger_power_active_import.last_reported is defined and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.evcharger_power_active_import.last_reported, 999999)) <= 120 }}",
+      "ev_current_fresh": "{{ is_state('input_boolean.ev_solar_ev_telemetry_verified', 'on') and is_number(states('sensor.evcharger_current_import')) and states.sensor.evcharger_current_import.last_reported is defined and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.evcharger_current_import.last_reported, 999999)) <= 120 }}",
+      "ev_w": "{{ states('sensor.evcharger_power_active_import') | float(0) * 1000 if ev_power_fresh else (states('sensor.evcharger_current_import') | float(0) * voltage_v if ev_current_fresh and voltage_v > 0 else 0) }}",
+      "essential_w": "{{ states('sensor.deye_essential_power') | float(-1) }}",
+      "base_load_w": "{{ states('sensor.garage_deye_energy_manager_base_load_estimate') | float(0) }}",
+      "non_ev_house_w": "{{ [0, essential_w - ev_w, base_load_w] | max if (ev_power_fresh or ev_current_fresh) else [essential_w, base_load_w] | max }}",
+      "site_room_a": "{{ (((states('input_number.ev_solar_site_ceiling_w') | float(13500) - non_ev_house_w) / voltage_v) | int(0)) if voltage_v > 0 and essential_w >= 0 else 0 }}",
+      "safe_6a_possible": "{{ voltage_v > 0 and essential_w >= 0 and site_room_a >= 6 }}",
+      "request_amps": "{{ [32, recommended_amps, site_room_a] | min if plan_fresh and target_reachable and recommended_amps >= 6 and (ev_power_fresh or ev_current_fresh) else 6 }}",
+      "battery_w": "{{ states('sensor.deye_battery_power') | float(999999) }}",
+      "grid_w": "{{ states('sensor.deye_grid_ct_power') | float(999999) }}",
+      "battery_fresh": "{{ is_number(states('sensor.deye_battery_power')) and states.sensor.deye_battery_power.last_reported is defined and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.deye_battery_power.last_reported, 999999)) <= 120 }}",
+      "grid_fresh": "{{ is_number(states('sensor.deye_grid_ct_power')) and states.sensor.deye_grid_ct_power.last_reported is defined and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.deye_grid_ct_power.last_reported, 999999)) <= 120 }}",
+      "battery_soc_fresh": "{{ plan_fresh and is_number(states('sensor.deye_battery_soc')) }}",
+      "house_battery_target_reached": "{{ battery_soc_fresh and is_number(states('number.garage_deye_energy_manager_daily_battery_target_soc')) and states('sensor.deye_battery_soc') | float(0) >= states('number.garage_deye_energy_manager_daily_battery_target_soc') | float(100) - 0.5 }}",
+      "completion_risk": "{{ plan_fresh and (not target_reachable or recommended_amps < 6) }}",
+      "actual_battery_charge_w": "{{ [-battery_w, 0] | max }}",
+      "expected_battery_charge_w": "{{ states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power') | float(0) * 1000 }}",
+      "battery_charge_shortfall": "{{ battery_fresh and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and expected_battery_charge_w > actual_battery_charge_w + states('input_number.ev_solar_battery_charge_shortfall_w') | float(500) }}",
+      "sustained_deficit": "{{ (battery_fresh and battery_w >= states('input_number.ev_solar_deficit_battery_w') | float(500)) or (grid_fresh and grid_w >= states('input_number.ev_solar_deficit_grid_w') | float(500)) or (completion_risk and battery_charge_shortfall) }}",
+      "live_surplus_w": "{{ -grid_w - [battery_w, 0] | max + [-battery_w, 0] | max }}",
+      "restart_qualified_now": "{{ ev_connected_and_owned_window and is_state('switch.evcharger_charge_control', 'off') and is_state('input_boolean.ev_solar_start_confirmation_pending', 'off') and (is_state('input_boolean.ev_solar_controller_stopped_session', 'on') or is_state('input_boolean.ev_solar_controller_owns_session', 'off')) and ev_enabled_for_handover and plan_fresh and target_reachable and not active_target_met and ev_power_fresh and battery_fresh and grid_fresh and voltage_v > 0 and ((recommended_amps >= states('input_number.ev_solar_restart_amps') | int(8) and live_surplus_w >= states('input_number.ev_solar_restart_amps') | int(8) * voltage_v + states('input_number.ev_solar_restart_margin_w') | int(300)) or (house_battery_target_reached and recommended_amps >= 6 and live_surplus_w >= 6 * voltage_v + states('input_number.ev_solar_restart_margin_w') | int(300))) }}"
+    },
+    "actions": [
+      {
+        "choose": [
+          {
+            "alias": "Yield ownership and cancel qualification timers",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ manual or not daytime or not external_owner or not connected }}"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": [
+                    "timer.ev_solar_sustained_deficit",
+                    "timer.ev_solar_restart_qualification",
+                    "timer.ev_solar_invalid_data_grace"
+                  ]
+                }
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "choose": [
+                  {
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ manual or not daytime or not external_owner or not connected }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_restart_pending"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_invalid_stop_pending"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "alias": "Immediately stop only a session owned by this daytime controller",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and is_state('input_boolean.ev_solar_controller_owns_session', 'on') and (active_target_met or is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled', 'off') or not manager_enabled or not ev_control_enabled) }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "switch.turn_off",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                },
+                "continue_on_error": true
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control', 'off') }}",
+                "timeout": "00:00:10",
+                "continue_on_timeout": false
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": [
+                    "timer.ev_solar_sustained_deficit",
+                    "timer.ev_solar_restart_qualification",
+                    "timer.ev_solar_invalid_data_grace"
+                  ]
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_restart_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_invalid_stop_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Confirm asynchronous OCPP start on later status update",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_start_confirmation_pending",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "sensor.evcharger_status_connector",
+                "state": "Charging"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Release failed RemoteStart after bounded confirmation timeout",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_start_confirmation_pending",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "timer.ev_solar_start_confirmation",
+                "state": "idle"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "off"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Stop unconfirmed OCPP start and retain restart hysteresis",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_start_confirmation_pending",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "timer.ev_solar_start_confirmation",
+                "state": "idle"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "on"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ not is_state('sensor.evcharger_status_connector','Charging') }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "action": "switch.turn_off",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                },
+                "continue_on_error": true
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control','off') }}",
+                "timeout": "00:00:10",
+                "continue_on_timeout": false
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Reconcile confirmed charge-control-off state before releasing ownership",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_controller_owns_session",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "off"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Disarm elapsed deficit dwell if completion-risk deficit has cleared",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_deficit_stop_pending",
+                "state": "on"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ not completion_risk or not sustained_deficit or request_amps > 6 or not is_state('input_boolean.ev_solar_controller_owns_session', 'on') }}"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_sustained_deficit"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Stop after sustained deficit when timer expiry was delivered or recovered by polling",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and is_state('input_boolean.ev_solar_controller_owns_session', 'on') and completion_risk and sustained_deficit and request_amps <= 6 and is_state('timer.ev_solar_sustained_deficit', 'idle') and is_state('input_boolean.ev_solar_deficit_stop_pending', 'on') }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ ev_enabled_for_handover and ev_connected_and_owned_window }}"
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "switch.turn_off",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                },
+                "continue_on_error": true
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control', 'off') }}",
+                "timeout": "00:00:10",
+                "continue_on_timeout": false
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Reset invalid-data grace when fresh inputs return",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_invalid_stop_pending",
+                "state": "on"
+              },
+              {
+                "condition": "template",
+                "value_template": "{% set age = as_timestamp(now()) - as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'), 0) %}\n{% set rec = states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps') | int(-1) %}\n{% set plan_ok = states('sensor.garage_deye_energy_manager_solar_plan_status') == 'advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5 <= age <= 90 %}\n{% set status = states('sensor.evcharger_status_connector') %}\n{% set connected_now = status in ['Preparing', 'Charging', 'SuspendedEV', 'SuspendedEVSE', 'Finishing'] %}\n{% set gates = is_state('switch.garage_deye_energy_manager_ev_manual_charging_override', 'off') and 7 <= now().hour < 21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer', 'external_automation') and is_state('switch.garage_deye_energy_manager_enabled', 'on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled', 'on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled', 'on') %}\n{% set soc_age = as_timestamp(now()) - as_timestamp(states.sensor.deye_battery_soc.last_reported, 999999) if states.sensor.deye_battery_soc.last_reported is defined else 999999 %}\n{% set soc_fresh = plan_ok and is_number(states('sensor.deye_battery_soc')) %}\n{% set target_met = is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc') | float(0) >= states('sensor.garage_deye_energy_manager_ev_active_target_soc') | float(100) - states('input_number.ev_solar_target_tolerance_pct') | float(0.5) %}\n{% set ev_v_age = as_timestamp(now()) - as_timestamp(states.sensor.evcharger_voltage.last_reported, 999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}\n{% set grid_v_age = as_timestamp(now()) - as_timestamp(states.sensor.deye_grid_voltage.last_reported, 999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}\n{% set v = states('sensor.evcharger_voltage') | float(0) if is_number(states('sensor.evcharger_voltage')) and -5 <= ev_v_age <= 120 else (states('sensor.deye_grid_voltage') | float(0) if is_number(states('sensor.deye_grid_voltage')) and -5 <= grid_v_age <= 120 else 0) %}\n{% set p_age = as_timestamp(now()) - as_timestamp(states.sensor.evcharger_power_active_import.last_reported, 999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}\n{% set i_age = as_timestamp(now()) - as_timestamp(states.sensor.evcharger_current_import.last_reported, 999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}\n{% set p_ok = is_state('input_boolean.ev_solar_ev_telemetry_verified', 'on') and is_number(states('sensor.evcharger_power_active_import')) and -5 <= p_age <= 120 %}\n{% set i_ok = is_state('input_boolean.ev_solar_ev_telemetry_verified', 'on') and is_number(states('sensor.evcharger_current_import')) and -5 <= i_age <= 120 %}\n{% set ev_w = states('sensor.evcharger_power_active_import') | float(0) * 1000 if p_ok else (states('sensor.evcharger_current_import') | float(0) * v if i_ok and v > 0 else 0) %}\n{% set essential = states('sensor.deye_essential_power') | float(-1) %}\n{% set base = states('sensor.garage_deye_energy_manager_base_load_estimate') | float(0) %}\n{% set non_ev = [base, essential - ev_w, 0] | max if p_ok or i_ok else [base, essential] | max %}\n{% set room = ((states('input_number.ev_solar_site_ceiling_w') | float(13500) - non_ev) / v) | int(0) if v > 0 and essential >= 0 else 0 %}\n{% set site_ok = v > 0 and essential >= 0 and room >= 6 %}\n{% set ev_telemetry_ok = p_ok and i_ok %}\n{% set plan_target_ok = states('sensor.garage_deye_energy_manager_solar_plan_target_reachable') == 'yes' %}\n{{ plan_ok and ev_telemetry_ok and site_ok and is_number(states('sensor.deye_battery_power')) and is_number(states('sensor.deye_grid_ct_power')) and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.deye_battery_power.last_reported, 999999)) <= 120 and -5 <= (as_timestamp(now()) - as_timestamp(states.sensor.deye_grid_ct_power.last_reported, 999999)) <= 120 }}"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_invalid_data_grace"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_invalid_stop_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Stop owned session when invalid-data grace expires (poll-safe)",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and is_state('input_boolean.ev_solar_controller_owns_session', 'on') and (not plan_fresh or not (ev_power_fresh and ev_current_fresh) or not battery_fresh or not grid_fresh) and is_state('timer.ev_solar_invalid_data_grace', 'idle') and is_state('input_boolean.ev_solar_invalid_stop_pending', 'on') }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ ev_enabled_for_handover }}"
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "switch.turn_off",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                },
+                "continue_on_error": true
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control', 'off') }}",
+                "timeout": "00:00:10",
+                "continue_on_timeout": false
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_invalid_stop_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Adopt already-running session under external daytime ownership before applying stops or limits",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and ev_enabled_for_handover and is_state('input_boolean.ev_solar_controller_owns_session', 'off') and is_state('switch.evcharger_charge_control', 'on') and not manual }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "time",
+                "after": "07:00:00",
+                "before": "21:00:00"
+              },
+              {
+                "condition": "state",
+                "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                "state": "external_automation"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ ev_enabled_for_handover and connected }}"
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "choose": [
+                  {
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ active_target_met }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "condition": "state",
+                        "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                        "state": "off"
+                      },
+                      {
+                        "action": "switch.turn_off",
+                        "target": {
+                          "entity_id": "switch.evcharger_charge_control"
+                        },
+                        "continue_on_error": true
+                      },
+                      {
+                        "wait_template": "{{ is_state('switch.evcharger_charge_control','off') }}",
+                        "timeout": "00:00:10",
+                        "continue_on_timeout": false
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ not safe_6a_possible }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "condition": "state",
+                        "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                        "state": "off"
+                      },
+                      {
+                        "action": "input_boolean.turn_on",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                        }
+                      },
+                      {
+                        "action": "switch.turn_off",
+                        "target": {
+                          "entity_id": "switch.evcharger_charge_control"
+                        },
+                        "continue_on_error": true
+                      },
+                      {
+                        "wait_template": "{{ is_state('switch.evcharger_charge_control','off') }}",
+                        "timeout": "00:00:10",
+                        "continue_on_timeout": false
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "alias": "Stop immediately if even 6 A violates the site ceiling",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and is_state('input_boolean.ev_solar_controller_owns_session', 'on') and is_state('switch.evcharger_charge_control', 'on') and not safe_6a_possible }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "switch.turn_off",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                },
+                "continue_on_error": true
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control', 'off') }}",
+                "timeout": "00:00:10",
+                "continue_on_timeout": false
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_restart_pending"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_invalid_stop_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Ride through invalid plan or EV telemetry briefly, then stop rather than run indefinitely",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and is_state('input_boolean.ev_solar_controller_owns_session', 'on') and is_state('switch.evcharger_charge_control', 'on') and (not plan_fresh or not (ev_power_fresh and ev_current_fresh) or not battery_fresh or not grid_fresh) }}"
+              }
+            ],
+            "sequence": [
+              {
+                "if": [
+                  {
+                    "condition": "template",
+                    "value_template": "{{ safe_6a_possible and (not ev_current_fresh or states('sensor.evcharger_current_import') | float(99) > 7) }}"
+                  }
+                ],
+                "then": [
+                  {
+                    "condition": "state",
+                    "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                    "state": "off"
+                  },
+                  {
+                    "condition": "template",
+                    "value_template": "{{ ev_enabled_for_handover and ev_connected_and_owned_window }}"
+                  },
+                  {
+                    "action": "ocpp.set_charge_rate",
+                    "data": {
+                      "devid": "evcharger",
+                      "conn_id": 1,
+                      "custom_profile": {
+                        "chargingProfileId": 9102,
+                        "stackLevel": 0,
+                        "chargingProfilePurpose": "TxDefaultProfile",
+                        "chargingProfileKind": "Absolute",
+                        "chargingSchedule": {
+                          "chargingRateUnit": "A",
+                          "chargingSchedulePeriod": [
+                            {
+                              "startPeriod": 0,
+                              "limit": 6
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "choose": [
+                  {
+                    "conditions": [
+                      {
+                        "condition": "state",
+                        "entity_id": "timer.ev_solar_invalid_data_grace",
+                        "state": "idle"
+                      },
+                      {
+                        "condition": "state",
+                        "entity_id": "input_boolean.ev_solar_invalid_stop_pending",
+                        "state": "off"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "timer.start",
+                        "target": {
+                          "entity_id": "timer.ev_solar_invalid_data_grace"
+                        },
+                        "data": {
+                          "duration": "00:{{ '%02d' | format(states('input_number.ev_solar_invalid_plan_minutes') | int(5)) }}:00"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_on",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_invalid_stop_pending"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "alias": "Keep a connected active session at 6 A while advice is below threshold",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and is_state('input_boolean.ev_solar_controller_owns_session', 'on') and is_state('switch.evcharger_charge_control', 'on') and plan_fresh and (not target_reachable or recommended_amps < 6) and safe_6a_possible }}"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "ocpp.set_charge_rate",
+                "data": {
+                  "devid": "evcharger",
+                  "conn_id": 1,
+                  "custom_profile": {
+                    "chargingProfileId": 9102,
+                    "stackLevel": 0,
+                    "chargingProfilePurpose": "TxDefaultProfile",
+                    "chargingProfileKind": "Absolute",
+                    "chargingSchedule": {
+                      "chargingRateUnit": "A",
+                      "chargingSchedulePeriod": [
+                        {
+                          "startPeriod": 0,
+                          "limit": 6
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "choose": [
+                  {
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ completion_risk and sustained_deficit }}"
+                      },
+                      {
+                        "condition": "state",
+                        "entity_id": "timer.ev_solar_sustained_deficit",
+                        "state": "idle"
+                      },
+                      {
+                        "condition": "state",
+                        "entity_id": "input_boolean.ev_solar_deficit_stop_pending",
+                        "state": "off"
+                      },
+                      {
+                        "condition": "template",
+                        "value_template": "{{ request_amps <= 6 }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "timer.start",
+                        "target": {
+                          "entity_id": "timer.ev_solar_sustained_deficit"
+                        },
+                        "data": {
+                          "duration": "00:{{ '%02d' | format(states('input_number.ev_solar_deficit_minutes') | int(12)) }}:00"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_on",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "conditions": [
+                      {
+                        "condition": "state",
+                        "entity_id": "timer.ev_solar_sustained_deficit",
+                        "state": "active"
+                      },
+                      {
+                        "condition": "template",
+                        "value_template": "{{ not completion_risk or not sustained_deficit or request_amps > 6 }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "timer.cancel",
+                        "target": {
+                          "entity_id": "timer.ev_solar_sustained_deficit"
+                        }
+                      },
+                      {
+                        "action": "input_boolean.turn_off",
+                        "target": {
+                          "entity_id": "input_boolean.ev_solar_deficit_stop_pending"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "alias": "Start or restart only after sustained qualified surplus",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ restart_qualified_now and is_state('input_boolean.ev_solar_restart_pending', 'on') and is_state('timer.ev_solar_restart_qualification', 'idle') }}"
+              }
+            ],
+            "sequence": [
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "time",
+                "after": "07:00:00",
+                "before": "21:00:00"
+              },
+              {
+                "condition": "state",
+                "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                "state": "external_automation"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ ev_enabled_for_handover }}"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ connected and plan_fresh and target_reachable and ev_power_fresh and not active_target_met }}"
+              },
+              {
+                "action": "switch.turn_on",
+                "target": {
+                  "entity_id": "switch.evcharger_availability"
+                }
+              },
+              {
+                "delay": {
+                  "seconds": 1
+                }
+              },
+              {
+                "variables": {
+                  "fresh_restart_ready": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{% set soc_age=as_timestamp(now())-as_timestamp(states.sensor.deye_battery_soc.last_reported,999999) if states.sensor.deye_battery_soc.last_reported is defined else 999999 %}{% set soc_fresh=plan_ok and is_number(states('sensor.deye_battery_soc')) %}{% set ba=as_timestamp(now())-as_timestamp(states.sensor.deye_battery_power.last_reported,999999) if states.sensor.deye_battery_power.last_reported is defined else 999999 %}{% set ga=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_ct_power.last_reported,999999) if states.sensor.deye_grid_ct_power.last_reported is defined else 999999 %}{% set batt=states('sensor.deye_battery_power')|float(999999) %}{% set grid=states('sensor.deye_grid_ct_power')|float(999999) %}{% set live_ok=is_number(states('sensor.deye_battery_power')) and is_number(states('sensor.deye_grid_ct_power')) and -5<=ba<=120 and -5<=ga<=120 %}{% set surplus=-grid-[batt,0]|max+[-batt,0]|max %}{% set full=soc_fresh and is_number(states('number.garage_deye_energy_manager_daily_battery_target_soc')) and states('sensor.deye_battery_soc')|float(0)>=states('number.garage_deye_energy_manager_daily_battery_target_soc')|float(100)-0.5 %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and p_ok and i_ok and site_ok and live_ok and ((rec>=states('input_number.ev_solar_restart_amps')|int(8) and surplus>=states('input_number.ev_solar_restart_amps')|int(8)*v+states('input_number.ev_solar_restart_margin_w')|int(300)) or (full and rec>=6 and surplus>=6*v+states('input_number.ev_solar_restart_margin_w')|int(300))) }}",
+                  "fresh_restart_amps": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ [32,rec,room]|min|int }}"
+                }
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "time",
+                "after": "07:00:00",
+                "before": "21:00:00"
+              },
+              {
+                "condition": "state",
+                "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                "state": "external_automation"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ fresh_restart_ready }}"
+              },
+              {
+                "action": "ocpp.set_charge_rate",
+                "data": {
+                  "devid": "evcharger",
+                  "conn_id": 1,
+                  "custom_profile": {
+                    "chargingProfileId": 9102,
+                    "stackLevel": 0,
+                    "chargingProfilePurpose": "TxDefaultProfile",
+                    "chargingProfileKind": "Absolute",
+                    "chargingSchedule": {
+                      "chargingRateUnit": "A",
+                      "chargingSchedulePeriod": [
+                        {
+                          "startPeriod": 0,
+                          "limit": "{{ fresh_restart_amps }}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "variables": {
+                  "fresh_restart_ready_final": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{% set soc_age=as_timestamp(now())-as_timestamp(states.sensor.deye_battery_soc.last_reported,999999) if states.sensor.deye_battery_soc.last_reported is defined else 999999 %}{% set soc_fresh=plan_ok and is_number(states('sensor.deye_battery_soc')) %}{% set ba=as_timestamp(now())-as_timestamp(states.sensor.deye_battery_power.last_reported,999999) if states.sensor.deye_battery_power.last_reported is defined else 999999 %}{% set ga=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_ct_power.last_reported,999999) if states.sensor.deye_grid_ct_power.last_reported is defined else 999999 %}{% set batt=states('sensor.deye_battery_power')|float(999999) %}{% set grid=states('sensor.deye_grid_ct_power')|float(999999) %}{% set live_ok=is_number(states('sensor.deye_battery_power')) and is_number(states('sensor.deye_grid_ct_power')) and -5<=ba<=120 and -5<=ga<=120 %}{% set surplus=-grid-[batt,0]|max+[-batt,0]|max %}{% set full=soc_fresh and is_number(states('number.garage_deye_energy_manager_daily_battery_target_soc')) and states('sensor.deye_battery_soc')|float(0)>=states('number.garage_deye_energy_manager_daily_battery_target_soc')|float(100)-0.5 %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and p_ok and i_ok and site_ok and live_ok and ((rec>=states('input_number.ev_solar_restart_amps')|int(8) and surplus>=states('input_number.ev_solar_restart_amps')|int(8)*v+states('input_number.ev_solar_restart_margin_w')|int(300)) or (full and rec>=6 and surplus>=6*v+states('input_number.ev_solar_restart_margin_w')|int(300))) }}"
+                }
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ fresh_restart_ready_final and is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') }}"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "off"
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "timer.start",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                },
+                "data": {
+                  "duration": "00:00:30"
+                }
+              },
+              {
+                "action": "switch.turn_on",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                }
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control', 'on') and is_state('sensor.evcharger_status_connector', 'Charging') }}",
+                "timeout": "00:00:20",
+                "continue_on_timeout": true
+              },
+              {
+                "if": [
+                  {
+                    "condition": "template",
+                    "value_template": "{{ is_state('switch.evcharger_charge_control', 'on') and is_state('sensor.evcharger_status_connector', 'Charging') }}"
+                  }
+                ],
+                "then": [
+                  {
+                    "action": "timer.cancel",
+                    "target": {
+                      "entity_id": "timer.ev_solar_start_confirmation"
+                    }
+                  },
+                  {
+                    "action": "input_boolean.turn_off",
+                    "target": {
+                      "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                    }
+                  },
+                  {
+                    "action": "input_boolean.turn_off",
+                    "target": {
+                      "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                    }
+                  },
+                  {
+                    "action": "timer.cancel",
+                    "target": {
+                      "entity_id": "timer.ev_solar_restart_qualification"
+                    }
+                  },
+                  {
+                    "action": "input_boolean.turn_off",
+                    "target": {
+                      "entity_id": "input_boolean.ev_solar_restart_pending"
+                    }
+                  }
+                ]
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_stopped_session"
+                }
+              },
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_restart_qualification"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_restart_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "One-shot SuspendedEV recovery with ownership rechecks after each delay",
+            "conditions": [
+              {
+                "condition": "trigger",
+                "id": "connector_status"
+              },
+              {
+                "condition": "state",
+                "entity_id": "sensor.evcharger_status_connector",
+                "state": "SuspendedEV"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "on"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and plan_fresh and target_reachable and recommended_amps >= 6 and safe_6a_possible and ev_power_fresh and ev_current_fresh and ev_enabled_for_handover and not active_target_met }}"
+              },
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_controller_owns_session",
+                "state": "on"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "switch.turn_off",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                },
+                "continue_on_error": true
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control','off') }}",
+                "timeout": "00:00:10",
+                "continue_on_timeout": false
+              },
+              {
+                "delay": {
+                  "seconds": 3
+                }
+              },
+              {
+                "variables": {
+                  "fresh_recovery_ready_after_off": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and rec>=6 and p_ok and i_ok and site_ok }}",
+                  "fresh_recovery_amps_after_off": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ [32,rec,room]|min|int }}"
+                }
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "time",
+                "after": "07:00:00",
+                "before": "21:00:00"
+              },
+              {
+                "condition": "state",
+                "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                "state": "external_automation"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ fresh_recovery_ready_after_off }}"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "off"
+              },
+              {
+                "action": "switch.turn_on",
+                "target": {
+                  "entity_id": "switch.evcharger_availability"
+                }
+              },
+              {
+                "delay": {
+                  "seconds": 1
+                }
+              },
+              {
+                "variables": {
+                  "fresh_recovery_ready_before_profile": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and rec>=6 and p_ok and i_ok and site_ok }}",
+                  "fresh_recovery_amps_before_profile": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ [32,rec,room]|min|int }}"
+                }
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                "state": "off"
+              },
+              {
+                "condition": "time",
+                "after": "07:00:00",
+                "before": "21:00:00"
+              },
+              {
+                "condition": "state",
+                "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                "state": "external_automation"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ fresh_recovery_ready_before_profile }}"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.evcharger_charge_control",
+                "state": "off"
+              },
+              {
+                "action": "ocpp.set_charge_rate",
+                "data": {
+                  "devid": "evcharger",
+                  "conn_id": 1,
+                  "custom_profile": {
+                    "chargingProfileId": 9102,
+                    "stackLevel": 0,
+                    "chargingProfilePurpose": "TxDefaultProfile",
+                    "chargingProfileKind": "Absolute",
+                    "chargingSchedule": {
+                      "chargingRateUnit": "A",
+                      "chargingSchedulePeriod": [
+                        {
+                          "startPeriod": 0,
+                          "limit": "{{ fresh_recovery_amps_before_profile }}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "variables": {
+                  "fresh_recovery_ready_before_start": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and rec>=6 and p_ok and i_ok and site_ok }}"
+                }
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ fresh_recovery_ready_before_start and is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') }}"
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                }
+              },
+              {
+                "action": "timer.start",
+                "target": {
+                  "entity_id": "timer.ev_solar_start_confirmation"
+                },
+                "data": {
+                  "duration": "00:00:30"
+                }
+              },
+              {
+                "action": "switch.turn_on",
+                "target": {
+                  "entity_id": "switch.evcharger_charge_control"
+                }
+              },
+              {
+                "wait_template": "{{ is_state('switch.evcharger_charge_control', 'on') and is_state('sensor.evcharger_status_connector', 'Charging') }}",
+                "timeout": "00:00:20",
+                "continue_on_timeout": true
+              },
+              {
+                "if": [
+                  {
+                    "condition": "template",
+                    "value_template": "{{ is_state('switch.evcharger_charge_control', 'on') and is_state('sensor.evcharger_status_connector', 'Charging') }}"
+                  }
+                ],
+                "then": [
+                  {
+                    "action": "timer.cancel",
+                    "target": {
+                      "entity_id": "timer.ev_solar_start_confirmation"
+                    }
+                  },
+                  {
+                    "action": "input_boolean.turn_off",
+                    "target": {
+                      "entity_id": "input_boolean.ev_solar_start_confirmation_pending"
+                    }
+                  }
+                ]
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_controller_owns_session"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Qualify first start or restart with a persistent dwell timer",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ restart_qualified_now }}"
+              },
+              {
+                "condition": "state",
+                "entity_id": "timer.ev_solar_restart_qualification",
+                "state": "idle"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "timer.start",
+                "target": {
+                  "entity_id": "timer.ev_solar_restart_qualification"
+                },
+                "data": {
+                  "duration": "00:{{ '%02d' | format(states('input_number.ev_solar_restart_minutes') | int(7)) }}:00"
+                }
+              },
+              {
+                "action": "input_boolean.turn_on",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_restart_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Reset restart dwell as soon as surplus or fresh-data qualification is lost",
+            "conditions": [
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.ev_solar_restart_pending",
+                "state": "on"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ not restart_qualified_now }}"
+              }
+            ],
+            "sequence": [
+              {
+                "action": "timer.cancel",
+                "target": {
+                  "entity_id": "timer.ev_solar_restart_qualification"
+                }
+              },
+              {
+                "action": "input_boolean.turn_off",
+                "target": {
+                  "entity_id": "input_boolean.ev_solar_restart_pending"
+                }
+              }
+            ]
+          },
+          {
+            "alias": "Modulate with fresh plan and measured EV power; retain raw profile and guarded stale-profile recovery",
+            "conditions": [
+              {
+                "condition": "template",
+                "value_template": "{{ ev_connected_and_owned_window and ev_enabled_for_handover and plan_fresh and target_reachable and recommended_amps >= 6 and safe_6a_possible and is_state('switch.evcharger_charge_control', 'on') }}"
+              }
+            ],
+            "sequence": [
+              {
+                "variables": {
+                  "target_amps": "{{ [32, recommended_amps, site_room_a] | min | int }}",
+                  "previous_amps": "{{ states('sensor.evcharger_current_import') | float(0) }}",
+                  "essential_before": "{{ essential_w }}",
+                  "ev_before_w": "{{ ev_w }}",
+                  "voltage_before": "{{ voltage_v }}",
+                  "was_charging": "{{ is_state('sensor.evcharger_status_connector', 'Charging') }}"
+                }
+              },
+              {
+                "if": [
+                  {
+                    "condition": "template",
+                    "value_template": "{{ ev_power_fresh and ev_current_fresh and ((target_amps - previous_amps) | abs >= 1) }}"
+                  }
+                ],
+                "then": [
+                  {
+                    "action": "ocpp.set_charge_rate",
+                    "data": {
+                      "devid": "evcharger",
+                      "conn_id": 1,
+                      "custom_profile": {
+                        "chargingProfileId": 9102,
+                        "stackLevel": 0,
+                        "chargingProfilePurpose": "TxDefaultProfile",
+                        "chargingProfileKind": "Absolute",
+                        "chargingSchedule": {
+                          "chargingRateUnit": "A",
+                          "chargingSchedulePeriod": [
+                            {
+                              "startPeriod": 0,
+                              "limit": "{{ target_amps | int }}"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ was_charging and ((target_amps - previous_amps) | abs >= 4) }}"
+                      }
+                    ],
+                    "then": [
+                      {
+                        "delay": {
+                          "seconds": 20
+                        }
+                      },
+                      {
+                        "variables": {
+                          "fresh_control_ready_after_verify": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and rec>=6 and p_ok and i_ok and site_ok and is_state('input_boolean.ev_solar_controller_owns_session','on') and is_state('switch.evcharger_charge_control','on') }}",
+                          "fresh_target_amps_after_verify": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ [32,rec,room]|min|int }}"
+                        }
+                      },
+                      {
+                        "condition": "state",
+                        "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                        "state": "off"
+                      },
+                      {
+                        "condition": "time",
+                        "after": "07:00:00",
+                        "before": "21:00:00"
+                      },
+                      {
+                        "condition": "state",
+                        "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                        "state": "external_automation"
+                      },
+                      {
+                        "condition": "template",
+                        "value_template": "{{ fresh_control_ready_after_verify }}"
+                      },
+                      {
+                        "variables": {
+                          "inferred_amps_after": "{{ ((states('sensor.deye_essential_power') | float(0) - (essential_before - ev_before_w)) / voltage_before) if voltage_before > 0 else 0 }}"
+                        }
+                      },
+                      {
+                        "if": [
+                          {
+                            "condition": "template",
+                            "value_template": "{{ (inferred_amps_after - fresh_target_amps_after_verify) | abs >= 3 }}"
+                          }
+                        ],
+                        "then": [
+                          {
+                            "condition": "state",
+                            "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                            "state": "off"
+                          },
+                          {
+                            "condition": "time",
+                            "after": "07:00:00",
+                            "before": "21:00:00"
+                          },
+                          {
+                            "condition": "state",
+                            "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                            "state": "external_automation"
+                          },
+                          {
+                            "condition": "template",
+                            "value_template": "{{ fresh_control_ready_after_verify }}"
+                          },
+                          {
+                            "action": "ocpp.clear_profile",
+                            "data": {
+                              "devid": "evcharger"
+                            }
+                          },
+                          {
+                            "delay": {
+                              "seconds": 1
+                            }
+                          },
+                          {
+                            "variables": {
+                              "fresh_control_ready_after_clear": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ plan_ok and connected_now and gates and not target_met and plan_target_ok and rec>=6 and p_ok and i_ok and site_ok and is_state('input_boolean.ev_solar_controller_owns_session','on') and is_state('switch.evcharger_charge_control','on') }}",
+                              "fresh_target_amps_after_clear": "{% set age=as_timestamp(now())-as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'),0) %}{% set rec=states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')|int(-1) %}{% set plan_ok=states('sensor.garage_deye_energy_manager_solar_plan_status')=='advisory' and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps')) and is_number(states('sensor.garage_deye_energy_manager_solar_plan_expected_battery_dc_power')) and -5<=age<=90 %}{% set status=states('sensor.evcharger_status_connector') %}{% set connected_now=status in ['Preparing','Charging','SuspendedEV','SuspendedEVSE','Finishing'] %}{% set gates=is_state('switch.garage_deye_energy_manager_ev_manual_charging_override','off') and 7<=now().hour<21 and is_state('select.garage_deye_energy_manager_daytime_ev_writer','external_automation') and is_state('switch.garage_deye_energy_manager_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_control_enabled','on') and is_state('switch.garage_deye_energy_manager_ev_solar_charging_enabled','on') %}{% set target_met=is_number(states('sensor.garage_deye_energy_manager_ev_active_target_soc')) and is_number(states('sensor.garage_deye_energy_manager_effective_taycan_soc')) and states('sensor.garage_deye_energy_manager_effective_taycan_soc')|float(0)>=states('sensor.garage_deye_energy_manager_ev_active_target_soc')|float(100)-states('input_number.ev_solar_target_tolerance_pct')|float(0.5) %}{% set ev_va=as_timestamp(now())-as_timestamp(states.sensor.evcharger_voltage.last_reported,999999) if states.sensor.evcharger_voltage.last_reported is defined else 999999 %}{% set grid_va=as_timestamp(now())-as_timestamp(states.sensor.deye_grid_voltage.last_reported,999999) if states.sensor.deye_grid_voltage.last_reported is defined else 999999 %}{% set v=states('sensor.evcharger_voltage')|float(0) if is_number(states('sensor.evcharger_voltage')) and -5<=ev_va<=120 else (states('sensor.deye_grid_voltage')|float(0) if is_number(states('sensor.deye_grid_voltage')) and -5<=grid_va<=120 else 0) %}{% set pa=as_timestamp(now())-as_timestamp(states.sensor.evcharger_power_active_import.last_reported,999999) if states.sensor.evcharger_power_active_import.last_reported is defined else 999999 %}{% set ia=as_timestamp(now())-as_timestamp(states.sensor.evcharger_current_import.last_reported,999999) if states.sensor.evcharger_current_import.last_reported is defined else 999999 %}{% set p_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_power_active_import')) and -5<=pa<=120 %}{% set i_ok=is_state('input_boolean.ev_solar_ev_telemetry_verified','on') and is_number(states('sensor.evcharger_current_import')) and -5<=ia<=120 %}{% set ev_w=states('sensor.evcharger_power_active_import')|float(0)*1000 if p_ok else (states('sensor.evcharger_current_import')|float(0)*v if i_ok and v>0 else 0) %}{% set essential=states('sensor.deye_essential_power')|float(-1) %}{% set base=states('sensor.garage_deye_energy_manager_base_load_estimate')|float(0) %}{% set non_ev=[0,essential-ev_w,base]|max if p_ok or i_ok else [essential,base]|max %}{% set room=((states('input_number.ev_solar_site_ceiling_w')|float(13500)-non_ev)/v)|int(0) if v>0 and essential>=0 else 0 %}{% set site_ok=v>0 and essential>=0 and room>=6 %}{% set plan_target_ok=states('sensor.garage_deye_energy_manager_solar_plan_target_reachable')=='yes' %}{{ [32,rec,room]|min|int }}"
+                            }
+                          },
+                          {
+                            "condition": "state",
+                            "entity_id": "switch.garage_deye_energy_manager_ev_manual_charging_override",
+                            "state": "off"
+                          },
+                          {
+                            "condition": "time",
+                            "after": "07:00:00",
+                            "before": "21:00:00"
+                          },
+                          {
+                            "condition": "state",
+                            "entity_id": "select.garage_deye_energy_manager_daytime_ev_writer",
+                            "state": "external_automation"
+                          },
+                          {
+                            "condition": "template",
+                            "value_template": "{{ fresh_control_ready_after_clear }}"
+                          },
+                          {
+                            "action": "ocpp.set_charge_rate",
+                            "data": {
+                              "devid": "evcharger",
+                              "conn_id": 1,
+                              "custom_profile": {
+                                "chargingProfileId": 9102,
+                                "stackLevel": 0,
+                                "chargingProfilePurpose": "TxDefaultProfile",
+                                "chargingProfileKind": "Absolute",
+                                "chargingSchedule": {
+                                  "chargingRateUnit": "A",
+                                  "chargingSchedulePeriod": [
+                                    {
+                                      "startPeriod": 0,
+                                      "limit": "{{ fresh_target_amps_after_clear }}"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "choose": [
+                  {
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ completion_risk and request_amps <= 6 and sustained_deficit }}"
+                      },
+                      {
+                        "condition": "state",
+                        "entity_id": "timer.ev_solar_sustained_deficit",
+                        "state": "idle"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "timer.start",
+                        "target": {
+                          "entity_id": "timer.ev_solar_sustained_deficit"
+                        },
+                        "data": {
+                          "duration": "00:{{ '%02d' | format(states('input_number.ev_solar_deficit_minutes') | int(12)) }}:00"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "conditions": [
+                      {
+                        "condition": "state",
+                        "entity_id": "timer.ev_solar_sustained_deficit",
+                        "state": "active"
+                      },
+                      {
+                        "condition": "template",
+                        "value_template": "{{ not completion_risk or not sustained_deficit or request_amps > 6 }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "timer.cancel",
+                        "target": {
+                          "entity_id": "timer.ev_solar_sustained_deficit"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "default": []
+      }
+    ]
+  }
+}

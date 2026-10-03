@@ -46,6 +46,7 @@ from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, Energy
 from .temperature_freshness import temperature_reported_at
 from .cooling_data import CoolingWindows, SAMPLE_SECONDS, append_window, cooling_hardware
 from .repairs import async_update_issues
+from .solar_advisory_adapter import build_daytime_advisory
 from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,6 +63,21 @@ THERMAL_RUNTIME_DATETIME_FIELDS = {
     "last_manager_action_at",
     "last_external_change_at",
 }
+
+
+def _manager_owns_automatic_ev_charger(
+    settings: EnergyManagerSettings, now: datetime, manual_override: bool
+) -> bool:
+    """Select the owner for non-manual automatic charger writes.
+
+    External ownership applies only from 07:00 inclusive to 21:00 exclusive.
+    Manual charge-to-target and overnight manager behavior remain coordinator-owned.
+    """
+    return not (
+        settings.daytime_ev_writer == "external_automation"
+        and 7 <= now.hour < 21
+        and not manual_override
+    )
 
 
 class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision]):
@@ -369,6 +385,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_control_enabled=bool(options["ev_control_enabled"]),
             ev_grid_bypass_enabled=bool(options["ev_grid_bypass_enabled"]),
             ev_solar_charging_enabled=bool(options["ev_solar_charging_enabled"]),
+            daytime_ev_writer=str(options["daytime_ev_writer"]),
             ev_cheap_grid_charging_enabled=bool(options["ev_cheap_grid_charging_enabled"]),
             heat_control_enabled=bool(options["heat_control_enabled"]),
             thermal_control_enabled=bool(options["thermal_control_enabled"] or options["heat_control_enabled"]),
@@ -475,6 +492,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
             ev_bypass_program_power_w=float(options["ev_bypass_program_power_w"]),
             ev_restore_program_power_w=float(options["ev_restore_program_power_w"]),
             ev_manual_target_soc=float(options["ev_manual_target_soc"]),
+            ev_solar_target_soc=float(options["ev_solar_target_soc"]),
             grid_loss_notification_enabled=bool(options["grid_loss_notification_enabled"]),
             grid_loss_voltage_threshold=float(options["grid_loss_voltage_threshold"]),
             grid_loss_notification_cooldown_minutes=float(options["grid_loss_notification_cooldown_minutes"]),
@@ -803,7 +821,18 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         entity_id = self.entity_map.get(key)
         if not entity_id:
             return None
-        return self._entity_float(entity_id)
+        value = self._entity_float(entity_id)
+        if key == "ev_power" and value is not None:
+            # OCPP reports active power in kW while the decision engine and
+            # base-load subtraction use watts. Reject an ambiguous unit so
+            # the existing current/voltage fallback can be used instead.
+            state = self.hass.states.get(entity_id)
+            unit = state.attributes.get("unit_of_measurement") if state else None
+            if unit == "kW":
+                return value * 1000
+            if unit != "W":
+                return None
+        return value
 
     def _state_on(self, key: str) -> bool:
         entity_id = self.entity_map.get(key)
@@ -1295,6 +1324,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         )
         self._cooling_inputs_snapshot = inputs
         decision = decide(inputs, settings)
+        decision.solar_plan = self._daytime_solar_advisory(inputs, settings, decision)
         if decision.solar_arrived and decision.ev_solar_charge_allowed:
             self.ev_solar_arrived_latched = True
         elif (
@@ -1313,6 +1343,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_latch_on = decision.ev_latch_active
         self.ev_hold_until = decision.ev_hold_until if decision.ev_latch_active else None
         return decision
+
+    def _daytime_solar_advisory(self, inputs, settings, decision):
+        """Publish planning advice without replacing existing control decisions."""
+        return build_daytime_advisory(
+            inputs, settings, decision, options=self.entry.options,
+            entity_map=self.entity_map, states=self.hass.states,
+            latitude=self.hass.config.latitude, longitude=self.hass.config.longitude,
+            state_reported_at=self._temperature_reported_at,
+        )
 
     def _update_cheap_grid_session_state(self, decision: EnergyManagerDecision) -> None:
         """Track cheap-grid charge completion to avoid preserve/charge oscillation."""
@@ -1592,12 +1631,15 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
                 return
             if settings.inverter_cooling_control_enabled:
                 await self._apply_inverter_cooling(decision)
-            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_start":
+            manager_owns_daytime_ev = _manager_owns_automatic_ev_charger(
+                settings, decision.now, self.ev_manual_charging_override
+            )
+            if settings.ev_control_enabled and manager_owns_daytime_ev and decision.ev_expected_action == "ev_charger_start":
                 await self._call_script(
                     self.entity_map.get("ev_start_script", "script.timxon_ev_charger_start"),
                     reason=decision.ev_decision_reason,
                 )
-            if settings.ev_control_enabled and decision.ev_expected_action == "ev_charger_stop":
+            if settings.ev_control_enabled and manager_owns_daytime_ev and decision.ev_expected_action == "ev_charger_stop":
                 await self._call_switch(
                     self.entity_map.get("ev_charge_control", "switch.evcharger_charge_control"),
                     False,

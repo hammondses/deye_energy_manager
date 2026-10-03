@@ -1,0 +1,44 @@
+{
+  "observed_log_source": "Home Assistant Core service log",
+  "received_local": "2026-10-03T15:43:30.635+13:00",
+  "note": "Single observed idle report; no charger identifier or transaction identifier retained. Does not establish per-measurand timestamps on HA entities.",
+  "packets": [
+    {
+      "connector": 1,
+      "hasTransactionId": false,
+      "buckets": [
+        {
+          "timestamp": "2026-10-03T02:42:19.772Z",
+          "samples": [
+            {
+              "measurand": "Energy.Active.Import.Register",
+              "value": "474764",
+              "unit": "Wh",
+              "context": "Sample.Periodic"
+            },
+            {
+              "measurand": "Power.Active.Import",
+              "value": "0",
+              "unit": "W",
+              "context": "Sample.Periodic"
+            },
+            {
+              "measurand": "Current.Import",
+              "value": "0.00",
+              "unit": "A",
+              "phase": "L1",
+              "context": "Sample.Periodic"
+            },
+            {
+              "measurand": "Voltage",
+              "value": "248.5",
+              "unit": "V",
+              "phase": "L1",
+              "context": "Sample.Periodic"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
