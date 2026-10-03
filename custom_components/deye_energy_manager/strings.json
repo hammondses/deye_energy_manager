@@ -25,7 +25,15 @@
       },
       "cooling": {
         "title": "Inverter cooling",
-        "description": "External fan control, load curve, temperature feedback, and safety limits."
+        "description": "External fan control, temperature feedback, and safety limits. Tuning changes apply immediately without restarting Home Assistant.",
+        "data": {
+          "cooling_update_interval_s": "Cooling update interval (seconds)",
+          "cooling_trend_window_s": "Cooling trend window (seconds)",
+          "cooling_trend_min_observation_s": "Cooling minimum trend observation (seconds)",
+          "cooling_temperature_stale_s": "Cooling stale temperature timeout (seconds)",
+          "cooling_recovery_trigger_temp_c": "Cooling recovery trigger temperature",
+          "cooling_recovery_release_temp_c": "Cooling recovery release temperature"
+        }
       },
       "thermal": {
         "title": "Thermal",

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from .const import DOMAIN, PLATFORMS
-from .migration import migrate_options
+from .const import CONF_ENTITY_MAP, CONF_HEAT_LOADS, DOMAIN, PLATFORMS
+from .migration import migrate_options, migrate_porsche_entity_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _migrate_options(hass, entry)
     coordinator = DeyeEnergyManagerCoordinator(hass, entry)
     await coordinator.async_load_stored_soc()
+    await coordinator.async_load_stored_wican_soc()
     await coordinator.async_load_stored_runtime()
     await coordinator.async_config_entry_first_refresh()
 
@@ -44,14 +45,37 @@ def _migrate_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Apply lightweight option migrations before entities are registered."""
 
     options, changed = migrate_options(dict(entry.options), dict(entry.data))
+    entity_map = dict(options.get(CONF_ENTITY_MAP, entry.data.get(CONF_ENTITY_MAP, {})))
+    entity_map, entity_map_changed = migrate_porsche_entity_map(
+        entity_map,
+        {state.entity_id for state in hass.states.async_all()},
+    )
+    if entity_map_changed:
+        options[CONF_ENTITY_MAP] = entity_map
+        changed = True
     if changed:
         hass.config_entries.async_update_entry(entry, options=options)
 
 
 async def async_update_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the integration when options change."""
+    """Refresh settings in place unless configured entities changed."""
 
-    await hass.config_entries.async_reload(entry.entry_id)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    previous_options = coordinator.configured_options
+    current_options = dict(entry.options)
+    if previous_options == current_options:
+        return
+    coordinator.configured_options = current_options
+    if _options_require_reload(previous_options, current_options):
+        await hass.config_entries.async_reload(entry.entry_id)
+    else:
+        await coordinator.async_request_refresh()
+
+
+def _options_require_reload(previous: dict[str, object], current: dict[str, object]) -> bool:
+    """Return whether an option change alters registered entities or listeners."""
+
+    return any(previous.get(key) != current.get(key) for key in (CONF_ENTITY_MAP, CONF_HEAT_LOADS))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -11,6 +11,10 @@ from .const import DOMAIN
 from .entity import DeyeEnergyManagerEntity
 
 BUTTONS = {
+    "mark_internal_fan_started": "Mark internal fan started",
+    "mark_internal_fan_stopped": "Mark internal fan stopped",
+    "save_cooling_preset": "Save cooling preset",
+    "restore_cooling_preset": "Restore cooling preset",
     "apply_plan_now": "Apply plan now",
     "recalculate_now": "Recalculate now",
     "restore_deye_normal": "Restore Deye normal",
@@ -22,6 +26,7 @@ BUTTONS = {
     "clear_ev_latch": "Clear EV latch",
     "force_ev_grid_bypass_start": "Force EV grid bypass start",
     "force_ev_grid_bypass_restore": "Force EV grid bypass restore",
+    "refresh_wican_taycan_soc": "Refresh WiCAN Taycan SOC",
 }
 
 
@@ -36,7 +41,13 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
         self._key = key
 
     async def async_press(self) -> None:
-        if self._key == "clear_ev_latch":
+        if self._key in {"mark_internal_fan_started", "mark_internal_fan_stopped"}:
+            self.coordinator.record_internal_fan_observation(self._key.removeprefix("mark_internal_fan_"))
+        elif self._key == "save_cooling_preset":
+            self.coordinator.save_cooling_preset()
+        elif self._key == "restore_cooling_preset":
+            await self.coordinator.async_restore_cooling_preset()
+        elif self._key == "clear_ev_latch":
             await self.coordinator.async_clear_ev_latch()
         elif self._key == "force_ev_grid_bypass_start":
             if not self._ev_force_allowed():
@@ -48,6 +59,8 @@ class DeyeCommandButton(DeyeEnergyManagerEntity, ButtonEntity):
                 await self._blocked("force EV restore blocked: EV control disabled")
                 return
             await self.coordinator.async_force_ev_grid_bypass(False)
+        elif self._key == "refresh_wican_taycan_soc":
+            await self.coordinator.async_query_wican_soc("manual")
         elif self._key == "apply_plan_now":
             await self.coordinator.async_apply_decision()
         elif self._key == "restore_deye_normal":

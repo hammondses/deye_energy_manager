@@ -1,5 +1,183 @@
 # Release Notes
 
+## v0.6.0b11 — overhaul branch
+
+- Replace the normal curve’s abrupt maximum-fan demand one degree before emergency with continuous temperature demand from target to emergency. Full-fan emergency and recovery protection remain unchanged.
+- Remove the load-collapse shortcut that could cut fan demand immediately; decreases require thermal feedback and retain the configured maximum step.
+
+## v0.6.0b10 — overhaul branch
+
+- Add live airflow direction, intake/exhaust arrangement and separate fan-count settings for cooling observations. Defaults: stock direction, intake + exhaust, 3 intake / 4 exhaust. These are metadata only.
+- Record hardware with each five-minute window; configuration changes flag mixed windows. Export dedicated CSV columns and label historical b8/b9 rows with the user-confirmed original setup without rewriting raw files.
+
+## v0.6.0b9 — overhaul branch
+
+- Retire the manager's bedroom night-heating actuator and arm switch. Stored armed state is ignored on restart.
+- Replace with a native HA button automation: only when bedroom is off, set heat to 17°C once. No repeat, restart or climate-state trigger; manual off stays off and existing running settings are untouched.
+- Legacy decision fields remain disarmed for compatibility; ordinary thermal controls retain their existing gates.
+
+## v0.6.0b8 — overhaul branch
+
+- Add independent 15-second observation sampling with time-weighted five-minute summaries. Persist one compressed JSON row per window off the HA event loop with 90-day retention and no per-sample log messages.
+- Capture signed and directional power/energy, destination shares, import/export-specific voltage/current, ambient temperature/humidity, AC/DC temperatures, fan speed/RPM, source ages, coverage, safety flags and controller settings/version. Power-balance errors remain visible; no exact PV provenance or physical heat-loss claim is inferred.
+- Add a live collection switch and status sensor. File-write failures are reported once per failure run. Collection does not write actuators or change protection settings.
+- Add `tools/review_cooling_data.py` for a rolling-week report/CSV and `docs/cooling-data.md` for field definitions, limitations and review procedure. Includes the b7 fan corrections below.
+- Validation: 169 tests, including reversals, weighted energy shares, conditional voltage, gaps, partial windows, compressed append/read/export and retention.
+
+## v0.6.0b7 — overhaul branch, not deployed
+
+- Cache each MQTT receipt's UTC timestamp once so clock conversion jitter cannot repeatedly authorise fan adjustments on the same report. Older samples also cannot advance feedback.
+- Minimum-hunt adjustments are now 1% inside the target band, scaling with error outside the band and the temperature-gain setting, capped by Cooling maximum feedback step (1–10%, default 10%). Existing saved caps are preserved.
+- Permit actual 1% fan writes and remove 5% curve rounding. Load changes cannot bypass sample gating in minimum-hunt mode; a normal request reaching 100% is no longer mistaken for a safety override. Emergency, recovery and stale-temperature safety increases still act immediately.
+- No ambient sensor dependency, fan ramp timer, or actuator gate changes. Heatsink lag still requires live observation; this does not guarantee elimination of oscillation.
+- Validation: 165 tests. Offline replay of the recorded 20:40–20:43 NZST inputs requested a 22% peak instead of the recorded 80%; historical temperatures were held fixed, so this is a command regression check, not a physical cooling prediction.
+
+## v0.6.0b6 — overhaul branch
+
+- Fix false stale-temperature failsafe cycling when HA MQTT suppresses unchanged sensor writes. Cooling freshness and trend samples use the configured sensor's actual numeric MQTT receipt when available.
+- Ignore retained replays, unrelated topics, invalid payloads and readings that do not match the entity value. Real silence still expires at the configured timeout; non-MQTT sensors retain normal timestamp handling.
+- Reuse HA's bounded receive cache; no forced duplicate recorder entries, polling increases or extra subscriptions. Cache-layout incompatibility falls back to the existing conservative timeout.
+- Validation: 162 tests, including unchanged receipts, real silence, retained replay and invalid payloads.
+
+## v0.6.0b5 — overhaul branch, not released
+
+- Add manual internal-fan start/stop observation buttons capturing AC/DC temperatures, each reading's timestamp, external fan speed/RPM, and inverter load.
+- Add one persistent known-good cooling preset with save/restore buttons. Restore changes tuning only and preserves actuator gates.
+- Add a persistent 50-event decision timeline and `deye_energy_manager_event` events. Repeated evaluations and numeric reason churn do not create timeline entries.
+- Expose energy-plan assumptions and control gates for the rebuilt companion card; refresh cooling diagnostics on the fast cooling cycle.
+- Default DC temperature to `sensor.deye_dc_transformer_temperature` and fix the options dialog's assignment to HA's read-only config-entry property.
+- Companion card overhaul provides Cooling, Energy, and Timeline views, native HA history graphs, and live tuning controls. Install matching branches together for all features.
+- Validation: 161 Python tests; companion card typecheck, build, and Chromium interaction/mobile checks. Branch work only: no release tag or live manager/card deployment.
+
+## v0.6.0b4 — overhaul branch, not released
+
+- Expose live number controls for cooling update interval, trend window/minimum observation, stale-temperature timeout, and recovery trigger/release temperatures. These apply without HA restart or integration reload.
+- Honour the configured emergency temperature instead of silently capping it at 48 C. Temperature thresholds and target deadband support 0.1 C adjustments.
+- Add a native dashboard-card example and a cooling tuning reference. Sunsynk polling remains configured separately in the add-on.
+
+## v0.6.0b3 — overhaul branch, not released
+
+- Use a 45 C default cooling target instead of 38 C to balance fan noise and thermal headroom. Retain temperature-trend feedback and full-speed activation by 48 C. Existing live options are unchanged.
+
+## v0.6.0b2 — overhaul branch, not released
+
+- Release internal-fan recovery at 44 C or lower, the HA reading when the fan was observed off. The exact internal cutoff remains unconfirmed; this replaces the earlier reported 40 C threshold. Keep the 38 C target and full-speed activation by 48 C.
+
+## v0.6.0b1 — overhaul branch, not released
+
+- Refresh external-fan cooling every five seconds independently of the 30-second energy/EV loop.
+- Default cooling target to 38 C and command full speed by 48 C, even if an older emergency setting is higher. Existing target options remain unchanged until explicitly configured.
+- Persist internal-fan recovery after 50 C and hold full external airflow until a valid AC reading reaches 40 C; conservatively recover after an untracked startup.
+- Measure temperature direction over up to one minute, distinguish unchanged reports from missing data, and never lower fan speed on missing temperature.
+- Document the matching 5-second Sunsynk polling / 0.3 C reporting change and Recorder exclusions in docs/cooling-response.md.
+
+## v0.5.69
+
+- Let minimum-hunt cooling follow meaningful rising and falling temperature trends inside the target band while retaining the configured trend deadband for jitter.
+
+## v0.5.68
+
+- Allow the inverter cooling target to be configured up to 55 C.
+
+## v0.5.67
+
+- Apply ordinary Home Assistant number, switch, and select changes in place so unrelated controls such as EV charging do not briefly become unavailable; retain full reloads for entity-map and managed-load topology changes.
+
+## v0.5.66
+
+- Allow daytime solar EV charging from today's discretionary energy budget without requiring tomorrow's forecast tier to be good or excellent.
+
+## v0.5.65
+
+- Make minimum-hunt cooling target the configured temperature band instead of treating every rising sample as proof that more fan is required.
+- Hold while a cool inverter warms toward the target, probe downward only after it settles below the band, and step upward only above the band unless it is already cooling.
+
+## v0.5.64
+
+- Let minimum-hunt cooling unwind an elevated fan by one configured step per fresh sample when AC temperature is below the target band, even if its small trend is inside the jitter deadband.
+- Keep meaningful temperature rise ahead of the cold unwind rule, and keep jitter holding the fan inside the target band.
+
+## v0.5.63
+
+- Add a configurable 0.2 C/min trend deadband so 0.1-degree jitter holds the fan instead of flapping it.
+- Make meaningful rising and falling trends change adaptive cooling by exactly one step in either direction, regardless of distance from target.
+- Make emergency temperature bypass ordinary feedback and command 100% fan immediately.
+
+## v0.5.62
+
+- Stop ordinary warming far below the cooling target from repeatedly ramping the fan upward. Below-band temperature now continues stepping down; rising temperature steps up only after entering the target band.
+
+## v0.5.61
+
+- Replace the minimum-hunt timer with gradual temperature feedback: each fresh rising sample raises the fan one step, a sample below the target band lowers it one step, and a sample inside the band holds it.
+- Remove load-triggered fan increases and the obsolete cooling hunt observation-time control from adaptive mode.
+
+## v0.5.60
+
+- Make minimum-hunt mode use the configured minimum active fan immediately whenever inverter temperature is clearly below target; the legacy load coefficient is no longer a floor in adaptive mode.
+- Change the default cooling target from 43 C to 45 C and the near-target probe observation window from 15 minutes to 5 minutes.
+
+## v0.5.59
+
+- Reset minimum-hunt cooling directly to the calculated fan curve when inverter temperature is well below target, instead of holding a stale high fan command for repeated observation windows.
+
+## v0.5.58
+
+- Replace the forecast/export/comfort thermal matrix with one export-constrained curtailment-soak policy.
+- Start at most one eligible managed heating load only when current expected PV is high, battery acceptance is low, SOC is healthy, and live import/export stays within the configured tolerances.
+- Preserve live export and stop only manager-owned curtailment loads when the signal disappears; retire automatic comfort, preheat, rotation, overnight, unowned-shed, and emergency-shed behaviour.
+
+## v0.5.57
+
+- Stop publishing thermal shed and emergency-shed recommendations while thermal control is disabled; ordinary whole-house battery discharge is no longer presented as a thermal action when that subsystem is off.
+
+## v0.5.56
+
+- Stop recalculating and republishing every integration entity on each high-frequency power-sensor update; decisions now use the existing 30-second coordinator schedule while WiCAN retains its narrow event listener.
+- Bound text sensor states to Home Assistant's 255-character limit, preventing verbose decision diagnostics from flooding the system log.
+
+## v0.5.55
+
+- Add a default-off minimum-fan hunt mode that probes downward in configurable steps only after a stable observation window, then responds immediately to rising temperature, a target breach, or a meaningful load increase.
+- Add Home Assistant fan-health, RPM, trip-duration, and protection-state diagnostics plus adjustable hunt and safety thresholds.
+- Add default-off, latched external-fan failure protection: after fan telemetry remains failed above the configured inverter temperature, block export and PV, raise programme reserves to 100%, disable grid charging, and require the existing Restore Deye normal button to restore the captured pre-trip settings.
+
+## v0.5.54
+
+- Let clearly falling inverter temperature unwind elevated fan speed and prevent small overnight load changes from raising fan speed while temperature continues to fall.
+- Add cooling load-regime and calibration-state sensors so Home Assistant Recorder can isolate stable PV export, self-consumption, battery, and AC-output windows for fan-curve tuning.
+
+## v0.5.53
+
+- Treat Home Assistant entity restoration from unavailable to live as baseline initialization, preventing an enabled WiCAN source from querying during startup while preserving later genuine connector and charging events.
+
+## v0.5.52
+
+- Allow the manual Taycan charging target to be set as low as 40%, while leaving the normal charging target at 80%.
+
+## v0.5.51
+
+- Add optional event-driven local WiCAN Taycan SOC using one SOC_D request on connector, charge-start/stop, session-energy threshold, or manual-refresh events only. Automatic acquisition is disabled by default; failures never retry until another genuine event.
+- Persist the complete last local result and trigger baseline, prefer fresh local SOC over Porsche Connect for the existing charging cutoff, and expose source, age, result/error, and next-query diagnostics.
+
+## v0.5.50
+
+- Keep an active solar EV charging session alive through cloud-driven import or battery discharge so current can fall to the charger's 6A minimum without repeatedly resetting the vehicle session. Startup still requires genuine solar and no material power deficit, and battery/forecast/daytime safety gates remain enforced.
+
+## v0.5.49
+
+- Require 1.8kW of actual PV before starting a solar EV session, reject tiny battery-charge blips as solar arrival, latch genuine solar arrival while active, and require a sustained two-minute import or battery-discharge deficit before withdrawing permission.
+
+## v0.5.48
+
+- Require the daytime window, observed solar arrival, and no material battery discharge before allowing forecast-backed solar EV charging.
+
+## v0.5.47
+
+- Enforce an 80% Taycan SOC cutoff for normal EV charging, including active OCPP charge-control sessions and solar charging.
+- Add a persisted manual charging override with an adjustable stop SOC, automatic TIMXON start/stop, and automatic override clearing when the selected target is reached.
+- Expose the active EV target and SOC-cutoff status for dashboards, and default Porsche mappings to the Taycan 4S entities.
+
 ## v0.5.46
 
 - Hold high fan speed through ordinary high-PV fluctuations, reserving immediate fan reductions for genuine throughput collapses of at least 50%.

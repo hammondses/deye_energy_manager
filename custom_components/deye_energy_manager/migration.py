@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from .const import CONF_HEAT_LOADS, DEFAULT_HEAT_MODE, DEFAULT_THERMAL_ACTUATION_MODE, TEXT_DEFAULTS
+from .const import CONF_HEAT_LOADS, DEFAULT_ENTITY_MAP, DEFAULT_HEAT_MODE, DEFAULT_THERMAL_ACTUATION_MODE, TEXT_DEFAULTS
 from .decision import slugify
 
 OLD_DUPLICATE_DEYE_PROGRAM_START_TIMES = ("07:00", "13:00", "17:00", "21:00", "07:00", "07:00")
 PROG6_CHEAP_GRID_START_TIMES = ("07:00", "13:00", "17:00", "20:50", "20:55", "21:00")
+LEGACY_CAYENNE_ENTITY_MAP = {
+    "porsche_soc": "sensor.cayenne_e_hybrid_my24_state_of_charge",
+    "porsche_charging_status": "sensor.cayenne_e_hybrid_my24_charging_status",
+    "porsche_charging_ends": "sensor.cayenne_e_hybrid_my24_charging_ends",
+    "porsche_charging_power": "sensor.cayenne_e_hybrid_my24_charging_power",
+}
 
 
 def infer_load_slug(load: dict[str, object]) -> str:
@@ -17,6 +23,22 @@ def infer_load_slug(load: dict[str, object]) -> str:
         if slug in text:
             return slug
     return slugify(str(load.get("name") or load.get("climate_entity") or "thermal_load"))
+
+
+def migrate_porsche_entity_map(
+    entity_map: dict[str, object],
+    available_entities: set[str],
+) -> tuple[dict[str, object], bool]:
+    """Adopt Taycan mappings only when each legacy Cayenne entity is gone."""
+
+    migrated = dict(entity_map)
+    changed = False
+    for key, legacy_entity in LEGACY_CAYENNE_ENTITY_MAP.items():
+        taycan_entity = DEFAULT_ENTITY_MAP[key]
+        if migrated.get(key) == legacy_entity and legacy_entity not in available_entities and taycan_entity in available_entities:
+            migrated[key] = taycan_entity
+            changed = True
+    return migrated, changed
 
 
 def migrate_options(options: dict[str, object], data: dict[str, object] | None = None) -> tuple[dict[str, object], bool]:

@@ -24,6 +24,9 @@ class DeyeSensorDescription(SensorEntityDescription):
 
 
 SENSORS: tuple[DeyeSensorDescription, ...] = (
+    DeyeSensorDescription(key="decision_timeline", name="Decision timeline", value_fn=lambda d: None),
+    DeyeSensorDescription(key="cooling_data_collection", name="Cooling data collection", value_fn=lambda d: None),
+    DeyeSensorDescription(key="cooling_saved_preset", name="Cooling saved preset", value_fn=lambda d: None),
     DeyeSensorDescription(key="active_plan", name="Active plan", value_fn=lambda d: ",".join(d.proposed_actions) or "advisory_only"),
     DeyeSensorDescription(key="active_policy", name="Active policy", value_fn=lambda d: d.active_policy),
     DeyeSensorDescription(key="forecast_mode", name="Forecast mode", value_fn=lambda d: d.forecast_mode),
@@ -66,8 +69,8 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="battery_discharge_w", name="Battery discharge", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.battery_discharge_w),
     DeyeSensorDescription(key="grid_import_w", name="Grid import", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.grid_import_w),
     DeyeSensorDescription(key="export_power_w", name="Export power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.export_power_w),
-    DeyeSensorDescription(key="thermal_export_margin_w", name="Thermal export margin", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.thermal_export_margin_w),
-    DeyeSensorDescription(key="export_soak_reason", name="Export soak reason", value_fn=lambda d: d.export_soak_reason),
+    DeyeSensorDescription(key="thermal_export_margin_w", name="Curtailment export margin", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.thermal_export_margin_w),
+    DeyeSensorDescription(key="export_soak_reason", name="Curtailment soak reason", value_fn=lambda d: d.export_soak_reason),
     DeyeSensorDescription(key="pv_power_now_w", name="PV power now", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.pv_power_now_w),
     DeyeSensorDescription(key="inverter_ac_temperature", name="Inverter AC temperature", native_unit_of_measurement=UnitOfTemperature.CELSIUS, device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.inverter_ac_temperature_c),
     DeyeSensorDescription(key="inverter_dc_temperature", name="Inverter DC temperature", native_unit_of_measurement=UnitOfTemperature.CELSIUS, device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.inverter_dc_temperature_c),
@@ -83,6 +86,11 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="cooling_raw_required_fan_percentage", name="Cooling raw required fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_raw_required_fan_pct),
     DeyeSensorDescription(key="cooling_recommended_fan_percentage", name="Cooling recommended fan percentage", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_recommended_fan_pct),
     DeyeSensorDescription(key="cooling_reason", name="Cooling reason", value_fn=lambda d: d.cooling_reason),
+    DeyeSensorDescription(key="cooling_load_regime", name="Cooling load regime", value_fn=lambda d: d.cooling_load_regime),
+    DeyeSensorDescription(key="cooling_calibration_state", name="Cooling calibration state", value_fn=lambda d: d.cooling_calibration_state),
+    DeyeSensorDescription(key="cooling_fan_rpm", name="Cooling fan RPM", native_unit_of_measurement="rpm", state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_fan_rpm),
+    DeyeSensorDescription(key="cooling_protection_condition_minutes", name="Cooling protection condition minutes", native_unit_of_measurement="min", state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.cooling_protection_condition_minutes),
+    DeyeSensorDescription(key="cooling_protection_reason", name="Cooling protection reason", value_fn=lambda d: d.cooling_protection_reason),
     DeyeSensorDescription(key="expected_action", name="Expected action", value_fn=lambda d: d.expected_action),
     DeyeSensorDescription(key="thermal_expected_action", name="Thermal expected action", value_fn=lambda d: d.thermal_action),
     DeyeSensorDescription(key="thermal_action_reason", name="Thermal action reason", value_fn=lambda d: d.thermal_action_reason),
@@ -129,6 +137,16 @@ SENSORS: tuple[DeyeSensorDescription, ...] = (
     DeyeSensorDescription(key="ev_decision_reason", name="EV decision reason", value_fn=lambda d: d.ev_decision_reason),
     DeyeSensorDescription(key="ev_expected_action", name="EV expected action", value_fn=lambda d: d.ev_expected_action),
     DeyeSensorDescription(key="ev_detected_power_w", name="EV detected power", native_unit_of_measurement=UnitOfPower.WATT, device_class=SensorDeviceClass.POWER, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_detected_power_w),
+    DeyeSensorDescription(key="ev_active_target_soc", name="EV active target SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: d.ev_active_target_soc),
+    DeyeSensorDescription(key="effective_taycan_soc", name="Effective Taycan SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_taycan_soc", name="WiCAN Taycan SOC", native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: None),
+    DeyeSensorDescription(key="taycan_soc_source", name="Taycan SOC source", value_fn=lambda d: None),
+    DeyeSensorDescription(key="taycan_soc_age_minutes", name="Taycan SOC age minutes", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_update", name="WiCAN SOC last update", device_class=SensorDeviceClass.TIMESTAMP, value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_trigger", name="WiCAN SOC last trigger", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_result", name="WiCAN SOC last result", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_last_error", name="WiCAN SOC last error", value_fn=lambda d: None),
+    DeyeSensorDescription(key="wican_soc_energy_until_next_query", name="WiCAN SOC energy until next query", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.MEASUREMENT, value_fn=lambda d: None),
     DeyeSensorDescription(key="recent_proposed_actions", name="Recent proposed actions", value_fn=lambda d: d.expected_action),
 )
 
@@ -154,8 +172,19 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
 
     @property
     def native_value(self) -> Any:
+        value = self._raw_native_value()
+        return f"{value[:252]}..." if isinstance(value, str) and len(value) > 255 else value
+
+    def _raw_native_value(self) -> Any:
         if self.coordinator.data is None:
             return None
+        if self.entity_description.key == "cooling_data_collection":
+            return self.coordinator.cooling_collection_status["state"]
+        if self.entity_description.key == "decision_timeline":
+            rows = self.coordinator.decision_timeline
+            return rows[-1]["timestamp"] if rows else "none"
+        if self.entity_description.key == "cooling_saved_preset":
+            return "saved" if self.coordinator.cooling_saved_preset else "empty"
         if self.entity_description.key == "last_control_action":
             return self.coordinator.last_control_action
         if self.entity_description.key == "desired_deye_plan":
@@ -171,12 +200,67 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
             return len(self.coordinator._deye_write_events)
         if self.entity_description.key == "recent_proposed_actions":
             return self.coordinator.recent_proposed_actions[-1]["proposed_action"] if self.coordinator.recent_proposed_actions else "none"
+        coordinator_values = {
+            "effective_taycan_soc": self.coordinator.effective_taycan_soc,
+            "wican_taycan_soc": self.coordinator.wican.soc,
+            "taycan_soc_source": self.coordinator.taycan_soc_source,
+            "taycan_soc_age_minutes": self.coordinator.taycan_soc_age_minutes,
+            "wican_soc_last_update": self.coordinator.wican.updated_at,
+            "wican_soc_last_trigger": self.coordinator.wican.last_trigger,
+            "wican_soc_last_result": self.coordinator.wican.last_result,
+            "wican_soc_last_error": self.coordinator.wican.last_error,
+            "wican_soc_energy_until_next_query": self.coordinator.wican_energy_until_next_query,
+        }
+        if self.entity_description.key in coordinator_values:
+            return coordinator_values[self.entity_description.key]
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
+        if self.entity_description.key == "cooling_data_collection":
+            return dict(self.coordinator.cooling_collection_status)
+        if self.entity_description.key == "decision_timeline":
+            return {"entries": list(self.coordinator.decision_timeline)}
+        if self.entity_description.key == "cooling_saved_preset":
+            return dict(self.coordinator.cooling_saved_preset)
+        if self.entity_description.key == "energy_plan_reason":
+            decision = self.coordinator.data
+            if decision is None:
+                return None
+            settings = self.coordinator.settings
+            return {
+                "full_reason": decision.energy_plan_reason,
+                "expected_action": decision.expected_action,
+                "control_blocked": decision.control_blocked,
+                "battery_soc": decision.battery_soc,
+                "reserve_soc": decision.current_reserve_soc,
+                "morning_target_soc": decision.morning_start_soc_target,
+                "grid_charge_target_soc": decision.grid_charge_target_soc,
+                "remaining_forecast_kwh": decision.forecast_remaining_today_kwh,
+                "tomorrow_forecast_kwh": decision.forecast_tomorrow_kwh,
+                "projected_4pm_soc": decision.projected_4pm_soc,
+                "grid_charge_required": decision.grid_charge_required,
+                "ev_expected_action": decision.ev_expected_action,
+                "ev_reason": decision.ev_decision_reason,
+                "tariff_window": decision.tariff_window,
+                "deye_control_enabled": settings.deye_control_enabled,
+                "grid_charge_control_enabled": settings.grid_charge_control_enabled,
+                "ev_control_enabled": settings.ev_control_enabled,
+            }
         if self.entity_description.key == "recent_proposed_actions":
             return {"entries": list(self.coordinator.recent_proposed_actions)}
+        if self.entity_description.key in {"effective_taycan_soc", "wican_taycan_soc", "taycan_soc_source"}:
+            return {
+                "local_soc": self.coordinator.wican.soc,
+                "local_updated": self.coordinator.wican.updated_at.isoformat() if self.coordinator.wican.updated_at else None,
+                "local_raw": self.coordinator.wican.raw,
+                "source": self.coordinator.taycan_soc_source,
+                "age_minutes": self.coordinator.taycan_soc_age_minutes,
+                "last_trigger": self.coordinator.wican.last_trigger,
+                "last_result": self.coordinator.wican.last_result,
+                "last_error": self.coordinator.wican.last_error,
+                "last_success_energy_kwh": self.coordinator.wican.last_success_energy_kwh,
+            }
         if self.entity_description.key == "actual_program_ranges":
             decision = self.coordinator.data
             if decision is None:
@@ -205,6 +289,9 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
             settings = self.coordinator.settings
             return {
                 "reason": decision.cooling_reason,
+                "recovery_active": self.coordinator._cooling_internal_fan_recovery,
+                "temperature_valid": self.coordinator._cooling_temperature_valid(dt_util.utcnow()),
+                "source_entities": {key: self.coordinator.entity_map.get(key) for key in ("inverter_ac_temperature", "inverter_dc_temperature", "inverter_cooling_fan", "inverter_cooling_fan_rpm")},
                 "raw_required_percentage": decision.cooling_raw_required_fan_pct,
                 "actual_percentage": decision.cooling_actual_fan_pct,
                 "throughput_w": decision.cooling_throughput_w,
@@ -222,6 +309,7 @@ class DeyeSensor(DeyeEnergyManagerEntity, SensorEntity):
                 "temperature_gain_percentage_per_c": settings.cooling_temperature_gain_pct_per_c,
                 "feedback_step_percentage": settings.cooling_feedback_step_pct,
                 "target_deadband_c": settings.cooling_target_deadband_c,
+                "trend_deadband_c_per_min": settings.cooling_trend_deadband_c_per_min,
             }
         return None
 
