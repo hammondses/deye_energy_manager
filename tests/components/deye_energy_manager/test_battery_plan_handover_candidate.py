@@ -6,6 +6,7 @@ import json
 import math
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from jinja2 import Environment
 
@@ -20,9 +21,14 @@ NOW = datetime.fromisoformat("2026-10-03T12:00:00+13:00")
 
 
 def _environment(states: dict[str, str]) -> Environment:
+    class States:
+        number = SimpleNamespace(deye_battery_max_charge_current=SimpleNamespace(
+            last_changed="2026-10-03T11:55:00+13:00"))
+        def __call__(self, entity_id):
+            return states.get(entity_id, "unknown")
     env = Environment()
     env.globals.update(
-        states=lambda entity_id: states.get(entity_id, "unknown"),
+        states=States(),
         is_state=lambda entity_id, expected: states.get(entity_id, "unknown")
         == expected,
         is_number=lambda value: _is_number(value),
@@ -246,3 +252,47 @@ def test_late_day_rule_comes_from_manager_and_not_a_shadow_clipping_window() -> 
     serialized = json.dumps(config["actions"])
     assert "sensor.deye_shadow_clipping" not in serialized
     assert "sensor.garage_deye_energy_manager_solar_plan_physical_clipping_window_end" not in serialized
+
+
+def _damping_conditions(**overrides):
+    config = json.loads(CANDIDATE.read_text())["candidate_config"]
+    choices = config["actions"][8]["choose"][0]["sequence"][0]["choose"]
+    context = _evaluate(_base_states())
+    context.update(manager_plan_usable=True, current_limit_a=5, desired_limit_a=2,
+                   ac_error_w=-100, actual_charge_a=4, inverter_w=9500,
+                   physical_ac_ceiling_w=11000, gate_age_seconds=300)
+    context.update(overrides)
+    env = _environment(_base_states())
+    return tuple(env.from_string(c["conditions"][0]["value_template"]).render(**context).strip() == "True" for c in choices)
+
+
+def test_morning_noise_does_not_correct_or_probe_below_physical_ceiling():
+    assert _damping_conditions() == (False, False)
+    assert _damping_conditions(ac_error_w=-199, desired_limit_a=1) == (False, False)
+
+
+def test_capture_is_fast_but_repeated_triggers_cannot_bypass_settling():
+    assert _damping_conditions(ac_error_w=1500, desired_limit_a=32, gate_age_seconds=10)[0]
+    assert not _damping_conditions(ac_error_w=1500, desired_limit_a=32, gate_age_seconds=9)[0]
+
+
+def test_release_waits_and_small_amp_changes_are_ignored():
+    assert not _damping_conditions(ac_error_w=-500, desired_limit_a=1, gate_age_seconds=44)[0]
+    assert _damping_conditions(ac_error_w=-500, desired_limit_a=1, gate_age_seconds=45)[0]
+    assert not _damping_conditions(ac_error_w=-500, desired_limit_a=3)[0]
+
+
+def test_probe_requires_physical_ceiling_and_two_minute_settling():
+    assert _damping_conditions(inverter_w=10900, gate_age_seconds=120)[1]
+    assert not _damping_conditions(inverter_w=10900, gate_age_seconds=119)[1]
+    assert not _damping_conditions(inverter_w=10900, actual_charge_a=1)[1]
+    assert not _damping_conditions(inverter_w=10900, manager_live_current_ceiling_a=5)[1]
+
+
+def test_lower_live_ceiling_bypasses_damping_immediately():
+    assert _damping_conditions(manager_live_current_ceiling_a=0, gate_age_seconds=0, ac_error_w=0)[0]
+
+
+def test_legacy_feedback_and_probe_remain_unchanged():
+    assert _damping_conditions(manager_plan_usable=False, ac_error_w=-100, gate_age_seconds=0)[0]
+    assert _damping_conditions(manager_plan_usable=False, ac_error_w=0, gate_age_seconds=0)[1]

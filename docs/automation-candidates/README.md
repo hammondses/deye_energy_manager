@@ -67,3 +67,19 @@ SOC entity is the manager's configured battery SOC source. A second raw
 `last_reported <= 120 seconds` rule would prevent a seven-minute restart dwell
 when an unchanged SOC sensor reports less often; both initial and delayed
 restart checks therefore use the fresh-plan contract.
+
+## Battery damping — 4 October 2026
+
+The shared-plan battery path now ignores AC errors up to 200 W and current
+corrections below 3 A. Material increases can occur after 10 seconds since the
+current-limit entity last changed; reductions wait 45 seconds. A live BMS/DC
+ceiling reduction bypasses these delays. The 1 A hidden-PV probe requires
+inverter AC output within 200 W of `min(rated AC, house + export limit)` and
+120 seconds since the last gate change. This prevents probing far below any
+physical bottleneck and then immediately correcting the probe back down.
+
+These are settling periods since a gate change, not continuous-condition dwell
+timers. The existing 10-second loop and telemetry triggers remain active.
+Threshold variables are editable in the HA automation. The manager's headroom
+policy and exact legacy fallback are unchanged; damping applies when the
+shared plan is usable. No Core restart is needed for the automation update.

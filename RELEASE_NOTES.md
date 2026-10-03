@@ -1,3 +1,9 @@
+## 0.6.0b21 — Battery actuator damping
+
+- Damp shared-plan battery-current feedback with a 200 W / 3 A deadband and asymmetric 10 s increase / 45 s decrease settling.
+- Probe by 1 A only near the physical AC/export ceiling, no more often than every 120 s. Reduced BMS/DC ceilings bypass damping.
+- Automation-only deployment: reload the battery automation; no integration Python restart needed. Solar headroom policy, EV control and legacy fallback are unchanged.
+
 # Release Notes
 
 ## v0.6.0b20 — live solar controller handover
