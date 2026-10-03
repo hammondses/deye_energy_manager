@@ -340,3 +340,29 @@ prove MQTT receipt freshness or OCPP packet content; an unavailable result is
 not permission to replace stale timestamps with the current time. The October 3
 preview correctly rejected the old BMS timestamp before receipt-aware input
 handling was connected to the coordinator.
+
+## Accepted battery power and asynchronous EV measurements
+
+b18 exposes `solar_plan_expected_battery_dc_power` in kW, separate from the
+requested DC charge ceiling. This is the taper-aware average acceptance over
+the current planning interval. A sustained EV stop qualification can compare
+actual charging with that expectation without interpreting a normal BMS taper
+as failure to follow an unrestricted command.
+
+The installed OCPP integration discards the MeterValues bucket timestamp before
+publishing HA entities. HA `last_reported` therefore cannot establish sample
+alignment with Deye. At 16:15:34 on October 3, published EV power was 6.657 kW
+while essential load was only 3.315 kW: those readings cannot represent the
+same instant because the EV is part of essential load. The adapter rejects
+EV power greater than essential load plus 500 W. b19 also uses
+`max(essential_power - ev_power, base_load_estimate)` for the current non-EV
+house load to guard against less obvious lagged subtraction. This conservative
+floor is not proof of synchronized samples and can reduce EV allocation while
+actual house consumption is below its estimated baseline. Manual charging
+continues to use full essential load as uncontrollable demand.
+
+The separate `daytime-headroom-review.md` and its offline replay found no
+same-scenario capture improvement from reducing the current completion-floor
+or spill request. A brighter physical scenario and a conservative completion
+forecast can require conflicting headroom; the physical projection must not
+be presented as a guarantee of capturing every possible cloud-enhanced peak.
