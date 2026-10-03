@@ -1,3 +1,9 @@
+## 0.6.0b22 — Responsive clipping capture
+
+- Open the battery gate by 5 A after 10 s when fresh feedback still shows saturated AC/export and binding battery current; retain slow 1 A / 120 s exploration near the ceiling.
+- Require fresh post-command battery, inverter and grid reports before any manager-path probe; retain deadband, slower reductions, BMS bounds and legacy fallback.
+- Automation-only deployment; planner strategy unchanged and no Core restart required.
+
 ## 0.6.0b21 — Battery actuator damping
 
 - Damp shared-plan battery-current feedback with a 200 W / 3 A deadband and asymmetric 10 s increase / 45 s decrease settling.

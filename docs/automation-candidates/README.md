@@ -83,3 +83,21 @@ timers. The existing 10-second loop and telemetry triggers remain active.
 Threshold variables are editable in the HA automation. The manager's headroom
 policy and exact legacy fallback are unchanged; damping applies when the
 shared plan is usable. No Core restart is needed for the automation update.
+
+### Adaptive capture update — 4 October, 12:13 NZDT
+
+The initial 1 A / 120 s probing was too slow during confirmed curtailment.
+A second regime now opens by 5 A after at least 10 s when AC output is within
+60 W of the physical AC/export ceiling and measured battery current remains
+within 1.5 A of its limit. Every probe requires numeric battery/inverter/grid
+reports received at least 5 s after the last gate change and no older than
+90 s. It therefore waits for real feedback before repeating; 10 s is a minimum,
+not a guaranteed command rate. Away from tight saturation, the existing
+1 A / 120 s near-ceiling probe, correction deadband and slower release remain.
+
+All 368 regression tests passed. HA rendered the live expressions before
+deployment. Source release 0.6.0b22 records this automation-only update; manager
+Python remains 0.6.0b20 and the forecast/headroom strategy is unchanged.
+Rollback uses `docs/live-config-backups/2026-10-04-battery-before-adaptive.json`
+through the automation API; current config is saved alongside as
+`2026-10-04-battery-adaptive.json`.

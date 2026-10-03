@@ -24,6 +24,8 @@ def _environment(states: dict[str, str]) -> Environment:
     class States:
         number = SimpleNamespace(deye_battery_max_charge_current=SimpleNamespace(
             last_changed="2026-10-03T11:55:00+13:00"))
+        def __getitem__(self, entity_id):
+            return SimpleNamespace(state=states.get(entity_id, "unknown"), last_reported=NOW)
         def __call__(self, entity_id):
             return states.get(entity_id, "unknown")
     env = Environment()
@@ -261,7 +263,9 @@ def _damping_conditions(**overrides):
     context.update(manager_plan_usable=True, current_limit_a=5, desired_limit_a=2,
                    ac_error_w=-100, actual_charge_a=4, inverter_w=9500,
                    physical_ac_ceiling_w=11000, gate_age_seconds=300)
+    context.update(probe_feedback_fresh=True)
     context.update(overrides)
+    context["fast_probe_eligible"] = _as_native(_environment(_base_states()).from_string(config["actions"][7]["variables"]["fast_probe_eligible"]).render(**context))
     env = _environment(_base_states())
     return tuple(env.from_string(c["conditions"][0]["value_template"]).render(**context).strip() == "True" for c in choices)
 
@@ -296,3 +300,33 @@ def test_lower_live_ceiling_bypasses_damping_immediately():
 def test_legacy_feedback_and_probe_remain_unchanged():
     assert _damping_conditions(manager_plan_usable=False, ac_error_w=-100, gate_age_seconds=0)[0]
     assert _damping_conditions(manager_plan_usable=False, ac_error_w=0, gate_age_seconds=0)[1]
+
+
+def test_fast_probe_requires_fresh_saturated_binding_feedback():
+    assert _damping_conditions(inverter_w=10960, ac_error_w=0, gate_age_seconds=10)[1]
+    assert not _damping_conditions(inverter_w=10960, ac_error_w=0, gate_age_seconds=9)[1]
+    assert not _damping_conditions(inverter_w=10960, ac_error_w=0, probe_feedback_fresh=False)[1]
+    assert not _damping_conditions(inverter_w=10960, ac_error_w=0, actual_charge_a=1)[1]
+    assert not _damping_conditions(inverter_w=10900, ac_error_w=0, gate_age_seconds=10)[1]
+
+
+def test_probe_step_switches_back_to_slow_and_clamps_to_bms():
+    config = json.loads(CANDIDATE.read_text())["candidate_config"]
+    env = _environment(_base_states())
+    t = env.from_string(config["actions"][7]["variables"]["adaptive_probe_limit_a"])
+    context = dict(current_limit_a=24, manager_live_current_ceiling_a=250, fast_probe_step_a=5)
+    assert float(t.render(**context, fast_probe_eligible=True)) == 29
+    assert float(t.render(**context, fast_probe_eligible=False)) == 25
+    context["manager_live_current_ceiling_a"] = 26
+    assert float(t.render(**context, fast_probe_eligible=True)) == 26
+
+
+def test_post_command_feedback_rejects_old_reports_and_invalid_power():
+    config = json.loads(CANDIDATE.read_text())["candidate_config"]
+    env = _environment(_base_states())
+    t = env.from_string(config["actions"][7]["variables"]["probe_feedback_fresh"])
+    assert t.render().strip() == "True"
+    env.globals["states"].number.deye_battery_max_charge_current.last_changed = NOW
+    assert t.render().strip() == "False"
+    env = _environment(_base_states(**{"sensor.deye_grid_ct_power": "unavailable"}))
+    assert env.from_string(t.name or config["actions"][7]["variables"]["probe_feedback_fresh"]).render().strip() == "False"

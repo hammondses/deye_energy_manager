@@ -1,49 +1,8 @@
 {
-  "schema": "deye-battery-plan-handover-candidate/v1",
-  "status": "review-only; not installed or enabled",
-  "source": {
-    "automation": "automation.deye_dc_export_first_curtailment_capture",
-    "config_hash": "74cba31e818cbad2"
-  },
-  "helper": {
-    "entity_id": "input_boolean.deye_battery_plan_handover_enabled",
-    "initial_state": "off",
-    "exists_in_live_registry_at_audit": false
-  },
-  "manager_entities": {
-    "status": "sensor.garage_deye_energy_manager_solar_plan_status",
-    "generated_at": "sensor.garage_deye_energy_manager_solar_plan_generated_at",
-    "recommended_battery_dc_power": "sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_power",
-    "charge_all_surplus": "sensor.garage_deye_energy_manager_solar_plan_charge_all_surplus",
-    "inverter_efficiency": "number.garage_deye_energy_manager_solar_plan_inverter_efficiency",
-    "battery_max_charge_dc_kw": "number.garage_deye_energy_manager_solar_plan_battery_max_charge_dc_kw"
-  },
-  "live_input_entities": {
-    "battery_charge_current_limit": "sensor.deye_battery_charge_limit_current",
-    "battery_voltage": "sensor.deye_battery_voltage",
-    "pv_power": "sensor.deye_pv_power",
-    "battery_power": "sensor.deye_battery_power",
-    "inverter_power": "sensor.deye_inverter_power",
-    "grid_ct_power": "sensor.deye_grid_ct_power",
-    "shadow_recommended_charge_power": "sensor.deye_shadow_recommended_charge_power"
-  },
-  "freshness_seconds": {
-    "maximum_age": 90,
-    "maximum_future_skew": 5
-  },
-  "integration_contract": {
-    "retain_existing_active_branch_gates": true,
-    "legacy_scheduled_target_expression_preserved_verbatim": true,
-    "manager_recommendation_semantics": "minimum intentional battery DC charge request, not a hard current ceiling",
-    "manager_all_surplus_semantics": "manager recommendation already applies its clipping-window release/all-surplus rule; consume the recommendation without adding a shadow-window dependency or duplicate late-day policy",
-    "probe": "Fresh battery/inverter/grid reports at least 5 s after last gate change required for every manager probe. Within 60 W of physical ceiling and gate binding: +5 A after 10 s. Otherwise within 200 W: +1 A after 120 s. Ceiling clamps and legacy fallback retained.",
-    "full_battery": "no SOC==100 hard-zero; live BMS limit governs zero acceptance at full and renewed acceptance if SOC falls",
-    "ev_coordination": "continue using measured inverter/export/house values (house includes actual EV draw), not requested EV amps",
-    "stale_invalid_fallback": "off helper, missing/invalid entity, non-advisory status, invalid voltage/efficiency, or stale/future timestamp means exact legacy shadow-power path without new efficiency conversion",
-    "no_live_writes": "candidate config only; generated from HA read response and not sent back to Home Assistant",
-    "damping": "Manager path corrections need >200 W error and >=3 A change: increases after 10 s, reductions after 45 s since gate state change. Above-ceiling limits clamp immediately. Timing is based on last_changed, not automation last_triggered."
-  },
-  "candidate_config": {
+  "success": true,
+  "action": "get",
+  "automation_id": "automation.deye_dc_export_first_curtailment_capture",
+  "config": {
     "id": "1790639409049",
     "alias": "Deye DC Export First / Curtailment Capture",
     "description": "Shared-plan battery feedback: fresh saturated and binding feedback permits 5 A capture probes after 10 s; otherwise 1 A near-ceiling probes after 120 s. Every probe needs post-command power reports. 200 W / 3 A deadband and 45 s release retained. Planner and legacy fallback unchanged.",
@@ -100,22 +59,22 @@
       },
       {
         "trigger": "state",
-        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_status",
+        "entity_id": "sensor.garage_deye_energy_manager_daytime_solar_plan_status",
         "id": "battery_plan_status_changed"
       },
       {
         "trigger": "state",
-        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_generated_at",
+        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_generated",
         "id": "battery_plan_generated_changed"
       },
       {
         "trigger": "state",
-        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_power",
+        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_charge",
         "id": "battery_plan_recommendation_changed"
       },
       {
         "trigger": "state",
-        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_charge_all_surplus",
+        "entity_id": "sensor.garage_deye_energy_manager_solar_plan_all_surplus_charge_mode",
         "id": "battery_plan_all_surplus_changed"
       }
     ],
@@ -159,9 +118,9 @@
       {
         "alias": "Battery plan handover calculations (advisory inputs only)",
         "variables": {
-          "manager_plan_usable": "{% set ts = as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated_at'), 0) %}{{ is_state('input_boolean.deye_battery_plan_handover_enabled', 'on') and is_state('sensor.garage_deye_energy_manager_solar_plan_status', 'advisory') and (as_timestamp(now()) - ts) <= 90 and (as_timestamp(now()) - ts) >= -5 and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_power')) and is_number(states('number.garage_deye_energy_manager_solar_plan_inverter_efficiency')) and (states('number.garage_deye_energy_manager_solar_plan_inverter_efficiency') | float(0)) > 0 and (states('number.garage_deye_energy_manager_solar_plan_inverter_efficiency') | float(0)) <= 1 and is_number(states('number.garage_deye_energy_manager_solar_plan_battery_max_charge_dc_kw')) and (states('number.garage_deye_energy_manager_solar_plan_battery_max_charge_dc_kw') | float(0)) > 0 and is_number(states('sensor.deye_battery_charge_limit_current')) and is_number(states('sensor.deye_battery_voltage')) and (states('sensor.deye_battery_voltage') | float(0)) > 0 }}",
-          "plan_battery_dc_w": "{{ [[(states(\"sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_power\") | float(0)) * 1000, (bms_charge_limit_a | float(0)) * (battery_v | float(0)), (states(\"number.garage_deye_energy_manager_solar_plan_battery_max_charge_dc_kw\") | float(0)) * 1000] | min, 0] | max }}",
-          "manager_live_current_ceiling_a": "{{ ([bms_charge_limit_a | float(0), 250, ((states(\"number.garage_deye_energy_manager_solar_plan_battery_max_charge_dc_kw\") | float(0)) * 1000 / (battery_v | float(1)))] | min) if manager_plan_usable | bool(false) else 0 }}"
+          "manager_plan_usable": "{% set ts = as_timestamp(states('sensor.garage_deye_energy_manager_solar_plan_generated'), 0) %}{{ is_state('input_boolean.deye_battery_plan_handover_enabled', 'on') and is_state('sensor.garage_deye_energy_manager_daytime_solar_plan_status', 'advisory') and (as_timestamp(now()) - ts) <= 90 and (as_timestamp(now()) - ts) >= -5 and is_number(states('sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_charge')) and is_number(states('number.garage_deye_energy_manager_solar_plan_inverter_efficiency')) and (states('number.garage_deye_energy_manager_solar_plan_inverter_efficiency') | float(0)) > 0 and (states('number.garage_deye_energy_manager_solar_plan_inverter_efficiency') | float(0)) <= 1 and is_number(states('number.garage_deye_energy_manager_solar_plan_battery_maximum_dc_charge')) and (states('number.garage_deye_energy_manager_solar_plan_battery_maximum_dc_charge') | float(0)) > 0 and is_number(states('sensor.deye_battery_charge_limit_current')) and is_number(states('sensor.deye_battery_voltage')) and (states('sensor.deye_battery_voltage') | float(0)) > 0 }}",
+          "plan_battery_dc_w": "{{ [[(states(\"sensor.garage_deye_energy_manager_solar_plan_recommended_battery_dc_charge\") | float(0)) * 1000, (bms_charge_limit_a | float(0)) * (battery_v | float(0)), (states(\"number.garage_deye_energy_manager_solar_plan_battery_maximum_dc_charge\") | float(0)) * 1000] | min, 0] | max }}",
+          "manager_live_current_ceiling_a": "{{ ([bms_charge_limit_a | float(0), 250, ((states(\"number.garage_deye_energy_manager_solar_plan_battery_maximum_dc_charge\") | float(0)) * 1000 / (battery_v | float(1)))] | min) if manager_plan_usable | bool(false) else 0 }}"
         }
       },
       {
@@ -323,5 +282,6 @@
       }
     ],
     "mode": "restart"
-  }
+  },
+  "config_hash": "356b8da72a070967"
 }
