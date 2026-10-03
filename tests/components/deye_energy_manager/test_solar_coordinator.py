@@ -95,6 +95,35 @@ def test_adapter_reports_missing_curve_and_disabled_state():
     assert coordinator._daytime_solar_advisory(inputs, settings, decision) is None
 
 
+def test_delayed_ev_subtraction_cannot_erase_estimated_base_load(monkeypatch):
+    coordinator, inputs, settings, decision, state = setup_adapter()
+    captured = []
+    original = module.recommend_solar_action
+
+    def capture(value):
+        captured.append(value)
+        return original(value)
+
+    monkeypatch.setattr(module, "recommend_solar_action", capture)
+    # Both entities look fresh, but the old EV sample leaves only 200 W of
+    # apparent house demand against a previously estimated 1 kW base load.
+    state("ev_power", 2.8, "kW")
+    plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
+    assert plan.valid, plan.reason
+    assert captured[-1].current_non_ev_house_kw == 1
+
+    # A real extra house load must still raise the estimate above that floor.
+    state("essential_power", 5000, "W")
+    plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
+    assert plan.valid, plan.reason
+    assert captured[-1].current_non_ev_house_kw == 2.2
+
+    # The floor must not hide an outright impossible EV/essential pairing.
+    state("essential_power", 2000, "W")
+    plan = coordinator._daytime_solar_advisory(inputs, settings, decision)
+    assert not plan.valid and "telemetry is inconsistent" in plan.reason
+
+
 def test_supplier_age_blocks_plan_even_when_sensor_was_just_refreshed():
     coordinator, inputs, settings, decision, state = setup_adapter()
     state("forecast_updated_at", (inputs.now - timedelta(hours=3)).isoformat())

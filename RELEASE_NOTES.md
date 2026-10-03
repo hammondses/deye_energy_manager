@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.6.0b19 — conservative load floor for delayed EV telemetry
+
+- Floor the daytime planner's current non-EV house estimate at the existing base-load estimate. Independently timed OCPP readings can otherwise make essential-load subtraction understate house demand and invent available solar.
+- Retain the existing rejection when EV power exceeds essential load by more than 500 W. Manual charging still remains fully included in current uncontrollable load. This guard does not establish meter sample synchronization.
+
 ## v0.6.0b18 — expected battery acceptance for EV coordination
 
 - Expose the planner's expected average accepted DC battery power separately from its requested charge ceiling. A separate EV automation can compare actual battery charging with this taper-aware expectation when qualifying a sustained battery charge shortfall.

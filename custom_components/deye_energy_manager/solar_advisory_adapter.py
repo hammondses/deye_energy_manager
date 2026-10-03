@@ -175,9 +175,13 @@ def build_daytime_advisory(
             non_ev_base_house_kw=base_load / 1000,
             # A manual session remains an actual load that this solar plan
             # cannot turn down. Do not allocate its power to the battery.
+            # OCPP publication time is not the meter's sample time. A delayed
+            # EV reading can make subtraction understate house load even when
+            # it passes the gross-consistency check above. Preserve the base
+            # load estimate as a conservative floor, not as synchronized data.
             current_non_ev_house_kw=(
                 essential_w if inputs.ev_manual_charging_override
-                else max(essential_w - ev_w, 0)
+                else max(essential_w - ev_w, base_load)
             ) / 1000,
             live_pv_dc_kw=pv_w / 1000,
             voltage_v=voltage,
