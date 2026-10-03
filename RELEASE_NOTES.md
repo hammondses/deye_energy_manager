@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.6.0b12 — daytime planning foundations
+
+- Add an isolated solar interval model with explicit DC battery charging, AC house/EV/export allocation, BMS and acceptance limits, headroom, losses and clipping accounting.
+- Add a strict detailed-forecast parser with source-age validation, timezone-aware interval coverage and energy-preserving five-minute subdivision. Forecast output is deliberately not assumed to be raw DC array power.
+- Document the shared daytime planning/control contract and remaining validation. These building blocks are not connected to live decisions or actuators; existing overnight and EV behavior is unchanged.
+- Validation: 204 repository tests pass. The parser also accepted the live October 3 Solcast horizon through local sunset (63 intervals); this verifies data compatibility, not forecast accuracy or controller performance.
+
 ## v0.6.0b11 — overhaul branch
 
 - Replace the normal curve’s abrupt maximum-fan demand one degree before emergency with continuous temperature demand from target to emergency. Full-fan emergency and recovery protection remain unchanged.
