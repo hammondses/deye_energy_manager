@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.6.0b14 — shared daytime solar advisory
+
+- Publish a disabled-by-default daytime advisory combining a continuous battery-completion floor with whole-amp EV recommendations. Existing actuator decisions and overnight protection remain unchanged.
+- Add HA controls for forecast risk, electrical limits, conversion losses, array geometry and an explicit charge-acceptance curve. Options refresh without integration reload; the curve starts empty rather than assuming an unverified battery taper.
+- Validate forecast supplier freshness and telemetry units/age. Separate conservative forecast completion from an empirical clear-sky DC capture projection, exposing predicted clipping and the scenario SOC trajectory without claiming a probabilistic bound.
+- Account for charge taper within each interval and distinguish the requested charge-power ceiling from expected average accepted power. Include present house deficits in the required stored-energy calculation.
+- This is advisory infrastructure, not a completed control handover. Live input mapping, battery-curve calibration, cloud ride-through and separate actuator automation integration remain to be verified.
+
 ## v0.6.0b13 — battery completion calculations and solar EV target
 
 - Add an HA-adjustable solar EV target SOC, default 80%, independently of the manual target and existing overnight cutoff. Threshold changes refresh decisions without integration reload.

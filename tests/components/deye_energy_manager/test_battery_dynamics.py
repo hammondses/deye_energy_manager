@@ -25,6 +25,58 @@ def test_charge_crosses_soc_taper_band_mid_interval() -> None:
     assert result.dc_charge_energy_kwh == pytest.approx(1.25)
     assert result.average_dc_charge_power_kw == pytest.approx(5.0)
     assert result.unused_available_dc_energy_kwh == pytest.approx(0.75)
+    assert result.captured_clipping_dc_energy_kwh == 0.0
+
+
+def test_clipping_capture_tracks_each_actual_soc_taper_band() -> None:
+    result = integrate_battery_charge(
+        stored_energy_kwh=7.5,
+        capacity_kwh=10.0,
+        duration_hours=0.5,
+        available_dc_power_kw=5.0,
+        bms_max_dc_power_kw=5.0,
+        charge_efficiency=1.0,
+        soc_charge_curve=((0.0, 5.0), (0.8, 4.0), (0.9, 1.5)),
+        otherwise_clipped_dc_power_kw=3.0,
+    )
+
+    # Spend 0.1 h at 5 kW, 0.25 h at 4 kW, then 0.15 h at 1.5 kW.
+    # Attribute only the min(actual accepted power, 3 kW spill) per band.
+    assert result.dc_charge_energy_kwh == pytest.approx(1.725)
+    assert result.captured_clipping_dc_energy_kwh == pytest.approx(1.275)
+
+
+def test_full_battery_captures_no_clipping_energy() -> None:
+    result = integrate_battery_charge(
+        stored_energy_kwh=10.0,
+        capacity_kwh=10.0,
+        duration_hours=0.5,
+        available_dc_power_kw=5.0,
+        bms_max_dc_power_kw=5.0,
+        charge_efficiency=0.95,
+        soc_charge_curve=((0.0, 5.0),),
+        otherwise_clipped_dc_power_kw=4.0,
+    )
+
+    assert result.dc_charge_energy_kwh == 0.0
+    assert result.captured_clipping_dc_energy_kwh == 0.0
+
+
+def test_clipping_power_validation_rejects_nonfinite_and_negative_values() -> None:
+    base = dict(
+        stored_energy_kwh=0.0,
+        capacity_kwh=10.0,
+        duration_hours=0.25,
+        available_dc_power_kw=2.0,
+        bms_max_dc_power_kw=2.0,
+        charge_efficiency=1.0,
+        soc_charge_curve=((0.0, 2.0),),
+    )
+    for value in (-0.1, float("inf"), float("nan")):
+        with pytest.raises(ValueError):
+            integrate_battery_charge(
+                **base, otherwise_clipped_dc_power_kw=value
+            )
 
 
 @pytest.mark.parametrize("capacity_kwh, breakpoint", [(32.0, 0.91), (27.3, 0.87)])

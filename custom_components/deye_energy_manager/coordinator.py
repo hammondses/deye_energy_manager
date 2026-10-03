@@ -46,6 +46,7 @@ from .models import DeyePlan, EnergyManagerDecision, EnergyManagerInputs, Energy
 from .temperature_freshness import temperature_reported_at
 from .cooling_data import CoolingWindows, SAMPLE_SECONDS, append_window, cooling_hardware
 from .repairs import async_update_issues
+from .solar_advisory_adapter import build_daytime_advisory
 from .wican import WICAN_SOC_REQUEST, WicanSocState, charging_active, connector_connected, parse_wican_soc_response, resolve_taycan_soc
 
 _LOGGER = logging.getLogger(__name__)
@@ -1296,6 +1297,7 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         )
         self._cooling_inputs_snapshot = inputs
         decision = decide(inputs, settings)
+        decision.solar_plan = self._daytime_solar_advisory(inputs, settings, decision)
         if decision.solar_arrived and decision.ev_solar_charge_allowed:
             self.ev_solar_arrived_latched = True
         elif (
@@ -1314,6 +1316,14 @@ class DeyeEnergyManagerCoordinator(DataUpdateCoordinator[EnergyManagerDecision])
         self.ev_latch_on = decision.ev_latch_active
         self.ev_hold_until = decision.ev_hold_until if decision.ev_latch_active else None
         return decision
+
+    def _daytime_solar_advisory(self, inputs, settings, decision):
+        """Publish planning advice without replacing existing control decisions."""
+        return build_daytime_advisory(
+            inputs, settings, decision, options=self.entry.options,
+            entity_map=self.entity_map, states=self.hass.states,
+            latitude=self.hass.config.latitude, longitude=self.hass.config.longitude,
+        )
 
     def _update_cheap_grid_session_state(self, decision: EnergyManagerDecision) -> None:
         """Track cheap-grid charge completion to avoid preserve/charge oscillation."""

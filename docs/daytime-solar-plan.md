@@ -207,3 +207,52 @@ That diagnostic deliberately used AC forecast output as a proxy with ideal
 inverter/discharge conversion, no taper, no reserve and no safety buffer. It
 validated parser-to-envelope compatibility only; it is not a production plan
 or evidence of target feasibility with the complete model.
+
+## b14 advisory interface and current algorithm
+
+The new daytime-plan switch defaults off. It publishes advice only; no existing
+actuator path consumes these fields. Enablement also requires an explicit battery
+charge-acceptance curve. Its text format is JSON pairs of SOC fraction and maximum
+DC kW, starting at fraction zero and increasing in SOC, for example
+`[[0,13],[0.9,6.5],[0.95,4],[0.98,2],[0.99,1]]`. This example is an assumption for
+offline exploration, **not a measured or recommended live curve**. October 2
+history mixes actuator-limited charging and SOC recalibration near full, so it
+cannot establish the maximum acceptance curve.
+
+The implemented current-action calculation is:
+
+1. Blend P10 and P50 using the HA risk number: `P10 + weight * (P50 - P10)`.
+   Weight zero selects P10; one selects P50. Preserve supplier AC-output semantics;
+   using that value unchanged as a DC proxy deliberately discounts conversion and
+   does not reconstruct potential clipped PV. Subtract configured energy buffers.
+2. End the completion horizon at the last forecast interval with useful net solar,
+   bounded by local sunset. Backsolve the minimum stored energy at each boundary
+   using SOC-dependent acceptance, battery/inverter losses and house demand.
+3. Test current EV requests from 32 A down to 6 A, then zero. A request must be
+   PV-backed, satisfy the 13.5 kW site ceiling and leave enough energy for the next
+   completion boundary. Future EV demand is zero because departure is unknown.
+4. Request the greater of charge power needed for that boundary and DC power
+   that cannot pass through the house/EV/export AC path, limited by PV and BMS.
+   Publish the requested power cap, not the taper-reduced average accepted power.
+5. Separately project capture under the configured empirical clear-sky curve,
+   keeping the chosen current action and assuming no future EV. Publish captured
+   and remaining clipped energy plus boundary SOC. Remaining clipping is not
+   labelled unavoidable; the physical scenario is not a probability bound.
+
+Settings expose AC/export/site limits, maximum battery DC power, efficiencies,
+forecast age/risk, array geometry and empirical curve scale/weather factor.
+Capacity, daily target and existing safety/house-load buffers are reused. A settings
+change recomputes advice without an integration reload.
+
+Invalid data produces an unavailable advisory with a reason; numeric sensors do
+not turn unavailable values into a zero allowance. Consumers must check status
+and generated time. Zero recommended EV current is an energy recommendation,
+not an instruction to stop on a cloud: ride-through, sustained deficit/restart
+timers and manual ownership still belong to the separate EV automation.
+
+Still outstanding: validate live EV telemetry mapping and update cadence, choose
+and calibrate acceptance assumptions, verify seasonal behavior, finish the shared
+actuator ownership contract and integrate both automations. Existing effective
+Taycan SOC can be last-known-good WiCAN data; a new freshness rule must account
+for its energy-triggered refresh rather than deadlocking restart. No new SOC-age
+rule has been silently added to the live recovery automation.

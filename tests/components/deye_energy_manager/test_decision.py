@@ -53,10 +53,13 @@ def test_only_entity_topology_option_changes_require_reload() -> None:
         "cooling_recovery_trigger_temp_c": 49,
         "cooling_recovery_release_temp_c": 43,
         "ev_solar_target_soc": 75,
+        "daytime_plan_enabled": True,
+        "solar_plan_charge_acceptance_curve": "[[0,13.5],[0.9,6]]",
+        "solar_plan_forecast_risk_blend": 0.25,
     }.items():
         entry.options = {**entry.options, key: value}
         asyncio.run(async_update_entry(hass, entry))
-    assert coordinator.refreshes == 8
+    assert coordinator.refreshes == 11
     assert config_entries.reloads == []
 
     entry.options = {**entry.options, "entity_map": {"battery_soc": "sensor.new"}}

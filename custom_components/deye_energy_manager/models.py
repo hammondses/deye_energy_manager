@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .solar_advisory import SolarAdvisory
 
 
 @dataclass(slots=True)
@@ -497,6 +501,7 @@ class EnergyManagerDecision:
     cooling_inverter_protection_required: bool = False
     cooling_inverter_protection_active: bool = False
     cooling_protection_reason: str = "inactive"
+    solar_plan: SolarAdvisory | None = None
 
 
 @dataclass(frozen=True, slots=True)

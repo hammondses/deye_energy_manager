@@ -18,6 +18,7 @@ class ChargeResult:
     dc_charge_energy_kwh: float
     average_dc_charge_power_kw: float
     unused_available_dc_energy_kwh: float
+    captured_clipping_dc_energy_kwh: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ def integrate_battery_charge(
     bms_max_dc_power_kw: float,
     charge_efficiency: float,
     soc_charge_curve: Sequence[tuple[float, float]],
+    otherwise_clipped_dc_power_kw: float = 0.0,
 ) -> ChargeResult:
     """Integrate charging across SOC-dependent power bands without rounding.
 
@@ -65,6 +67,7 @@ def integrate_battery_charge(
         ("duration_hours", duration_hours),
         ("available_dc_power_kw", available_dc_power_kw),
         ("bms_max_dc_power_kw", bms_max_dc_power_kw),
+        ("otherwise_clipped_dc_power_kw", otherwise_clipped_dc_power_kw),
     ):
         _finite_nonnegative(name, value)
     _efficiency("charge_efficiency", charge_efficiency)
@@ -97,6 +100,7 @@ def integrate_battery_charge(
     available_energy = float(available_dc_power_kw) * float(duration_hours)
     stored = float(stored_energy_kwh)
     dc_energy = 0.0
+    captured_clipping_energy = 0.0
     time_left = float(duration_hours)
     power_ceiling = min(float(available_dc_power_kw), float(bms_max_dc_power_kw))
 
@@ -145,8 +149,13 @@ def integrate_battery_charge(
         step_time = min(time_left, time_to_threshold)
         accepted_dc = dc_power * step_time
         gained_stored = min(accepted_dc * charge_efficiency, capacity_kwh - stored)
+        accepted_dc_actual = gained_stored / charge_efficiency
+        captured_clipping_energy += min(
+            min(dc_power, float(otherwise_clipped_dc_power_kw)) * step_time,
+            accepted_dc_actual,
+        )
         stored += gained_stored
-        dc_energy += gained_stored / charge_efficiency
+        dc_energy += accepted_dc_actual
         time_left -= step_time
         if step_time <= 0:
             break
@@ -160,6 +169,7 @@ def integrate_battery_charge(
         dc_charge_energy_kwh=dc_energy,
         average_dc_charge_power_kw=dc_energy / duration_hours,
         unused_available_dc_energy_kwh=unused,
+        captured_clipping_dc_energy_kwh=captured_clipping_energy,
     )
 
 
