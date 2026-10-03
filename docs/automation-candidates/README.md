@@ -36,7 +36,7 @@ performance, template behavior under all inputs, or the full action schema.
 current, power and voltage together while suspended. Charger identifiers are
 omitted. The temporary OCPP logger level was verified restored to WARNING.
 
-The EV candidate now has ten executable action-path scenarios in addition to
+The EV candidate now has eleven executable action-path scenarios in addition to
 its template/structure checks. These cover short-cloud recovery, sustained
 charge shortfall with a missed timer event, failed stop, asynchronous start,
 invalid grid data, target changes during delays, adoption at target, and a
@@ -49,3 +49,11 @@ entities absent, `plan_fresh=false`, `external_owner=false`, and
 `restart_qualified_now=false`; no actuator service was called. Complete HA
 action-schema validation, resolved entity IDs, helper provisioning, and live
 stop/restart observation remain rollout requirements.
+
+For the full-house-battery restart path, SOC freshness is inherited from the
+fresh valid manager plan, which validates SOC through its planning input and
+verified MQTT receipt handling. Deployment must verify that the automation's
+SOC entity is the manager's configured battery SOC source. A second raw
+`last_reported <= 120 seconds` rule would prevent a seven-minute restart dwell
+when an unchanged SOC sensor reports less often; both initial and delayed
+restart checks therefore use the fresh-plan contract.

@@ -309,3 +309,34 @@ def test_zero_ev_advice_during_verification_prevents_profile_clear():
     run = Run(s, delay_change=update).poll()
     assert len([call for call in run.calls if call[0] == "ocpp.set_charge_rate"]) == 1
     assert not any(call[0] == "ocpp.clear_profile" for call in run.calls)
+
+
+def test_full_battery_six_amp_start_accepts_soc_verified_by_fresh_manager_plan(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    original = _States.__getattr__
+
+    def domain(self, name):
+        source = original(self, name)
+        if name != "sensor":
+            return source
+
+        class Sensors:
+            deye_battery_soc = SimpleNamespace(last_reported=NOW - timedelta(minutes=8))
+
+            def __getattr__(self, key):
+                return getattr(source, key)
+
+        return Sensors()
+
+    monkeypatch.setattr(_States, "__getattr__", domain)
+    states = _base_states(
+        **{
+            PLAN + "recommended_ev_amps": "6",
+            "input_boolean.ev_solar_restart_pending": "on",
+        }
+    )
+    run = Run(states).poll()
+    assert any(call[0] == "switch.turn_on" and CHARGE in call[1] for call in run.calls)

@@ -430,3 +430,31 @@ def test_async_remote_start_poll_paths_confirm_retry_or_safely_stop() -> None:
         }
     )
     assert _first_matching_action(stuck) == "Stop unconfirmed OCPP start and retain restart hysteresis"
+
+
+def test_full_battery_restart_uses_manager_verified_soc_freshness(monkeypatch):
+    original = _States.__getattr__
+
+    def domains_with_old_soc_timestamp(self, domain_name):
+        domain = original(self, domain_name)
+        if domain_name != 'sensor':
+            return domain
+
+        class SensorDomain:
+            deye_battery_soc = SimpleNamespace(last_reported=NOW - timedelta(minutes=8))
+
+            def __getattr__(self, name):
+                return getattr(domain, name)
+
+        return SensorDomain()
+
+    monkeypatch.setattr(_States, '__getattr__', domains_with_old_soc_timestamp)
+    states = _base_states(**{
+        'sensor.garage_deye_energy_manager_solar_plan_recommended_ev_amps': '6',
+        'sensor.deye_battery_soc': '100',
+    })
+    # Manager validates unchanged SOC via matching MQTT receipts; a raw HA
+    # timestamp older than two minutes must not defeat seven-minute dwell.
+    assert _context(states)['restart_qualified_now'] is True
+    states['sensor.garage_deye_energy_manager_solar_plan_status'] = 'unavailable'
+    assert _context(states)['restart_qualified_now'] is False
