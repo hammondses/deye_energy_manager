@@ -1,5 +1,12 @@
 # Daytime solar planner deployment notes
 
+> **Live status, 3 October 2026:** `0.6.0b20` is deployed and both original
+> battery/EV automations are enabled against the shared manager plan. See the
+> [live handover record](live-solar-handover-2026-10-03.md) for current settings,
+> validation limits and rollback. The inspection snapshots and proposed rollout
+> steps below are historical; statements that entities are absent or the
+> handover is still disabled describe the pre-deployment audit, not current HA.
+
 This is a deployment checklist, not authorization to change the live manager or
 charger. The inspected live Home Assistant copy is `0.6.0b11`; the repository
 checkout at inspection was `0.6.0b17`. The live manager entry is loaded. Its

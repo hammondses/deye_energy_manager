@@ -1,8 +1,18 @@
 # Home Assistant automation candidates
 
-These files are review artifacts, not deployed configuration. The battery handover JSON contains a full candidate copy of the live automation read from Home Assistant and its source config hash (`74cba31e818cbad2`). It has not been written back to HA.
+These files are reusable review/deployment artifacts, not an automatic installer.
+Resolved versions were deployed into the **original** battery and EV automation
+IDs on 3 October 2026 with manager `0.6.0b20`. Both originals are enabled. The
+separate review copies in HA remain disabled and must not be enabled alongside
+them. See the [live handover record](../live-solar-handover-2026-10-03.md) for
+current settings, evidence and rollback.
 
-Before any deployment, re-read `automation.deye_dc_export_first_curtailment_capture` and compare the source hash. Rebuild the candidate from the current config if it changed. Then resolve each ID below in the live entity registry; the manager output entities and handover helper were absent during this audit, so the candidate must remain disabled until the manager version publishing these b16 outputs is installed and the data is fresh.
+For another deployment, re-read the destination automation and compare its
+configuration before replacement. The battery source hash `74cba31e818cbad2`
+identifies the pre-handover backup, not the current live configuration. Resolve
+entity IDs from the destination registry and preserve existing helper tuning.
+The historical pre-deployment rendering checks below do not describe current
+entity availability.
 
 Required registry entries:
 
@@ -21,7 +31,7 @@ Freshness is limited to 90 seconds old and 5 seconds future skew. Do not turn on
 
 The companion offline tests execute Jinja templates from the JSON against synthetic states. They check fallback parity and unit/limit behavior, but they are not a substitute for validating Home Assistant's template rendering and live traces.
 
-The EV actuator handover is captured in `ev-plan-handover.json`. It is also a review-only candidate: its manager writer select, feature switches, and plan sensors must be resolved in the live registry before use. The helper manifest distinguishes one-time `creation_default` values from runtime `initial` values so existing timer/latch tuning can restore after Home Assistant restarts. Active EV modulation still requires recent numeric OCPP current and power readings. A stopped restart may proceed without fresh idle meters only when the charge switch is off, the connector reports Preparing/Finishing, transaction ID is zero, and a recent OCPP websocket pong confirms the charger is online. Grid-voltage fallback is limited to 600 seconds to match the manager's accepted freshness window. OCPP sample timestamps are not exposed, so HA receipt freshness is the available bound.
+The EV actuator handover is captured in `ev-plan-handover.json`. Its resolved version is deployed; for reuse, its manager writer select, feature switches, and plan sensors must be resolved in the live registry before use. The helper manifest distinguishes one-time `creation_default` values from runtime `initial` values so existing timer/latch tuning can restore after Home Assistant restarts. Active EV modulation still requires recent numeric OCPP current and power readings. A stopped restart may proceed without fresh idle meters only when the charge switch is off, the connector reports Preparing/Finishing, transaction ID is zero, and a recent OCPP websocket pong confirms the charger is online. Grid-voltage fallback is limited to 600 seconds to match the manager's accepted freshness window. OCPP sample timestamps are not exposed, so HA receipt freshness is the available bound.
 
 ## Read-only live rendering check
 
@@ -46,9 +56,9 @@ models the relevant action subset; it is not Home Assistant's script engine.
 The candidate's sequential variable expressions also rendered successfully in
 HA's own Jinja engine against live states on October 3. With the new manager
 entities absent, `plan_fresh=false`, `external_owner=false`, and
-`restart_qualified_now=false`; no actuator service was called. Complete HA
-action-schema validation, resolved entity IDs, helper provisioning, and live
-stop/restart observation remain rollout requirements.
+`restart_qualified_now=false`; no actuator service was called. HA action-schema validation, entity resolution and helper provisioning were
+completed during deployment. A full live stop/restart cycle and positive-power
+response remain observational limits; see the live handover record.
 
 For the full-house-battery restart path, SOC freshness is inherited from the
 fresh valid manager plan, which validates SOC through its planning input and
