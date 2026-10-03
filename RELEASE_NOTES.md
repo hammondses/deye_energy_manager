@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.6.0b18 — expected battery acceptance for EV coordination
+
+- Expose the planner's expected average accepted DC battery power separately from its requested charge ceiling. A separate EV automation can compare actual battery charging with this taper-aware expectation when qualifying a sustained battery charge shortfall.
+- This diagnostic does not change actuator ownership or enable the pending automation handover.
+
 ## v0.6.0b17 — measured-power units and verified sensor receipts
 
 - Normalize a configured EV power sensor from kW to watts before decision and base-load calculations. Unsupported or missing units use the existing current/voltage fallback instead of silently interpreting kW as W.
