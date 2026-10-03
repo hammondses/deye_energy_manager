@@ -152,6 +152,46 @@ def clear_sky_dc_potential_kw(
     return min(settings.pv_dc_cap_kw, max(0.0, potential_kw))
 
 
+def interval_clear_sky_dc_peak_kw(
+    start: datetime,
+    end: datetime,
+    settings: PhysicalSolarSettings,
+    *,
+    weather_factor: float = 1.0,
+) -> float:
+    """Return the sampled clear-sky peak across an aware interval.
+
+    Endpoints are included and elapsed UTC time is divided into steps no longer
+    than one minute. This is intended for conservative clipping-window checks;
+    it remains an empirical scenario, not a guaranteed physical bound.
+    """
+    if not isinstance(start, datetime) or not isinstance(end, datetime):
+        raise ValueError("start and end must be timezone-aware datetimes")
+    if (
+        start.tzinfo is None
+        or start.utcoffset() is None
+        or end.tzinfo is None
+        or end.utcoffset() is None
+    ):
+        raise ValueError("start and end must be timezone-aware")
+
+    start_utc = start.astimezone(timezone.utc)
+    end_utc = end.astimezone(timezone.utc)
+    duration = end_utc - start_utc
+    if duration.total_seconds() <= 0:
+        raise ValueError("interval end must be after start")
+
+    steps = math.ceil(duration.total_seconds() / 60)
+    return max(
+        clear_sky_dc_potential_kw(
+            start_utc + duration * (index / steps),
+            settings,
+            weather_factor=weather_factor,
+        )
+        for index in range(steps + 1)
+    )
+
+
 def clear_sky_curve(
     start: datetime,
     end: datetime,

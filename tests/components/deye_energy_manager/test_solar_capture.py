@@ -91,7 +91,7 @@ def test_soc_taper_integrates_clipped_capture_across_curve_breakpoint() -> None:
 
 def test_completion_floor_is_preserved_after_current_ev_load() -> None:
     # First-interval house includes the selected EV's AC draw. The planner
-    # requests only enough battery charge to reach the next completion floor.
+    # has chosen extra intentional charging above the completion floor.
     result = project_solar_capture(
         [interval(7.0, 5.0, duration=0.25)],
         settings(
@@ -103,11 +103,11 @@ def test_completion_floor_is_preserved_after_current_ev_load() -> None:
         initial_energy_kwh=3.9,
         export_limit_kw=10.0,
         required_energy_by_boundary_kwh=(3.9, 4.0),
-        first_charge_limit_kw=2.0,
+        first_charge_command_kw=2.0,
     )
 
-    assert result.energy_by_boundary_kwh[-1] == pytest.approx(4.0)
-    assert result.charge_command_kw == pytest.approx(0.4)
+    assert result.energy_by_boundary_kwh[-1] == pytest.approx(4.4)
+    assert result.charge_command_kw == pytest.approx(2.0)
     assert result.predicted_energy_shortfall_kwh == pytest.approx(0.0, abs=1e-9)
 
 
@@ -153,7 +153,7 @@ def test_first_charge_command_is_honored_even_if_it_misses_floor() -> None:
         initial_energy_kwh=1.0,
         export_limit_kw=10.0,
         required_energy_by_boundary_kwh=(1.0, 5.0),
-        first_charge_limit_kw=1.0,
+        first_charge_command_kw=1.0,
     )
 
     assert result.charge_command_kw == pytest.approx(1.0)

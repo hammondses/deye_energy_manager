@@ -52,6 +52,7 @@ class SolarAdvisoryInput:
     forecast_p50_weight: float
     forecast_max_age: timedelta = timedelta(minutes=60)
     physical_dc_upper_kw: tuple[float, ...] | None = None
+    clipping_envelope_dc_kw: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +79,9 @@ class SolarAdvisory:
     physical_scenario_boundary_times: tuple[datetime, ...] = ()
     clipping_headroom_kwh: float | None = None
     clipping_plan_available: bool = False
+    physical_clipping_remaining: bool | None = None
+    physical_clipping_window_end: datetime | None = None
+    charge_all_surplus: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +177,11 @@ def _validate(inputs: SolarAdvisoryInput) -> datetime:
             raise ValueError("physical DC upper curve length must match forecast intervals")
         for power in inputs.physical_dc_upper_kw:
             _finite_nonnegative("physical DC upper power", power)
+    if inputs.clipping_envelope_dc_kw is not None:
+        if len(inputs.clipping_envelope_dc_kw) != len(inputs.forecast.intervals):
+            raise ValueError("clipping envelope length must match forecast intervals")
+        for power in inputs.clipping_envelope_dc_kw:
+            _finite_nonnegative("clipping envelope power", power)
 
     cursor = now
     first_duration = None
@@ -486,7 +495,7 @@ def _capture_projection(inputs, now, settings, chosen, required_now, future_requ
         initial_energy_kwh=inputs.current_soc_pct * inputs.capacity_kwh / 100,
         export_limit_kw=inputs.export_limit_kw,
         required_energy_by_boundary_kwh=floors,
-        first_charge_limit_kw=chosen.battery_charge_kw,
+        first_charge_command_kw=chosen.battery_charge_kw,
     )
 
 
@@ -542,6 +551,23 @@ def recommend_solar_action(inputs: SolarAdvisoryInput) -> SolarAdvisory:
             # means the live source data are physically inconsistent.
             return SolarAdvisory(reason="no_valid_current_action")
 
+        # Release intentional headroom only against the separate clear-sky
+        # envelope, never a cloudy weather-scaled capture scenario. EV advice
+        # remains constrained by battery completion before this extra charge.
+        clipping_remaining = None
+        clipping_end = None
+        if inputs.clipping_envelope_dc_kw is not None:
+            ac_path = min(inputs.inverter_ac_limit_kw,
+                          inputs.non_ev_base_house_kw + inputs.export_limit_kw)
+            risk_ends = [interval.end for interval, power in zip(
+                inputs.forecast.intervals, inputs.clipping_envelope_dc_kw
+            ) if interval.end > now and power * inputs.inverter_efficiency > ac_path]
+            clipping_remaining = bool(risk_ends)
+            clipping_end = max(risk_ends, default=None)
+            if not clipping_remaining:
+                chosen = _current_step(inputs, current_energy, current_duration,
+                                       chosen.amps, None) or chosen
+
         terminal_plan = plan_battery_completion(
             future_horizon,
             settings,
@@ -595,6 +621,9 @@ def recommend_solar_action(inputs: SolarAdvisoryInput) -> SolarAdvisory:
                 if capture else ()
             ),
             clipping_plan_available=capture is not None,
+            physical_clipping_remaining=clipping_remaining,
+            physical_clipping_window_end=clipping_end,
+            charge_all_surplus=clipping_remaining is False,
         )
     except ValueError as err:
         return SolarAdvisory(reason=str(err))

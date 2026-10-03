@@ -12,7 +12,11 @@ from math import isfinite
 from .const import FEATURE_DEFAULTS, NUMBER_DEFAULTS, TEXT_DEFAULTS
 from .decision import time_between
 from .models import EnergyManagerDecision, EnergyManagerInputs, EnergyManagerSettings
-from .physical_solar import PhysicalSolarSettings, clear_sky_dc_potential_kw
+from .physical_solar import (
+    PhysicalSolarSettings,
+    clear_sky_dc_potential_kw,
+    interval_clear_sky_dc_peak_kw,
+)
 from .solar_forecast import parse_detailed_forecast
 from .solar_advisory import SolarAdvisory, SolarAdvisoryInput, recommend_solar_action
 
@@ -189,6 +193,14 @@ def build_daytime_advisory(
             forecast_p50_weight=float(options["solar_plan_forecast_risk_blend"]),
             forecast_max_age=timedelta(minutes=float(options["solar_plan_max_forecast_age_minutes"])),
             physical_dc_upper_kw=physical_scenario,
+            clipping_envelope_dc_kw=tuple(
+                interval_clear_sky_dc_peak_kw(
+                    interval.start,
+                    interval.end,
+                    physical,
+                    weather_factor=1.1,
+                ) for interval in forecast.intervals
+            ),
         ))
     except (ValueError, TypeError, KeyError) as err:
         return SolarAdvisory(valid=False, reason=f"daytime planning unavailable: {err}")

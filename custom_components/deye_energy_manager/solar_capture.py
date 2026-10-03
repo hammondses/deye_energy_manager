@@ -46,7 +46,7 @@ def _validate(
     initial_energy_kwh: float,
     export_limit_kw: float,
     required_energy_by_boundary_kwh: Sequence[float | None],
-    first_charge_limit_kw: float | None,
+    first_charge_command_kw: float | None,
 ) -> None:
     if not isinstance(intervals, Sequence) or isinstance(intervals, (str, bytes)):
         raise ValueError("intervals must be a sequence")
@@ -58,8 +58,8 @@ def _validate(
         raise ValueError("required_energy_by_boundary_kwh must be a sequence")
     _finite_nonnegative("initial_energy_kwh", initial_energy_kwh)
     _finite_nonnegative("export_limit_kw", export_limit_kw)
-    if first_charge_limit_kw is not None:
-        _finite_nonnegative("first_charge_limit_kw", first_charge_limit_kw)
+    if first_charge_command_kw is not None:
+        _finite_nonnegative("first_charge_command_kw", first_charge_command_kw)
     if len(required_energy_by_boundary_kwh) != len(intervals) + 1:
         raise ValueError("required-energy boundary count must equal intervals + 1")
 
@@ -159,7 +159,7 @@ def project_solar_capture(
     initial_energy_kwh: float,
     export_limit_kw: float,
     required_energy_by_boundary_kwh: Sequence[float | None],
-    first_charge_limit_kw: float | None = None,
+    first_charge_command_kw: float | None = None,
 ) -> SolarCaptureResult:
     """Project direct-DC capture under completion floors and live charge limit.
 
@@ -176,7 +176,7 @@ def project_solar_capture(
         initial_energy_kwh,
         export_limit_kw,
         required_energy_by_boundary_kwh,
-        first_charge_limit_kw,
+        first_charge_command_kw,
     )
     energy = float(initial_energy_kwh)
     energy_path = [energy]
@@ -236,8 +236,10 @@ def project_solar_capture(
                 available_dc_kw=max_source_kw,
             )
         requested_power_kw = min(max_source_kw, max(floor_power_kw, spill_dc_kw))
-        if index == 0 and first_charge_limit_kw is not None:
-            requested_power_kw = min(requested_power_kw, first_charge_limit_kw)
+        if index == 0 and first_charge_command_kw is not None:
+            # Replay the chosen current command, including intentional charge
+            # above the minimum floor after the clipping window has ended.
+            requested_power_kw = min(max_source_kw, first_charge_command_kw)
         charge = integrate_battery_charge(
             stored_energy_kwh=energy,
             capacity_kwh=settings.capacity_kwh,

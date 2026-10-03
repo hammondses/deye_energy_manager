@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.6.0b16 — release battery headroom after the clipping window
+
+- Add a separate clear-sky clipping envelope, independent of the weather-scaled capture scenario. Publish whether clipping opportunity remains and the final estimated risk interval.
+- When the envelope shows no remaining clipping opportunity, recommend all live PV left after house and completion-safe EV demand for battery charging, subject to BMS/hardware acceptance. Missing envelope data does not release headroom.
+- Replay the selected current battery command in the capture projection, including deliberate charging above the minimum completion floor.
+- Document separate battery and EV automation handover formulas and unresolved live telemetry validation. This remains advisory-only until the control handover is enabled deliberately.
+
 ## v0.6.0b15 — daytime EV ownership and restart inputs
 
 - Add an explicit daytime EV writer selection, defaulting to the manager. External-automation ownership yields automatic daytime charger start/stop writes while retaining manual, overnight and Deye bypass handling. Handover still requires the external automation to enforce its safety and SOC cutoffs.

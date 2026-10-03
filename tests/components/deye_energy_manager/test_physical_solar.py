@@ -11,6 +11,7 @@ from custom_components.deye_energy_manager.physical_solar import (
     PhysicalSolarSettings,
     clear_sky_curve,
     clear_sky_dc_potential_kw,
+    interval_clear_sky_dc_peak_kw,
 )
 
 
@@ -56,6 +57,44 @@ def test_dst_representation_of_same_instant_has_same_solar_power() -> None:
     assert clear_sky_dc_potential_kw(utc_time, settings()) == pytest.approx(
         clear_sky_dc_potential_kw(local_time, settings())
     )
+
+
+def test_interval_peak_includes_start_when_midpoint_is_below_threshold(monkeypatch) -> None:
+    import custom_components.deye_energy_manager.physical_solar as module
+
+    start = datetime(2026, 1, 15, 3, tzinfo=timezone.utc)
+    end = start + timedelta(minutes=5)
+
+    def scenario(at, _settings, *, weather_factor):
+        return 13.0 if at == start else 10.0
+
+    monkeypatch.setattr(module, "clear_sky_dc_potential_kw", scenario)
+    midpoint = start + (end - start) / 2
+    assert scenario(midpoint, settings(), weather_factor=1.1) < 12.0
+    assert interval_clear_sky_dc_peak_kw(
+        start, end, settings(), weather_factor=1.1
+    ) == 13.0
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "message"),
+    [
+        (datetime(2026, 1, 15), datetime(2026, 1, 15, 0, 5), "timezone-aware"),
+        (
+            datetime(2026, 1, 15, tzinfo=timezone.utc),
+            datetime(2026, 1, 15, tzinfo=timezone.utc),
+            "after start",
+        ),
+        (
+            datetime(2026, 1, 15, 0, 5, tzinfo=timezone.utc),
+            datetime(2026, 1, 15, tzinfo=timezone.utc),
+            "after start",
+        ),
+    ],
+)
+def test_interval_peak_rejects_naive_empty_and_reversed_ranges(start, end, message):
+    with pytest.raises(ValueError, match=message):
+        interval_clear_sky_dc_peak_kw(start, end, settings())
 
 
 @pytest.mark.parametrize(

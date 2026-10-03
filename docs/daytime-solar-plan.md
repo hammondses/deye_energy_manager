@@ -301,3 +301,20 @@ Actual EV current control and the house ceiling need their own measured feedback
 Manual EV charging is included in the current interval's uncontrollable load,
 with zero discretionary EV recommendation. Future EV demand remains unknown;
 the projection does not guarantee completion against unlimited manual charging.
+
+## b16 headroom release
+
+The adapter now supplies a separate clipping-release envelope using the physical
+curve with a 1.1 enhancement factor. Unlike the capture projection, this envelope
+is not reduced by the configured cloudy-weather scenario. Array geometry, DC
+ceiling and overall clear-sky scale remain HA-adjustable. It is an empirical
+scenario, not proof that stronger irradiance is impossible.
+
+For each remaining interval, clipping risk exists when
+`envelope_DC * inverter_efficiency > min(inverter_AC_limit, base_house_AC + export_limit)`.
+With no remaining risk interval, retain the already completion-safe EV selection
+and request all measured DC PV remaining after house/EV AC conversion for the
+battery, limited by BMS and hardware. Publish the remaining-risk flag, final risk
+interval end, and all-surplus mode. Without an envelope the flag is unavailable
+and headroom is not released on that basis. The physical capture projection
+replays this exact current battery command.

@@ -111,6 +111,44 @@ def test_physical_capture_projection_reports_loss_when_battery_is_full():
     assert plan.physical_scenario_soc_trajectory[0] == 100
 
 
+def test_after_clipping_window_charge_all_remaining_pv_and_preserve_ev_priority():
+    now = datetime(2026, 3, 20, 12, tzinfo=timezone.utc)
+    inputs = make_input(now, live_pv_dc_kw=10, current_soc_pct=50)
+    count = len(inputs.forecast.intervals)
+    plan = recommend_solar_action(replace(inputs,
+        physical_dc_upper_kw=(10.0,) * count,
+        clipping_envelope_dc_kw=(10.0,) * count))
+    assert plan.valid and plan.target_reachable
+    assert plan.charge_all_surplus
+    assert plan.physical_clipping_remaining is False
+    assert plan.recommended_ev_amps == 32
+    remaining = 10 - (2 + 32 * .230) / .96
+    assert plan.recommended_battery_dc_kw == pytest.approx(remaining)
+    assert plan.physical_scenario_soc_trajectory[1] == pytest.approx(
+        50 + remaining * (5 / 60) * .94 / 10 * 100)
+
+
+def test_cloudy_projection_does_not_release_headroom_before_clear_sky_peak():
+    now = datetime(2026, 3, 20, 12, tzinfo=timezone.utc)
+    inputs = make_input(now, ev_allowed=False)
+    count = len(inputs.forecast.intervals)
+    plan = recommend_solar_action(replace(inputs,
+        physical_dc_upper_kw=(3.0,) * count,
+        clipping_envelope_dc_kw=(18.0,) * count))
+    assert plan.valid and plan.physical_clipping_remaining
+    assert not plan.charge_all_surplus
+    assert plan.physical_clipping_window_end == inputs.forecast.deadline
+    assert plan.recommended_battery_dc_kw == pytest.approx(0)
+
+
+def test_missing_clipping_envelope_does_not_assert_window_has_ended():
+    now = datetime(2026, 3, 20, 12, tzinfo=timezone.utc)
+    plan = recommend_solar_action(make_input(now))
+    assert plan.valid
+    assert plan.physical_clipping_remaining is None
+    assert not plan.charge_all_surplus
+
+
 def test_site_ac_ceiling_limits_current_ev_candidate() -> None:
     now = datetime(2026, 1, 15, 1, 0, tzinfo=timezone.utc)
     result = recommend_solar_action(
