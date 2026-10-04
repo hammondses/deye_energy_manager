@@ -1,3 +1,9 @@
+## 0.6.0b23 — Remove forecast-loss strategy switch
+
+- Shared battery ownership now survives a missing/stale forecast: use live capture-only feedback instead of the shadow controller's full-charge request.
+- Forecast validity/remaining-energy gates cannot route shared control to the old 250 A default. Invalid live measurements hold the last gate without writing.
+- Existing physical/reserve gates remain; handover-off stops writes and never selects the old planner. Automation reload only; no manager restart.
+
 ## 0.6.0b22 — Responsive clipping capture
 
 - Open the battery gate by 5 A after 10 s when fresh feedback still shows saturated AC/export and binding battery current; retain slow 1 A / 120 s exploration near the ceiling.

@@ -1,5 +1,11 @@
 # Home Assistant automation candidates
 
+> **Current policy (0.6.0b23):** the shadow planner has been removed from the
+> battery control path. Missing/stale shared plans use live capture-only
+> feedback. Invalid live telemetry or handover-off produces no writes. Earlier
+> fallback descriptions below are historical. See
+> [forecast-loss incident and fix](../forecast-loss-2026-10-04.md).
+
 These files are reusable review/deployment artifacts, not an automatic installer.
 Resolved versions were deployed into the **original** battery and EV automation
 IDs on 3 October 2026 with manager `0.6.0b20`. Both originals are enabled. The

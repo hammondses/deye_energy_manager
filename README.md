@@ -31,7 +31,9 @@ The deployed installation uses a 32 kWh battery model and an 80% car solar
 target. The EV actuator retains 6 A cloud ride-through, a 12-minute sustained
 deficit period and a 7-minute restart qualification period, with safety and
 manual-ownership checks. The battery actuator consumes the manager's DC charge
-recommendation and retains its legacy fallback when that plan is unusable.
+recommendation. If the plan is unusable, it continues live capture-only feedback;
+it never selects the retired shadow planner. Invalid live telemetry or an
+explicitly disabled battery handover stops actuator writes.
 Manual EV charging and overnight protection remain manager-owned. Predbat is
 not in this control path; its app is stopped with autostart disabled.
 
