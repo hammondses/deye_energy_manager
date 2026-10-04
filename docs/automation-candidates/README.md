@@ -1,8 +1,24 @@
 # Home Assistant automation candidates
 
-These files are review artifacts, not deployed configuration. The battery handover JSON contains a full candidate copy of the live automation read from Home Assistant and its source config hash (`74cba31e818cbad2`). It has not been written back to HA.
+> **Current policy (0.6.0b23):** the shadow planner has been removed from the
+> battery control path. Missing/stale shared plans use live capture-only
+> feedback. Invalid live telemetry or handover-off produces no writes. Earlier
+> fallback descriptions below are historical. See
+> [forecast-loss incident and fix](../forecast-loss-2026-10-04.md).
 
-Before any deployment, re-read `automation.deye_dc_export_first_curtailment_capture` and compare the source hash. Rebuild the candidate from the current config if it changed. Then resolve each ID below in the live entity registry; the manager output entities and handover helper were absent during this audit, so the candidate must remain disabled until the manager version publishing these b16 outputs is installed and the data is fresh.
+These files are reusable review/deployment artifacts, not an automatic installer.
+Resolved versions were deployed into the **original** battery and EV automation
+IDs on 3 October 2026 with manager `0.6.0b20`. Both originals are enabled. The
+separate review copies in HA remain disabled and must not be enabled alongside
+them. See the [live handover record](../live-solar-handover-2026-10-03.md) for
+current settings, evidence and rollback.
+
+For another deployment, re-read the destination automation and compare its
+configuration before replacement. The battery source hash `74cba31e818cbad2`
+identifies the pre-handover backup, not the current live configuration. Resolve
+entity IDs from the destination registry and preserve existing helper tuning.
+The historical pre-deployment rendering checks below do not describe current
+entity availability.
 
 Required registry entries:
 
@@ -21,7 +37,7 @@ Freshness is limited to 90 seconds old and 5 seconds future skew. Do not turn on
 
 The companion offline tests execute Jinja templates from the JSON against synthetic states. They check fallback parity and unit/limit behavior, but they are not a substitute for validating Home Assistant's template rendering and live traces.
 
-The EV actuator handover is captured in `ev-plan-handover.json`. It is also a review-only candidate: its manager writer select, feature switches, and plan sensors must be resolved in the live registry before use. The helper manifest distinguishes one-time `creation_default` values from runtime `initial` values so existing timer/latch tuning can restore after Home Assistant restarts. EV power/current telemetry remains explicitly gated by `input_boolean.ev_solar_ev_telemetry_verified`; keep it off until source freshness has been checked against idle and charging MeterValues.
+The EV actuator handover is captured in `ev-plan-handover.json`. Its resolved version is deployed; for reuse, its manager writer select, feature switches, and plan sensors must be resolved in the live registry before use. The helper manifest distinguishes one-time `creation_default` values from runtime `initial` values so existing timer/latch tuning can restore after Home Assistant restarts. Active EV modulation still requires recent numeric OCPP current and power readings. A stopped restart may proceed without fresh idle meters only when the charge switch is off, the connector reports Preparing/Finishing, transaction ID is zero, and a recent OCPP websocket pong confirms the charger is online. Grid-voltage fallback is limited to 600 seconds to match the manager's accepted freshness window. OCPP sample timestamps are not exposed, so HA receipt freshness is the available bound.
 
 ## Read-only live rendering check
 
@@ -46,9 +62,9 @@ models the relevant action subset; it is not Home Assistant's script engine.
 The candidate's sequential variable expressions also rendered successfully in
 HA's own Jinja engine against live states on October 3. With the new manager
 entities absent, `plan_fresh=false`, `external_owner=false`, and
-`restart_qualified_now=false`; no actuator service was called. Complete HA
-action-schema validation, resolved entity IDs, helper provisioning, and live
-stop/restart observation remain rollout requirements.
+`restart_qualified_now=false`; no actuator service was called. HA action-schema validation, entity resolution and helper provisioning were
+completed during deployment. A full live stop/restart cycle and positive-power
+response remain observational limits; see the live handover record.
 
 For the full-house-battery restart path, SOC freshness is inherited from the
 fresh valid manager plan, which validates SOC through its planning input and
@@ -57,3 +73,44 @@ SOC entity is the manager's configured battery SOC source. A second raw
 `last_reported <= 120 seconds` rule would prevent a seven-minute restart dwell
 when an unchanged SOC sensor reports less often; both initial and delayed
 restart checks therefore use the fresh-plan contract.
+
+## Battery damping — 4 October 2026
+
+The shared-plan battery path now ignores AC errors up to 200 W and current
+corrections below 3 A. Material increases can occur after 10 seconds since the
+current-limit entity last changed; reductions wait 45 seconds. A live BMS/DC
+ceiling reduction bypasses these delays. The 1 A hidden-PV probe requires
+inverter AC output within 200 W of `min(rated AC, house + export limit)` and
+120 seconds since the last gate change. This prevents probing far below any
+physical bottleneck and then immediately correcting the probe back down.
+
+These are settling periods since a gate change, not continuous-condition dwell
+timers. The existing 10-second loop and telemetry triggers remain active.
+Threshold variables are editable in the HA automation. The manager's headroom
+policy and exact legacy fallback are unchanged; damping applies when the
+shared plan is usable. No Core restart is needed for the automation update.
+
+### Adaptive capture update — 4 October, 12:13 NZDT
+
+The initial 1 A / 120 s probing was too slow during confirmed curtailment.
+A second regime now opens by 5 A after at least 10 s when AC output is within
+60 W of the physical AC/export ceiling and measured battery current remains
+within 1.5 A of its limit. Every probe requires numeric battery/inverter/grid
+reports received at least 5 s after the last gate change and no older than
+90 s. It therefore waits for real feedback before repeating; 10 s is a minimum,
+not a guaranteed command rate. Away from tight saturation, the existing
+1 A / 120 s near-ceiling probe, correction deadband and slower release remain.
+
+All 368 regression tests passed. HA rendered the live expressions before
+deployment. Source release 0.6.0b22 records this automation-only update; manager
+Python remains 0.6.0b20 and the forecast/headroom strategy is unchanged.
+Rollback uses `docs/live-config-backups/2026-10-04-battery-before-adaptive.json`
+through the automation API; current config is saved alongside as
+`2026-10-04-battery-adaptive.json`.
+
+Live verification: readback matched hash `0e71ddf27d4e8d67`. At 12:14:02
+the gate increased from 26 A to 31 A. Battery charging rose from about 1.32 kW
+to 1.65 kW while export remained about 9.98 kW. Subsequent traces waited for
+the next inverter report before another probe; inverter telemetry currently
+reports roughly once per minute. This confirms a successful bounded capture
+step, not full-day performance.

@@ -22,6 +22,7 @@ from .solar_forecast import parse_detailed_forecast
 from .solar_advisory import SolarAdvisory, SolarAdvisoryInput, recommend_solar_action
 
 UNAVAILABLE = {"unknown", "unavailable", None}
+DEYE_SLOW_TELEMETRY_MAX_AGE_SECONDS = 600
 
 
 def parse_datetime(value: str) -> datetime | None:
@@ -36,7 +37,11 @@ def read_timestamp(states, entity_map: dict, key: str) -> datetime | None:
     return parse_datetime(state.state) if state is not None else None
 
 
-def read_planning_sensor(states, entity_map, key: str, now: datetime, *, max_age_seconds: float = 600, reported_at=None) -> float:
+def read_planning_sensor(
+    states, entity_map, key: str, now: datetime, *,
+    max_age_seconds: float = DEYE_SLOW_TELEMETRY_MAX_AGE_SECONDS,
+    reported_at=None,
+) -> float:
     """Read fresh planning telemetry, normalising power to watts."""
     state = states.get(entity_map.get(key, ""))
     if state is None or state.state in UNAVAILABLE:
@@ -136,9 +141,11 @@ def build_daytime_advisory(
             except ValueError:
                 # TIMXON may stop reporting voltage between transactions.
                 # The single-phase inverter supply is an independent live
-                # estimate for planning; never reuse an old charger sample.
+                # estimate for planning. Deye voltage registers update on a
+                # roughly five-minute cadence, so accept up to ten minutes of
+                # actual reported age here; never reuse an old charger sample.
                 voltage = read_sensor(states, entity_map, "grid_voltage", inputs.now,
-                                               max_age_seconds=120)
+                    max_age_seconds=DEYE_SLOW_TELEMETRY_MAX_AGE_SECONDS)
         base_load = inputs.base_load_estimate_w
         if base_load is None or not isfinite(base_load) or base_load < 0:
             raise ValueError("non-EV base load unavailable")

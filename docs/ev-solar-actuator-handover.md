@@ -1,5 +1,12 @@
 # Daytime EV solar actuator handover proposal
 
+> **Live status, 3 October 2026:** `0.6.0b20` is deployed and both original
+> battery/EV automations are enabled against the shared manager plan. See the
+> [live handover record](live-solar-handover-2026-10-03.md) for current settings,
+> validation limits and rollback. The inspection snapshots and proposed rollout
+> steps below are historical; statements that entities are absent or the
+> handover is still disabled describe the pre-deployment audit, not current HA.
+
 This is a design handover, not a live automation change. Keep solar planning in
 the Deye Energy Manager and charger actions in a separate Home Assistant
 automation so the actuator can be reloaded without restarting the manager.

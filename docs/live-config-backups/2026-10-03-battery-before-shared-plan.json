@@ -1,0 +1,221 @@
+{
+  "automation_id": "automation.deye_dc_export_first_curtailment_capture",
+  "config": {
+    "id": "1790639409049",
+    "alias": "Deye DC Export First / Curtailment Capture",
+    "description": "Live physical-headroom PV controller. Battery below the configured floor charges normally. Above the floor, a 5-minute solar-geometry model defines the seasonal clipping-risk window. Inside/before that window, the controller preserves P90-forecast headroom for otherwise-unexportable PV and allows only the minimum forecast-completion trickle needed to avoid finishing short. After the physical clipping window ends, battery headroom has no value and all PV remaining after house load is directed to the battery up to BMS/inverter limits; export is only residual. The existing 10-second current-gate feedback loop remains the actuator.",
+    "triggers": [
+      {
+        "trigger": "time_pattern",
+        "seconds": "/10",
+        "id": "control_loop"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "sensor.deye_grid_ct_power",
+        "id": "local_feedback"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "input_boolean.solar_forecast_battery_management_enabled",
+        "id": "management_changed"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "binary_sensor.garage_deye_energy_manager_battery_target_reachable_today",
+        "id": "reachability_changed"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "binary_sensor.deye_energy_manager_forecast_data_valid",
+        "id": "forecast_validity_changed"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "switch.deye_grid_charge_enabled",
+        "id": "grid_charge_changed"
+      },
+      {
+        "trigger": "homeassistant",
+        "event": "start",
+        "id": "ha_start"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "sensor.deye_shadow_recommended_charge_power",
+        "id": "shadow_charge_changed"
+      },
+      {
+        "trigger": "state",
+        "entity_id": "input_number.deye_export_hold_minimum_soc",
+        "id": "export_hold_floor_changed"
+      }
+    ],
+    "actions": [
+      {
+        "variables": {
+          "export_w": "{{ [0, -(states('sensor.deye_grid_ct_power') | float(0))] | max }}",
+          "sell_limit_w": "{{ states('number.deye_max_sell_power') | float(10000) }}",
+          "current_limit_a": "{{ states('number.deye_battery_max_charge_current') | float(250) }}",
+          "battery_v": "{{ states('sensor.deye_battery_voltage') | float(52) }}",
+          "bms_charge_limit_a": "{{ [states('sensor.deye_battery_charge_limit_current') | float(125), 250] | min }}",
+          "budget_kwh": "{{ states('sensor.garage_deye_energy_manager_discretionary_energy_budget') | float(-99) }}",
+          "soc": "{{ states('sensor.deye_battery_soc') | float(0) }}",
+          "reserve_soc": "{{ states('sensor.garage_deye_energy_manager_active_reserve_target_soc') | float(12) }}",
+          "projected_16_soc": "{{ states('sensor.garage_deye_energy_manager_projected_16_00_soc') | float(0) }}",
+          "daily_target_soc": "{{ states('number.garage_deye_energy_manager_daily_battery_target_soc') | float(100) }}",
+          "inverter_w": "{{ states('sensor.deye_inverter_power') | float(0) }}",
+          "rated_w": "{{ states('sensor.deye_rated_power') | float(12000) }}",
+          "house_w": "{{ [0, (states('sensor.deye_inverter_power') | float(0)) - ([0, -(states('sensor.deye_grid_ct_power') | float(0))] | max)] | max }}",
+          "target_inverter_w": "{{ [[states('sensor.deye_rated_power') | float(12000), ([0, (states('sensor.deye_inverter_power') | float(0)) - ([0, -(states('sensor.deye_grid_ct_power') | float(0))] | max)] | max) + (states('number.deye_max_sell_power') | float(10000))] | min, 0] | max }}",
+          "battery_charge_w": "{{ [0, -(states('sensor.deye_battery_power') | float(0))] | max }}",
+          "actual_charge_a": "{{ ([0, -(states('sensor.deye_battery_power') | float(0))] | max) / (states('sensor.deye_battery_voltage') | float(52)) }}",
+          "ac_error_w": "{{ (states('sensor.deye_inverter_power') | float(0)) - ([[states('sensor.deye_rated_power') | float(12000), ([0, (states('sensor.deye_inverter_power') | float(0)) - ([0, -(states('sensor.deye_grid_ct_power') | float(0))] | max)] | max) + (states('number.deye_max_sell_power') | float(10000))] | min, 0] | max) }}",
+          "desired_charge_w": "{{ [0, ([0, -(states('sensor.deye_battery_power') | float(0))] | max) + ((states('sensor.deye_inverter_power') | float(0)) - ([[states('sensor.deye_rated_power') | float(12000), ([0, (states('sensor.deye_inverter_power') | float(0)) - ([0, -(states('sensor.deye_grid_ct_power') | float(0))] | max)] | max) + (states('number.deye_max_sell_power') | float(10000))] | min, 0] | max))] | max }}",
+          "desired_limit_a": "{{ [[1, ((([0, ([0, -(states('sensor.deye_battery_power') | float(0))] | max) + ((states('sensor.deye_inverter_power') | float(0)) - ([[states('sensor.deye_rated_power') | float(12000), ([0, (states('sensor.deye_inverter_power') | float(0)) - ([0, -(states('sensor.deye_grid_ct_power') | float(0))] | max)] | max) + (states('number.deye_max_sell_power') | float(10000))] | min, 0] | max))] | max) / (states('sensor.deye_battery_voltage') | float(52))) | round(0))] | max, ([states('sensor.deye_battery_charge_limit_current') | float(125), 250] | min)] | min }}"
+        }
+      },
+      {
+        "alias": "Physical headroom controller charge input",
+        "variables": {
+          "forecast_recovery_charge_w": "{{ states('sensor.deye_shadow_recommended_charge_power') | float(0) }}"
+        }
+      },
+      {
+        "alias": "Physical headroom controller AC target",
+        "variables": {
+          "scheduled_target_inverter_w": "{{ [house_w | float(0), [target_inverter_w | float(0), [0, (states('sensor.deye_pv_power') | float(0)) - (forecast_recovery_charge_w | float(0))] | max] | min] | max }}"
+        }
+      },
+      {
+        "alias": "Physical headroom controller charge gate variables",
+        "variables": {
+          "target_inverter_w": "{{ scheduled_target_inverter_w | float(0) }}",
+          "ac_error_w": "{{ (inverter_w | float(0)) - (scheduled_target_inverter_w | float(0)) }}",
+          "desired_charge_w": "{{ [0, (battery_charge_w | float(0)) + ((inverter_w | float(0)) - (scheduled_target_inverter_w | float(0)))] | max }}",
+          "desired_limit_a": "{{ [[1, ((([0, (battery_charge_w | float(0)) + ((inverter_w | float(0)) - (scheduled_target_inverter_w | float(0)))] | max) / (battery_v | float(52))) | round(0))] | max, (bms_charge_limit_a | float(125))] | min }}"
+        }
+      },
+      {
+        "choose": [
+          {
+            "alias": "Physical headroom controller: preserve clipping headroom then fill",
+            "conditions": [
+              {
+                "condition": "time",
+                "after": "07:00:00"
+              },
+              {
+                "condition": "numeric_state",
+                "entity_id": "sensor.solcast_pv_forecast_forecast_remaining_today",
+                "above": 0.1
+              },
+              {
+                "condition": "state",
+                "entity_id": "input_boolean.solar_forecast_battery_management_enabled",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "binary_sensor.deye_energy_manager_forecast_data_valid",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "binary_sensor.deye_grid_connected",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.deye_solar_export",
+                "state": "on"
+              },
+              {
+                "condition": "state",
+                "entity_id": "switch.deye_grid_charge_enabled",
+                "state": "off"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ (soc | float(0)) >= (reserve_soc | float(12)) }}"
+              },
+              {
+                "condition": "template",
+                "value_template": "{{ (soc | float(0)) >= (states('input_number.deye_export_hold_minimum_soc') | float(25)) }}"
+              }
+            ],
+            "sequence": [
+              {
+                "choose": [
+                  {
+                    "alias": "Correct battery gate to hold inverter AC target",
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ (ac_error_w | float(0)) | abs > 60 and ((desired_limit_a | float(1)) - (current_limit_a | float(250))) | abs >= 1 }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "number.set_value",
+                        "target": {
+                          "entity_id": "number.deye_battery_max_charge_current"
+                        },
+                        "data": {
+                          "value": "{{ desired_limit_a | int(1) }}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "alias": "On target and charge gate binding: probe hidden PV by 1 A",
+                    "conditions": [
+                      {
+                        "condition": "template",
+                        "value_template": "{{ (ac_error_w | float(0)) | abs <= 60 and (actual_charge_a | float(0)) >= ((current_limit_a | float(250)) - 1.5) and (current_limit_a | float(250)) < (bms_charge_limit_a | float(125)) }}"
+                      }
+                    ],
+                    "sequence": [
+                      {
+                        "action": "number.set_value",
+                        "target": {
+                          "entity_id": "number.deye_battery_max_charge_current"
+                        },
+                        "data": {
+                          "value": "{{ [((current_limit_a | float(1)) + 1), (bms_charge_limit_a | float(125))] | min | int }}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "default": [
+          {
+            "if": [
+              {
+                "condition": "template",
+                "value_template": "{{ (current_limit_a | float(250)) < 249 }}"
+              }
+            ],
+            "then": [
+              {
+                "action": "number.set_value",
+                "target": {
+                  "entity_id": "number.deye_battery_max_charge_current"
+                },
+                "data": {
+                  "value": 250
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "mode": "restart"
+  },
+  "config_hash": "74cba31e818cbad2"
+}

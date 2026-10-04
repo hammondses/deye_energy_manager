@@ -1,4 +1,29 @@
+## 0.6.0b23 — Remove forecast-loss strategy switch
+
+- Shared battery ownership now survives a missing/stale forecast: use live capture-only feedback instead of the shadow controller's full-charge request.
+- Forecast validity/remaining-energy gates cannot route shared control to the old 250 A default. Invalid live measurements hold the last gate without writing.
+- Existing physical/reserve gates remain; handover-off stops writes and never selects the old planner. Automation reload only; no manager restart.
+
+## 0.6.0b22 — Responsive clipping capture
+
+- Open the battery gate by 5 A after 10 s when fresh feedback still shows saturated AC/export and binding battery current; retain slow 1 A / 120 s exploration near the ceiling.
+- Require fresh post-command battery, inverter and grid reports before any manager-path probe; retain deadband, slower reductions, BMS bounds and legacy fallback.
+- Automation-only deployment; planner strategy unchanged and no Core restart required.
+
+## 0.6.0b21 — Battery actuator damping
+
+- Damp shared-plan battery-current feedback with a 200 W / 3 A deadband and asymmetric 10 s increase / 45 s decrease settling.
+- Probe by 1 A only near the physical AC/export ceiling, no more often than every 120 s. Reduced BMS/DC ceilings bypass damping.
+- Automation-only deployment: reload the battery automation; no integration Python restart needed. Solar headroom policy, EV control and legacy fallback are unchanged.
+
 # Release Notes
+
+## v0.6.0b20 — live solar controller handover
+
+- Match the grid-voltage fallback freshness window to Deye’s five-minute telemetry cadence while retaining strict freshness for fast power measurements.
+- Keep unmapped optional entity selectors out of submitted defaults so the EV power mapping can be configured through Home Assistant.
+- Update the separate EV automation’s stopped-session restart checks for TIMXON meters that stop publishing between transactions; active charging retains stale-data protection.
+- Preserve integer OCPP profiles, manual and overnight ownership, the 13.5 kW site ceiling, and sustained deficit/restart hysteresis.
 
 ## v0.6.0b19 — conservative load floor for delayed EV telemetry
 

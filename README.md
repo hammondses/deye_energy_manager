@@ -2,6 +2,59 @@
 
 Home Assistant custom integration for Deye battery reserve planning, Solcast-aware grid charging, EV grid-bypass policy, inverter cooling, thermal storage control, and diagnostics.
 
+## Shared daytime decision layer
+
+The manager now supplies a shared daytime solar plan. Separate Home Assistant
+battery and EV automations consume that plan and operate the hardware. This
+keeps forecast decisions together while allowing actuator changes to be
+reloaded independently of the integration.
+
+```mermaid
+flowchart TD
+    Inputs[Solcast forecasts, battery SOC and limits, house and EV telemetry] --> Manager[Deye Energy Manager: shared solar plan]
+    Manager --> Battery[Battery automation: fast feedback and safety checks]
+    Manager --> EV[EV automation: current modulation and stop/restart hysteresis]
+    Battery --> Deye[Deye battery maximum charge current]
+    EV --> Charger[TIMXON integer-amp OCPP profiles]
+```
+
+The planning priorities are to reach the house battery target when sufficient
+solar exists, preserve headroom and charge acceptance for otherwise-clipped DC
+PV, and give the plugged-in car remaining usable solar before export, up to its
+solar SOC target. Non-EV house demand excludes measured EV power. The inverter's
+12 kW AC limit and the site's 10 kW export limit are separate constraints;
+capturing DC PV above the AC limit requires battery space and charge acceptance.
+The planner reports infeasible completion instead of promising energy the
+forecast cannot supply.
+
+The deployed installation uses a 32 kWh battery model and an 80% car solar
+target. The EV actuator retains 6 A cloud ride-through, a 12-minute sustained
+deficit period and a 7-minute restart qualification period, with safety and
+manual-ownership checks. The battery actuator consumes the manager's DC charge
+recommendation. If the plan is unusable, it continues live capture-only feedback;
+it never selects the retired shadow planner. Invalid live telemetry or an
+explicitly disabled battery handover stops actuator writes.
+Manual EV charging and overnight protection remain manager-owned. Predbat is
+not in this control path; its app is stopped with autostart disabled.
+
+**Deployment recorded on 3 October 2026:** runtime `0.6.0b20`, both original
+actuator automations enabled, daytime EV writer `external_automation`, and
+battery-plan handover enabled. A plan status of `advisory` describes the
+manager's recommendation output; it does **not** mean the consuming automations
+are inactive. New installations still default to actuator control off.
+
+HA tuning controls update the plan without a new release or Core restart.
+Actuator automation edits can be reloaded separately. Updating integration
+Python still requires a Core restart to reliably load the new code.
+
+See the [live handover record](docs/live-solar-handover-2026-10-03.md) for exact
+settings, traces and rollback, the [planner design](docs/daytime-solar-plan.md)
+for physical accounting, and the [deployment guide](docs/daytime-deployment.md)
+for reload boundaries. All 359 regression tests passed at deployment. Live
+traces verified ownership and zero-surplus behavior; high-power response and
+full-day clipping capture have not yet been observed. The battery acceptance
+curve remains a provisional, tunable model.
+
 ## Free power periods
 
 Create a Home Assistant Schedule helper for the provider's free-power hour, then select that helper as the optional `free_power_active` entity in the integration's **Entities** options. While the helper is on, the manager targets 100% grid battery charge and starts eligible managed thermal loads. When it turns off, normal policy resumes and free-power-owned thermal loads are returned to normal.
@@ -304,25 +357,31 @@ Cheap-grid EV bypass uses the TIMXON charge-control switch plus measured charger
 
 EV bypass wins over battery grid charging so the system does not create a battery charge/discharge loop while the car is using cheap grid power. The non-zero bypass cap leaves a limited inverter allowance if grid power is lost while the car is connected. Grid loss is detected from the configured Deye grid-voltage entity and can send persistent plus `notify.*` alerts.
 
-Daytime EV permission requires at least 1.8kW of actual PV before starting, observed solar arrival with no material battery discharge, the house battery recovered to its derived 07:00 target, and enough remaining-PV budget for the daily battery target, expected house load, and safety buffers. The startup PV floor is adjustable with `EV solar start minimum PV`. Genuine solar arrival is retained while an EV session is active so the car's own load does not consume its permission; permission is withdrawn after two continuous minutes of material battery discharge or grid import.
+The legacy manager-owned daytime EV permission requires at least 1.8kW of actual PV before starting, observed solar arrival with no material battery discharge, the house battery recovered to its derived 07:00 target, and enough remaining-PV budget for the daily battery target, expected house load, and safety buffers. The startup PV floor is adjustable with `EV solar start minimum PV`. Genuine solar arrival is retained while an EV session is active so the car's own load does not consume its permission; permission is withdrawn after two continuous minutes of material battery discharge or grid import.
 
-Normal charging is hard-stopped when the configured Porsche SOC reaches 80%. For an occasional overnight or top-up charge above that limit, set `EV manual target SOC` and turn on `EV manual charging override`. The integration starts the existing TIMXON charging script only while the connector is plugged in and Porsche SOC is available, owns the session across the 07:00 boundary, stops at the selected target, restores the normal Deye programme, and clears the override automatically. Turning the override off stops the session immediately. Daytime solar-current modulation should yield while the override is on and resume when it turns off.
+The deployed normal solar charging target is 80%, using the effective Taycan SOC. The shared daytime controller follows the configured active target; manual charging can use a separate target. For an occasional overnight or top-up charge above that limit, set `EV manual target SOC` and turn on `EV manual charging override`. The integration starts the existing TIMXON charging script only while the connector is plugged in and Porsche SOC is available, owns the session across the 07:00 boundary, stops at the selected target, restores the normal Deye programme, and clears the override automatically. Turning the override off stops the session immediately. Daytime solar-current modulation should yield while the override is on and resume when it turns off.
 
 Local Taycan SOC can optionally come from a WiCAN Pro `SOC_D` one-shot request. Configure the WiCAN base URL in EV options and enable `WiCAN Taycan SOC enabled` only after a manual refresh succeeds. Automatic requests occur only on a real connector transition, charging start/stop, or each configured increment of charger session energy (default `1.0kWh`). Home Assistant startup, reloads, coordinator refreshes, time intervals, failures, and unavailable values never poll or retry the vehicle. The manual button also performs exactly one request.
 
 WiCAN entities include effective/local Taycan SOC, source and age, last update/trigger/result/error, energy until the next query, the kWh threshold number, enable switch, and manual refresh button. Fresh local SOC feeds the existing normal/manual cutoff logic; fresh Porsche Connect SOC is the fallback, followed by the newest last-known-good sample.
 
-## SUN-12K-SG02LP1-AU-AM3: Export Before Battery Charging (Investigation)
+## DC capture and battery charge control
 
-The installation uses a Deye **SUN-12K-SG02LP1-AU-AM3**, a single-phase hybrid inverter. Its [AU datasheet](https://au.deyeinverter.com/deyeinverter/2024/02/04/datasheet_sun-5-12kk-sg02lp1-au-am2_240203_au.pdf) specifies 12 kW rated/maximum AC active output, 18 kW maximum PV input, three MPPTs, and 250 A maximum battery charge/discharge current. Those are equipment ratings, **not** a verified site export permission or a guarantee that the battery/BMS can accept 250 A. The AC ceiling and the grid-export limit are separate: with 4 kW of house/EV load and 8 kW of export, AC output can already be at 12 kW, even though export has not reached 10 kW. Actual inverter flow and site wiring must be checked before using this calculation for control.
+The shared planner accounts for battery DC charging separately from inverter
+AC output. When AC output or permitted export is limiting, battery charging
+can absorb PV that would otherwise be clipped, subject to SOC headroom, BMS
+limits and charge acceptance. EV load can displace export; once the AC ceiling
+is reached, adding EV load cannot create more DC-to-AC capacity.
 
-The [model-family AU manual, section 5.7](https://au.deyeinverter.com/deyeinverter/2025/03/20/manual-sun-5-12k-sg02lp1-au-am3-250320-au.pdf) documents the usual PV order as load, battery charging, then export, including Selling First. Load First does not mean export before battery charging. It describes the TOU `Power` field as maximum **battery discharge** power, not a battery charge-rate setting; Selling First with TOU can sell battery energy. The firmware's new per-period **Sell** boxes therefore should not be assumed to defer PV charging: upstream [Sunsynk/Deye firmware investigation](https://github.com/kellerza/sunsynk/issues/635) identifies them as permission to sell battery energy in a scheduled period even outside Selling First. Upstream [Modbus definitions](https://github.com/kellerza/sunsynk/blob/main/src/sunsynk/definitions/single_phase.py) now include `prog1_sell` through `prog6_sell`; confirm the actual firmware/register mapping before relying on those entities. No such Sell control is mapped or written by this integration.
+The separate battery automation adjusts `number.deye_battery_max_charge_current`
+using the manager recommendation and measured inverter/export feedback. This
+is distinct from grid-charge current or the TOU battery-discharge power field.
+The integration does not use per-period Sell switches to implement this policy.
+Equipment ratings do not override live BMS limits or site export permission.
 
-The proposed, **unverified on this installation**, export-first lever is the inverter's *Battery Max Charge Current*, distinct from *Grid Charge Battery Current*. The upstream Modbus integration exposes both plus a measured/BMS battery charge-current limit, but this energy manager currently maps only battery voltage/power and other flow sensors, not those current controls. Reducing maximum battery charge current could leave more PV for house, car, and export; increasing it when AC output or permitted grid export nears its ceiling could absorb otherwise clipped PV through DC battery charging. A lower current must never be mistaken for a way to increase generation if PV/MPPT, BMS, temperature, or export restrictions are the actual bottleneck.
-
-Proposed control order for a future advisory-only prototype: house load and active controllable EV charging first, then desired export up to the **verified permitted** limit, then battery charging from remaining PV or when AC output is near its ceiling. Track a forecast- and SOC-based afternoon catch-up requirement so the battery reaches its evening target; on poor forecasts, prioritize the battery earlier. The existing forecast-backed daytime EV permission can inform this policy, but it does not itself implement export-first battery charge-current control; coordinate with the external charger controller and measured EV draw before claiming any car-before-export guarantee. Existing PV-load-test/export-limited controls are compatibility features, not this proposed controller.
-
-Before implementation, capture a sunny-day time series of PV per MPPT/total, AC inverter output, grid CT flow, house and EV load, battery power/voltage/SOC, BMS charge limit, configured charge-current limit, and the actual work mode/export limit. On a suitable day, a supervised, reversible small charge-current change can establish whether battery charging decreases while AC export increases; restore the original value immediately. Never set a charge limit above the battery/BMS-approved value or infer the grid export permission from an inverter rating. Any future automatic writes require an explicit off-by-default actuator gate, stale-data fallback, bounded changes, and review of Modbus write frequency. This section records a research direction; **no charge-current or Sell automation is implemented**.
+See the [battery handover calculation](docs/daytime-battery-handover.md) for
+DC-to-AC conversion, current bounds and stale-plan fallback. The live activation
+and its measurement limits are recorded in the [handover record](docs/live-solar-handover-2026-10-03.md).
 
 ## Diagnostics And Tuning
 

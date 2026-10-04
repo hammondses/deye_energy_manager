@@ -1,7 +1,13 @@
 # Shared daytime solar planning
 
-Status: implementation in progress; not deployed. Existing overnight policy is
-out of scope for replacement. No Predbat source is incorporated.
+Status: deployed as `0.6.0b20` on 3 October 2026, with separate battery and EV
+actuator automations consuming the shared plan. See the [live handover record](live-solar-handover-2026-10-03.md)
+for configuration and verification limits. Existing overnight policy remains
+intact. No Predbat source is incorporated; the Predbat app is stopped.
+
+The audit findings and design rationale below explain the implementation's
+origin. References to the old aggregate budget describe the legacy path, not
+the shared interval planner now used by the daytime automations.
 
 ## Required outcome
 
@@ -69,7 +75,7 @@ At an already saturated AC limit, adding the EV displaces export; it does not
 create additional DC capture capacity. At a binding export limit below the AC
 limit, the EV can use spare AC capacity and reduce spill.
 
-## Proposed horizon allocation
+## Horizon allocation
 
 Build a timezone-aware five-minute horizon from validated forecast intervals to
 a seasonal daylight deadline. Prorate the current partial interval. Never use
